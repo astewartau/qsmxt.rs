@@ -1,0 +1,44 @@
+use crate::bids::discovery::{self, DiscoveryFilter};
+use crate::cli::SlurmArgs;
+use crate::pipeline::config::PipelineConfig;
+
+pub fn execute(args: SlurmArgs) -> crate::Result<()> {
+    let config = if let Some(ref path) = args.config {
+        PipelineConfig::from_file(path)?
+    } else if let Some(preset) = args.preset {
+        PipelineConfig::from_preset(preset)
+    } else {
+        PipelineConfig::default()
+    };
+
+    let filter = DiscoveryFilter::default();
+    let runs = discovery::discover_runs(&args.bids_dir, &filter)?;
+
+    if runs.is_empty() {
+        println!("No QSM-compatible runs found");
+        return Ok(());
+    }
+
+    let scripts = crate::executor::slurm::generate_all_slurm(
+        &runs,
+        &args.bids_dir,
+        &args.output_dir,
+        &config,
+        &args.account,
+        args.partition.as_deref(),
+        &args.time,
+        args.mem,
+        args.cpus_per_task,
+    )?;
+
+    println!("Generated {} SLURM scripts:", scripts.len());
+    for s in &scripts {
+        println!("  {}", s.display());
+    }
+
+    if args.submit {
+        crate::executor::slurm::submit_scripts(&scripts)?;
+    }
+
+    Ok(())
+}
