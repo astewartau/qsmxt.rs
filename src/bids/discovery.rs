@@ -26,6 +26,10 @@ pub struct QsmRun {
     pub magnetic_field_strength: f64,
     pub echo_times: Vec<f64>,
     pub b0_dir: (f64, f64, f64),
+    /// Volume dimensions (nx, ny, nz) from the first phase NIfTI header.
+    pub dims: (usize, usize, usize),
+    /// Whether magnitude files are available for this run.
+    pub has_magnitude: bool,
 }
 
 /// Filters for BIDS discovery.
@@ -177,12 +181,19 @@ pub fn discover_runs(bids_dir: &Path, filter: &DiscoveryFilter) -> crate::Result
             continue;
         }
 
+        // Read volume dimensions from the first phase NIfTI header (fast, header-only)
+        let dims = qsm_core::nifti_io::read_nifti_dims(&echoes[0].phase_nifti)
+            .map_err(|e| QsmxtError::NiftiIo(e))?;
+        let has_magnitude = echoes[0].magnitude_nifti.is_some();
+
         runs.push(QsmRun {
             key,
             echoes,
             magnetic_field_strength: b0_tesla,
             echo_times,
             b0_dir,
+            dims,
+            has_magnitude,
         });
     }
 

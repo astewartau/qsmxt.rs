@@ -36,6 +36,8 @@ pub enum Command {
     Invert(InvertArgs),
     /// Susceptibility-weighted imaging (NIfTI in/out)
     Swi(SwiArgs),
+    /// Launch interactive TUI for pipeline configuration
+    Tui,
 }
 
 // ─── Pipeline commands ───
@@ -155,6 +157,14 @@ pub struct RunArgs {
     /// Enable debug logging
     #[arg(long)]
     pub debug: bool,
+
+    /// Memory limit in GB for concurrent run scheduling (auto-detected if not specified)
+    #[arg(long)]
+    pub mem_limit_gb: Option<f64>,
+
+    /// Disable memory-aware concurrency limiting
+    #[arg(long)]
+    pub no_mem_limit: bool,
 }
 
 #[derive(Parser, Debug)]

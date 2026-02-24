@@ -6,17 +6,30 @@ use qsm_core::nifti_io;
 use crate::bids::derivatives::DerivativeOutputs;
 use crate::bids::discovery::QsmRun;
 use crate::pipeline::config::PipelineConfig;
-use crate::pipeline::runner;
+use crate::pipeline::{memory, runner};
+
+/// Configuration for local execution.
+pub struct ExecutionConfig {
+    /// Maximum number of threads (from --n-procs or auto-detected)
+    pub n_procs: usize,
+    /// Memory limit in bytes for concurrent run scheduling (None = no limit)
+    pub mem_limit_bytes: Option<usize>,
+}
 
 /// Execute pipeline runs in parallel using Rayon.
+///
+/// When `mem_limit_bytes` is set, estimates per-run memory usage from
+/// volume dimensions and limits concurrency to avoid exceeding the limit.
 pub fn execute_local(
     runs: Vec<QsmRun>,
     config: &PipelineConfig,
     output: &DerivativeOutputs,
-    n_procs: usize,
+    exec_config: &ExecutionConfig,
 ) -> Vec<crate::Result<()>> {
+    let n_threads = compute_concurrency(&runs, config, exec_config);
+
     rayon::ThreadPoolBuilder::new()
-        .num_threads(n_procs)
+        .num_threads(n_threads)
         .build_global()
         .ok();
 
@@ -95,4 +108,54 @@ pub fn execute_local(
             }
         })
         .collect()
+}
+
+/// Compute the effective number of concurrent threads based on memory constraints.
+fn compute_concurrency(
+    runs: &[QsmRun],
+    config: &PipelineConfig,
+    exec_config: &ExecutionConfig,
+) -> usize {
+    let Some(mem_limit) = exec_config.mem_limit_bytes else {
+        return exec_config.n_procs;
+    };
+
+    if runs.is_empty() {
+        return exec_config.n_procs;
+    }
+
+    // Use the maximum estimate across all runs to handle heterogeneous dimensions
+    let per_run = runs
+        .iter()
+        .map(|run| {
+            let (nx, ny, nz) = run.dims;
+            memory::estimate_peak_memory_bytes(
+                nx,
+                ny,
+                nz,
+                run.echoes.len(),
+                run.has_magnitude,
+                config,
+            )
+        })
+        .max()
+        .unwrap_or(0);
+
+    let max_by_memory = if per_run > 0 {
+        (mem_limit / per_run).max(1)
+    } else {
+        exec_config.n_procs
+    };
+
+    let effective = exec_config.n_procs.min(max_by_memory);
+
+    info!(
+        "Memory: {} per run (est.), {} available — {} concurrent run(s) (requested {})",
+        memory::format_bytes(per_run),
+        memory::format_bytes(mem_limit),
+        effective,
+        exec_config.n_procs,
+    );
+
+    effective
 }
