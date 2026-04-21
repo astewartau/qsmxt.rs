@@ -1,17 +1,12 @@
-use qsm_core::nifti_io;
-
+use super::common::{load_nifti, load_mask, save_nifti, save_mask};
 use crate::cli::{BfAlgorithmArg, BgremoveArgs};
-use crate::error::QsmxtError;
 
 pub fn execute(args: BgremoveArgs) -> crate::Result<()> {
-    let field_nifti = nifti_io::read_nifti_file(&args.input)
-        .map_err(|e| QsmxtError::NiftiIo(e))?;
-    let mask_nifti = nifti_io::read_nifti_file(&args.mask)
-        .map_err(|e| QsmxtError::NiftiIo(e))?;
+    let field_nifti = load_nifti(&args.input)?;
+    let (mask, _) = load_mask(&args.mask)?;
 
     let (nx, ny, nz) = field_nifti.dims;
     let (vsx, vsy, vsz) = field_nifti.voxel_size;
-    let mask: Vec<u8> = mask_nifti.data.iter().map(|&v| if v > 0.5 { 1u8 } else { 0u8 }).collect();
 
     println!("Background removal ({:?}, {}x{}x{})", args.algorithm, nx, ny, nz);
 
@@ -31,27 +26,11 @@ pub fn execute(args: BgremoveArgs) -> crate::Result<()> {
         }
     };
 
-    nifti_io::save_nifti_to_file(
-        &args.output,
-        &local_field,
-        field_nifti.dims,
-        field_nifti.voxel_size,
-        &field_nifti.affine,
-    )
-    .map_err(|e| QsmxtError::NiftiIo(e))?;
-
+    save_nifti(&args.output, &local_field, &field_nifti)?;
     println!("Local field saved to {}", args.output.display());
 
     if let Some(ref mask_out) = args.output_mask {
-        let mask_f64: Vec<f64> = eroded_mask.iter().map(|&m| m as f64).collect();
-        nifti_io::save_nifti_to_file(
-            mask_out,
-            &mask_f64,
-            field_nifti.dims,
-            field_nifti.voxel_size,
-            &field_nifti.affine,
-        )
-        .map_err(|e| QsmxtError::NiftiIo(e))?;
+        save_mask(mask_out, &eroded_mask, &field_nifti)?;
         println!("Eroded mask saved to {}", mask_out.display());
     }
 

@@ -36,6 +36,25 @@ pub enum Command {
     Invert(InvertArgs),
     /// Susceptibility-weighted imaging (NIfTI in/out)
     Swi(SwiArgs),
+    /// R2* mapping from multi-echo magnitude data (NIfTI in/out)
+    R2star(R2starArgs),
+    /// T2* mapping from multi-echo magnitude data (NIfTI in/out)
+    T2star(T2starArgs),
+    /// Inhomogeneity correction on magnitude data (NIfTI in/out)
+    Homogeneity(HomogeneityArgs),
+    /// Resample oblique volume to axial orientation (NIfTI in/out)
+    Resample(ResampleArgs),
+    /// Dilate a binary mask (NIfTI in/out)
+    Dilate(DilateArgs),
+    /// Morphological closing on a binary mask (NIfTI in/out)
+    Close(CloseArgs),
+    /// Fill holes in a binary mask (NIfTI in/out)
+    FillHoles(FillHolesArgs),
+    /// Gaussian smooth a binary mask (NIfTI in/out)
+    SmoothMask(SmoothMaskArgs),
+    /// Compute ROMEO phase quality map (NIfTI in/out)
+    #[command(name = "quality-map")]
+    QualityMap(QualityMapArgs),
     /// Launch interactive TUI for pipeline configuration
     Tui,
 }
@@ -150,6 +169,27 @@ pub struct RunArgs {
     #[arg(long)]
     pub do_swi: bool,
 
+    /// Compute T2* relaxation map from multi-echo magnitude data
+    #[arg(long)]
+    pub do_t2starmap: bool,
+
+    /// Compute R2* decay rate map from multi-echo magnitude data
+    #[arg(long)]
+    pub do_r2starmap: bool,
+
+    /// Apply inhomogeneity correction to magnitude before masking
+    #[arg(long)]
+    pub inhomogeneity_correction: bool,
+
+    /// Resample oblique acquisitions to axial if obliquity exceeds threshold (degrees, -1 to disable)
+    #[arg(long)]
+    pub obliquity_threshold: Option<f64>,
+
+    /// Mask-building operation (repeatable, applied in order). Overrides --masking-algorithm.
+    /// Format: input:magnitude, threshold:otsu, erode:2, dilate:1, close:1, fill-holes:1000, gaussian:4.0, bet:0.5
+    #[arg(long = "mask-op", num_args = 1)]
+    pub mask_ops: Option<Vec<String>>,
+
     /// Print processing plan without executing
     #[arg(long)]
     pub dry: bool,
@@ -165,6 +205,14 @@ pub struct RunArgs {
     /// Disable memory-aware concurrency limiting
     #[arg(long)]
     pub no_mem_limit: bool,
+
+    /// Force re-run, ignoring cached pipeline state
+    #[arg(long)]
+    pub force: bool,
+
+    /// Remove intermediate files after pipeline completes (keep only final outputs)
+    #[arg(long)]
+    pub clean_intermediates: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -418,6 +466,154 @@ pub struct SwiArgs {
     pub mip_output: Option<PathBuf>,
 }
 
+#[derive(Parser, Debug)]
+pub struct R2starArgs {
+    /// Input multi-echo magnitude NIfTI files (3+ echoes required)
+    #[arg(required = true, num_args = 3..)]
+    pub inputs: Vec<PathBuf>,
+
+    /// Binary mask NIfTI file
+    #[arg(short, long)]
+    pub mask: PathBuf,
+
+    /// Output R2* map NIfTI file
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Echo times in seconds (must match number of inputs)
+    #[arg(long, required = true, num_args = 3..)]
+    pub echo_times: Vec<f64>,
+}
+
+#[derive(Parser, Debug)]
+pub struct T2starArgs {
+    /// Input multi-echo magnitude NIfTI files (3+ echoes required)
+    #[arg(required = true, num_args = 3..)]
+    pub inputs: Vec<PathBuf>,
+
+    /// Binary mask NIfTI file
+    #[arg(short, long)]
+    pub mask: PathBuf,
+
+    /// Output T2* map NIfTI file
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Echo times in seconds (must match number of inputs)
+    #[arg(long, required = true, num_args = 3..)]
+    pub echo_times: Vec<f64>,
+}
+
+#[derive(Parser, Debug)]
+pub struct HomogeneityArgs {
+    /// Input magnitude NIfTI file
+    pub input: PathBuf,
+
+    /// Output corrected magnitude NIfTI file
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Smoothing sigma in mm (default: 7.0)
+    #[arg(long, default_value_t = 7.0)]
+    pub sigma: f64,
+
+    /// Number of box filter passes for Gaussian approximation (default: 3)
+    #[arg(long, default_value_t = 3)]
+    pub nbox: usize,
+}
+
+#[derive(Parser, Debug)]
+pub struct DilateArgs {
+    /// Input binary mask NIfTI file
+    pub input: PathBuf,
+
+    /// Output dilated mask NIfTI file
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Number of dilation iterations
+    #[arg(long, default_value_t = 1)]
+    pub iterations: usize,
+}
+
+#[derive(Parser, Debug)]
+pub struct CloseArgs {
+    /// Input binary mask NIfTI file
+    pub input: PathBuf,
+
+    /// Output closed mask NIfTI file
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Closing radius
+    #[arg(long, default_value_t = 1)]
+    pub radius: usize,
+}
+
+#[derive(Parser, Debug)]
+pub struct FillHolesArgs {
+    /// Input binary mask NIfTI file
+    pub input: PathBuf,
+
+    /// Output filled mask NIfTI file
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Maximum hole size in voxels
+    #[arg(long, default_value_t = 1000)]
+    pub max_size: usize,
+}
+
+#[derive(Parser, Debug)]
+pub struct SmoothMaskArgs {
+    /// Input binary mask NIfTI file
+    pub input: PathBuf,
+
+    /// Output smoothed mask NIfTI file
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Gaussian sigma in mm
+    #[arg(long, default_value_t = 4.0)]
+    pub sigma: f64,
+}
+
+#[derive(Parser, Debug)]
+pub struct ResampleArgs {
+    /// Input NIfTI file
+    pub input: PathBuf,
+
+    /// Output resampled NIfTI file
+    #[arg(short, long)]
+    pub output: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+pub struct QualityMapArgs {
+    /// Input phase NIfTI file (first echo)
+    pub phase: PathBuf,
+
+    /// Output quality map NIfTI file
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Magnitude image (improves quality estimation)
+    #[arg(long)]
+    pub magnitude: Option<PathBuf>,
+
+    /// Second echo phase image (improves quality estimation)
+    #[arg(long)]
+    pub phase2: Option<PathBuf>,
+
+    /// Echo time of first phase in seconds
+    #[arg(long, default_value_t = 0.02)]
+    pub te1: f64,
+
+    /// Echo time of second phase in seconds (if --phase2 provided)
+    #[arg(long, default_value_t = 0.04)]
+    pub te2: f64,
+}
+
 // ─── Shared enums ───
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
@@ -459,8 +655,10 @@ pub enum MaskAlgorithmArg {
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum MaskInputArg {
-    Phase,
+    MagnitudeFirst,
     Magnitude,
+    MagnitudeLast,
+    PhaseQuality,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]

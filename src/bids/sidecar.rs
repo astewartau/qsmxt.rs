@@ -57,3 +57,64 @@ pub fn read_sidecar(path: &Path) -> crate::Result<QsmSidecar> {
         b0_dir,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn write_json(content: &str) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        f
+    }
+
+    #[test]
+    fn test_read_sidecar_valid() {
+        let f = write_json(r#"{"EchoTime": 0.02, "MagneticFieldStrength": 3.0}"#);
+        let sc = read_sidecar(f.path()).unwrap();
+        assert!((sc.echo_time - 0.02).abs() < 1e-10);
+        assert!((sc.magnetic_field_strength - 3.0).abs() < 1e-10);
+        assert!(sc.b0_dir.is_none());
+    }
+
+    #[test]
+    fn test_read_sidecar_with_b0_dir() {
+        let f = write_json(
+            r#"{"EchoTime": 0.01, "MagneticFieldStrength": 7.0, "B0_dir": [0.0, 0.0, 1.0]}"#,
+        );
+        let sc = read_sidecar(f.path()).unwrap();
+        let b0 = sc.b0_dir.unwrap();
+        assert_eq!(b0.len(), 3);
+        assert!((b0[2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_read_sidecar_missing_echo_time() {
+        let f = write_json(r#"{"MagneticFieldStrength": 3.0}"#);
+        let result = read_sidecar(f.path());
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("EchoTime"), "Error should mention EchoTime: {}", err);
+    }
+
+    #[test]
+    fn test_read_sidecar_missing_field_strength() {
+        let f = write_json(r#"{"EchoTime": 0.02}"#);
+        let result = read_sidecar(f.path());
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("MagneticFieldStrength"),
+            "Error should mention MagneticFieldStrength: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_read_sidecar_invalid_json() {
+        let f = write_json("not valid json {{{");
+        let result = read_sidecar(f.path());
+        assert!(result.is_err());
+    }
+}

@@ -1,8 +1,6 @@
 use log::{error, info};
 use rayon::prelude::*;
 
-use qsm_core::nifti_io;
-
 use crate::bids::derivatives::DerivativeOutputs;
 use crate::bids::discovery::QsmRun;
 use crate::pipeline::config::PipelineConfig;
@@ -14,6 +12,10 @@ pub struct ExecutionConfig {
     pub n_procs: usize,
     /// Memory limit in bytes for concurrent run scheduling (None = no limit)
     pub mem_limit_bytes: Option<usize>,
+    /// Force re-run, ignoring cached state
+    pub force: bool,
+    /// Remove intermediate files after completion
+    pub clean_intermediates: bool,
 }
 
 /// Execute pipeline runs in parallel using Rayon.
@@ -37,75 +39,21 @@ pub fn execute_local(
         .map(|run| {
             info!("Processing {}", run.key);
 
-            let result = runner::run_qsm_pipeline(run, config, &|msg| {
-                info!("{}: {}", run.key, msg);
-            });
+            let result = runner::run_pipeline_cached(
+                run,
+                config,
+                output,
+                exec_config.force,
+                exec_config.clean_intermediates,
+                &|msg| { info!("{}: {}", run.key, msg); },
+            );
 
-            match result {
-                Ok(outputs) => {
-                    // Create output directory
-                    let qsm_path = output.qsm_path(&run.key);
-                    if let Some(parent) = qsm_path.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-
-                    // Save QSM
-                    nifti_io::save_nifti_to_file(
-                        &qsm_path,
-                        &outputs.chi,
-                        outputs.dims,
-                        outputs.voxel_size,
-                        &outputs.affine,
-                    )
-                    .map_err(|e| crate::error::QsmxtError::NiftiIo(e))?;
-                    info!("{}: QSM saved to {}", run.key, qsm_path.display());
-
-                    // Save mask
-                    let mask_path = output.mask_path(&run.key);
-                    let mask_f64: Vec<f64> =
-                        outputs.mask.iter().map(|&m| m as f64).collect();
-                    nifti_io::save_nifti_to_file(
-                        &mask_path,
-                        &mask_f64,
-                        outputs.dims,
-                        outputs.voxel_size,
-                        &outputs.affine,
-                    )
-                    .map_err(|e| crate::error::QsmxtError::NiftiIo(e))?;
-
-                    // Save SWI if computed
-                    if let Some(ref swi) = outputs.swi {
-                        let swi_path = output.swi_path(&run.key);
-                        nifti_io::save_nifti_to_file(
-                            &swi_path,
-                            swi,
-                            outputs.dims,
-                            outputs.voxel_size,
-                            &outputs.affine,
-                        )
-                        .map_err(|e| crate::error::QsmxtError::NiftiIo(e))?;
-                    }
-
-                    if let Some(ref mip) = outputs.swi_mip {
-                        let mip_path = output.swi_mip_path(&run.key);
-                        nifti_io::save_nifti_to_file(
-                            &mip_path,
-                            mip,
-                            outputs.dims,
-                            outputs.voxel_size,
-                            &outputs.affine,
-                        )
-                        .map_err(|e| crate::error::QsmxtError::NiftiIo(e))?;
-                    }
-
-                    info!("{}: Done", run.key);
-                    Ok(())
-                }
-                Err(e) => {
-                    error!("{}: FAILED - {}", run.key, e);
-                    Err(e)
-                }
+            match &result {
+                Ok(()) => info!("{}: Done", run.key),
+                Err(e) => error!("{}: FAILED - {}", run.key, e),
             }
+
+            result
         })
         .collect()
 }
@@ -158,4 +106,96 @@ fn compute_concurrency(
     );
 
     effective
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bids::discovery::{EchoFiles, QsmRun};
+    use crate::bids::entities::AcquisitionKey;
+    use std::path::PathBuf;
+
+    fn dummy_run(dims: (usize, usize, usize), n_echoes: usize) -> QsmRun {
+        QsmRun {
+            key: AcquisitionKey {
+                subject: "01".to_string(),
+                session: None,
+                acquisition: None,
+                reconstruction: None,
+                inversion: None,
+                run: None,
+                suffix: "MEGRE".to_string(),
+            },
+            echoes: (0..n_echoes)
+                .map(|i| EchoFiles {
+                    echo_number: i as u32 + 1,
+                    phase_nifti: PathBuf::from("fake.nii"),
+                    phase_json: PathBuf::from("fake.json"),
+                    magnitude_nifti: Some(PathBuf::from("fake_mag.nii")),
+                    magnitude_json: Some(PathBuf::from("fake_mag.json")),
+                })
+                .collect(),
+            magnetic_field_strength: 3.0,
+            echo_times: vec![0.02; n_echoes],
+            b0_dir: (0.0, 0.0, 1.0),
+            dims,
+            has_magnitude: true,
+        }
+    }
+
+    #[test]
+    fn test_compute_concurrency_no_limit() {
+        let runs = vec![dummy_run((64, 64, 64), 3)];
+        let config = PipelineConfig::default();
+        let exec = ExecutionConfig {
+            n_procs: 8,
+            mem_limit_bytes: None,
+            force: false,
+            clean_intermediates: false,
+        };
+        assert_eq!(compute_concurrency(&runs, &config, &exec), 8);
+    }
+
+    #[test]
+    fn test_compute_concurrency_empty_runs() {
+        let config = PipelineConfig::default();
+        let exec = ExecutionConfig {
+            n_procs: 8,
+            mem_limit_bytes: Some(1024 * 1024 * 1024),
+            force: false,
+            clean_intermediates: false,
+        };
+        assert_eq!(compute_concurrency(&[], &config, &exec), 8);
+    }
+
+    #[test]
+    fn test_compute_concurrency_memory_limited() {
+        let runs = vec![dummy_run((256, 256, 256), 4)];
+        let config = PipelineConfig::default();
+        // Get the per-run estimate
+        let per_run = memory::estimate_peak_memory_bytes(256, 256, 256, 4, true, &config);
+        // Allow exactly 2 runs
+        let exec = ExecutionConfig {
+            n_procs: 16,
+            mem_limit_bytes: Some(per_run * 2),
+            force: false,
+            clean_intermediates: false,
+        };
+        assert_eq!(compute_concurrency(&runs, &config, &exec), 2);
+    }
+
+    #[test]
+    fn test_compute_concurrency_memory_caps_below_nprocs() {
+        let runs = vec![dummy_run((256, 256, 256), 4)];
+        let config = PipelineConfig::default();
+        let per_run = memory::estimate_peak_memory_bytes(256, 256, 256, 4, true, &config);
+        // Allow only 1 run worth of memory, but request 16 procs
+        let exec = ExecutionConfig {
+            n_procs: 16,
+            mem_limit_bytes: Some(per_run),
+            force: false,
+            clean_intermediates: false,
+        };
+        assert_eq!(compute_concurrency(&runs, &config, &exec), 1);
+    }
 }

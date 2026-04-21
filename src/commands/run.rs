@@ -121,6 +121,8 @@ pub fn execute(args: RunArgs) -> crate::Result<()> {
     let exec_config = executor::local::ExecutionConfig {
         n_procs,
         mem_limit_bytes,
+        force: args.force,
+        clean_intermediates: args.clean_intermediates,
     };
 
     let results = executor::local::execute_local(runs, &config, &output, &exec_config);

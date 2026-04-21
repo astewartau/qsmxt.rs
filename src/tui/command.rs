@@ -65,7 +65,7 @@ pub fn build_command_string(form: &RunForm) -> String {
         MASK_ALGO_NAMES[form.masking_algorithm]
     ));
 
-    const MASK_INPUT_NAMES: [&str; 2] = ["phase", "magnitude"];
+    const MASK_INPUT_NAMES: [&str; 4] = ["magnitude-first", "magnitude", "magnitude-last", "phase-quality"];
     parts.push(format!(
         "--masking-input {}",
         MASK_INPUT_NAMES[form.masking_input]
@@ -84,10 +84,25 @@ pub fn build_command_string(form: &RunForm) -> String {
     push_if_set(&mut parts, "--tgv-erosions", &form.tgv_erosions);
     push_if_set(&mut parts, "--tv-lambda", &form.tv_lambda);
     push_if_set(&mut parts, "--tkd-threshold", &form.tkd_threshold);
+    push_if_set(&mut parts, "--obliquity-threshold", &form.obliquity_threshold);
+
+    // Mask ops (if any, overrides legacy masking)
+    for op in &form.mask_ops {
+        parts.push(format!("--mask-op {}", op));
+    }
 
     // Execution flags
     if form.do_swi {
         parts.push("--do-swi".to_string());
+    }
+    if form.do_t2starmap {
+        parts.push("--do-t2starmap".to_string());
+    }
+    if form.do_r2starmap {
+        parts.push("--do-r2starmap".to_string());
+    }
+    if form.inhomogeneity_correction {
+        parts.push("--inhomogeneity-correction".to_string());
     }
     if form.dry_run {
         parts.push("--dry".to_string());
@@ -136,7 +151,7 @@ pub fn build_run_args(form: &RunForm) -> crate::Result<RunArgs> {
         BfAlgorithmArg::Ismv,
     ];
     let mask_algo_options = [MaskAlgorithmArg::Bet, MaskAlgorithmArg::Threshold];
-    let mask_input_options = [MaskInputArg::Phase, MaskInputArg::Magnitude];
+    let mask_input_options = [MaskInputArg::MagnitudeFirst, MaskInputArg::Magnitude, MaskInputArg::MagnitudeLast, MaskInputArg::PhaseQuality];
 
     Ok(RunArgs {
         bids_dir: PathBuf::from(&form.bids_dir),
@@ -165,10 +180,19 @@ pub fn build_run_args(form: &RunForm) -> crate::Result<RunArgs> {
         tkd_threshold: parse_optional_f64(&form.tkd_threshold),
         n_procs: parse_optional_usize(&form.n_procs),
         do_swi: form.do_swi,
+        do_t2starmap: form.do_t2starmap,
+        do_r2starmap: form.do_r2starmap,
+        inhomogeneity_correction: form.inhomogeneity_correction,
+        obliquity_threshold: parse_optional_f64(&form.obliquity_threshold),
+        mask_ops: if form.mask_ops.is_empty() { None } else {
+            Some(form.mask_ops.iter().map(|op| format!("{}", op)).collect())
+        },
         dry: form.dry_run,
         debug: form.debug,
         mem_limit_gb: None,
         no_mem_limit: false,
+        force: false,
+        clean_intermediates: false,
     })
 }
 
