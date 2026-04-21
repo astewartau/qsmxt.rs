@@ -176,6 +176,28 @@ pub fn available_memory_bytes() -> usize {
     8 * 1024 * 1024 * 1024
 }
 
+/// Get current process resident memory (RSS) in bytes.
+///
+/// On Linux, reads `VmRSS` from `/proc/self/status`.
+/// Returns 0 if detection fails or on unsupported platforms.
+pub fn process_rss_bytes() -> usize {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(contents) = std::fs::read_to_string("/proc/self/status") {
+            for line in contents.lines() {
+                if let Some(rest) = line.strip_prefix("VmRSS:") {
+                    if let Some(kb_str) = rest.trim().split_whitespace().next() {
+                        if let Ok(kb) = kb_str.parse::<usize>() {
+                            return kb * 1024;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+
 /// Format a byte count as a human-readable string (e.g. "3.4 GB").
 pub fn format_bytes(bytes: usize) -> String {
     let gb = bytes as f64 / (1024.0 * 1024.0 * 1024.0);

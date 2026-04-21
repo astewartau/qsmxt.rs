@@ -118,3 +118,106 @@ pub fn submit_scripts(scripts: &[PathBuf]) -> crate::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bids::discovery::{EchoFiles, QsmRun};
+    use crate::bids::entities::AcquisitionKey;
+
+    fn dummy_run_with_key(subject: &str, session: Option<&str>) -> QsmRun {
+        QsmRun {
+            key: AcquisitionKey {
+                subject: subject.to_string(),
+                session: session.map(|s| s.to_string()),
+                acquisition: None,
+                reconstruction: None,
+                inversion: None,
+                run: None,
+                suffix: "MEGRE".to_string(),
+            },
+            echoes: vec![EchoFiles {
+                echo_number: 1,
+                phase_nifti: PathBuf::from("fake.nii"),
+                phase_json: PathBuf::from("fake.json"),
+                magnitude_nifti: None,
+                magnitude_json: None,
+            }],
+            magnetic_field_strength: 3.0,
+            echo_times: vec![0.02],
+            b0_dir: (0.0, 0.0, 1.0),
+            dims: (64, 64, 64),
+            has_magnitude: false,
+        }
+    }
+
+    #[test]
+    fn test_slurm_script_contains_sbatch_directives() {
+        let dir = tempfile::tempdir().unwrap();
+        let runs = vec![dummy_run_with_key("01", None)];
+        let config = PipelineConfig::default();
+        let scripts = generate_all_slurm(
+            &runs,
+            Path::new("/bids"),
+            dir.path(),
+            &config,
+            "myaccount",
+            Some("gpu"),
+            "02:00:00",
+            32,
+            4,
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(&scripts[0]).unwrap();
+        assert!(content.contains("#SBATCH --job-name="));
+        assert!(content.contains("#SBATCH --account=myaccount"));
+        assert!(content.contains("#SBATCH --time=02:00:00"));
+        assert!(content.contains("#SBATCH --mem=32G"));
+        assert!(content.contains("#SBATCH --cpus-per-task=4"));
+    }
+
+    #[test]
+    fn test_slurm_script_partition_omitted_when_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let runs = vec![dummy_run_with_key("01", None)];
+        let config = PipelineConfig::default();
+        let scripts = generate_all_slurm(
+            &runs,
+            Path::new("/bids"),
+            dir.path(),
+            &config,
+            "acct",
+            None,
+            "01:00:00",
+            16,
+            2,
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(&scripts[0]).unwrap();
+        assert!(!content.contains("--partition"), "Partition should be omitted");
+    }
+
+    #[test]
+    fn test_slurm_script_session_flag_included() {
+        let dir = tempfile::tempdir().unwrap();
+        let runs = vec![dummy_run_with_key("01", Some("pre"))];
+        let config = PipelineConfig::default();
+        let scripts = generate_all_slurm(
+            &runs,
+            Path::new("/bids"),
+            dir.path(),
+            &config,
+            "acct",
+            None,
+            "01:00:00",
+            16,
+            2,
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(&scripts[0]).unwrap();
+        assert!(content.contains("--sessions pre"), "Should contain session flag");
+    }
+}
