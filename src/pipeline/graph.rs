@@ -108,6 +108,7 @@ impl PipelineState {
     }
 
     /// Mark a step as the current one being processed.
+    #[allow(dead_code)]
     pub fn set_current(&mut self, step_name: &str) {
         self.status = "in_progress".to_string();
         self.current_step = Some(step_name.to_string());
@@ -126,6 +127,7 @@ impl PipelineState {
     }
 
     /// Mark a step as completed with metadata (e.g., load step stores dims/echo_times).
+    #[allow(dead_code)]
     pub fn mark_completed_with_metadata(
         &mut self,
         step_name: &str,
@@ -149,6 +151,7 @@ impl PipelineState {
     }
 
     /// Get output paths for a completed step.
+    #[allow(dead_code)]
     pub fn step_outputs(&self, step_name: &str) -> Option<&[PathBuf]> {
         self.completed_steps
             .get(step_name)
@@ -156,6 +159,7 @@ impl PipelineState {
     }
 
     /// Invalidate a step and all steps that depend on it.
+    #[allow(dead_code)]
     pub fn invalidate(&mut self, step_name: &str) {
         self.completed_steps.remove(step_name);
         // Also invalidate downstream steps
@@ -166,6 +170,7 @@ impl PipelineState {
     }
 
     /// Get all completed step names.
+    #[allow(dead_code)]
     pub fn completed_step_names(&self) -> HashSet<&str> {
         self.completed_steps.keys().map(|s| s.as_str()).collect()
     }
@@ -188,6 +193,7 @@ fn md5_simple(s: &str) -> u64 {
 }
 
 /// Return step names that depend on the given step (for invalidation).
+#[allow(dead_code)]
 fn downstream_steps(step_name: &str) -> &'static [&'static str] {
     match step_name {
         "load" => &[
@@ -262,6 +268,7 @@ pub fn state_file_path(output_dir: &Path, key: &AcquisitionKey) -> PathBuf {
 }
 
 /// Intermediate file path helper.
+#[allow(dead_code)]
 pub fn intermediate_path(
     output_dir: &Path,
     key: &AcquisitionKey,

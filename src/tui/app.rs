@@ -69,6 +69,7 @@ pub struct RunForm {
 
     // Mask pipeline (empty = use legacy masking)
     pub mask_ops: Vec<crate::pipeline::config::MaskOp>,
+    #[allow(dead_code)]
     pub mask_ops_selected: usize,
 
     // Tab 4: Execution
@@ -483,6 +484,7 @@ impl App {
         }
     }
 
+    #[allow(dead_code)]
     fn checkbox_value(&self) -> bool {
         match (self.active_tab, self.active_field) {
             (3, 0) => self.form.combine_phase,

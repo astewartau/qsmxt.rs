@@ -10,6 +10,7 @@ use crate::error::QsmxtError;
 
 /// Files for a single echo in a BIDS acquisition.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct EchoFiles {
     pub echo_number: u32,
     pub phase_nifti: PathBuf,

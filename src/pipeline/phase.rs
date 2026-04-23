@@ -51,6 +51,7 @@ pub fn scale_phase_to_pi(data: &mut [f64]) {
 ///
 /// B0 is assumed along z-axis in scanner coordinates [0, 0, 1].
 /// Transform to voxel coordinates using inverse rotation matrix.
+#[allow(dead_code)]
 pub fn b0_direction_from_affine(affine: &[f64; 16]) -> (f64, f64, f64) {
     // Extract 3x3 rotation/scaling from affine
     let r00 = affine[0];
@@ -412,6 +413,7 @@ pub fn resample_to_axial(
 }
 
 /// Resample a binary mask to axial using nearest-neighbor interpolation.
+#[allow(dead_code)]
 pub fn resample_mask_to_axial(
     mask: &[u8],
     nx: usize, ny: usize, nz: usize,
