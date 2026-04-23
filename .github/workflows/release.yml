@@ -17,12 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkout QSM.rs dependency
-        uses: actions/checkout@v4
-        with:
-          repository: astewartau/QSM.rs
-          path: ../QSM.rs
-
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -61,12 +55,6 @@ jobs:
             os: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Checkout QSM.rs dependency
-        uses: actions/checkout@v4
-        with:
-          repository: astewartau/QSM.rs
-          path: ../QSM.rs
 
       - uses: dtolnay/rust-toolchain@stable
         with:
