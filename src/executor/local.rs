@@ -89,11 +89,9 @@ fn compute_concurrency(
         .max()
         .unwrap_or(0);
 
-    let max_by_memory = if per_run > 0 {
-        (mem_limit / per_run).max(1)
-    } else {
-        exec_config.n_procs
-    };
+    let max_by_memory = (mem_limit.checked_div(per_run))
+        .map(|v| v.max(1))
+        .unwrap_or(exec_config.n_procs);
 
     let effective = exec_config.n_procs.min(max_by_memory);
 

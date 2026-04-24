@@ -13,6 +13,7 @@ pub struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Run the full QSM pipeline on a BIDS dataset
     Run(RunArgs),

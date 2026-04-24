@@ -7,6 +7,7 @@ use crate::bids::discovery::QsmRun;
 use crate::pipeline::config::PipelineConfig;
 
 /// Generate SLURM job scripts for all runs.
+#[allow(clippy::too_many_arguments)]
 pub fn generate_all_slurm(
     runs: &[QsmRun],
     bids_dir: &Path,

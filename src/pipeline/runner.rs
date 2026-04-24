@@ -28,6 +28,7 @@ fn create_progress_bar(step_name: &str, total: u64) -> ProgressBar {
 }
 
 /// Create a progress callback that drives an indicatif progress bar.
+#[allow(clippy::type_complexity)]
 fn iter_progress_bar(step_name: &str) -> (Box<dyn FnMut(usize, usize) + '_>, Option<ProgressBar>) {
     let pb: std::cell::RefCell<Option<ProgressBar>> = std::cell::RefCell::new(None);
     let name = step_name.to_string();
@@ -39,7 +40,7 @@ fn iter_progress_bar(step_name: &str) -> (Box<dyn FnMut(usize, usize) + '_>, Opt
         if let Some(ref bar) = *pb_ref {
             bar.set_position(current as u64);
             // Update memory info occasionally (reading /proc is cheap but not free)
-            if current == 1 || current == total || current % 10 == 0 {
+            if current == 1 || current == total || current.is_multiple_of(10) {
                 let rss = memory::process_rss_bytes();
                 if rss > 0 {
                     bar.set_message(memory::format_bytes(rss));
@@ -74,7 +75,7 @@ fn save_volume(path: &Path, data: &[f64], meta: &RunMetadata) -> crate::Result<(
         std::fs::create_dir_all(parent)?;
     }
     nifti_io::save_nifti_to_file(path, data, meta.dims, meta.voxel_size, &meta.affine)
-        .map_err(|e| QsmxtError::NiftiIo(e))
+        .map_err(QsmxtError::NiftiIo)
 }
 
 /// Helper: save a u8 mask as f64 NIfTI.
@@ -366,7 +367,7 @@ pub fn run_pipeline_cached(
                     }
                     if let Some(ref bar) = *pb_ref {
                         bar.set_position(current as u64);
-                        if current == 1 || current == total || current % 10 == 0 {
+                        if current == 1 || current == total || current.is_multiple_of(10) {
                             let rss = memory::process_rss_bytes();
                             if rss > 0 { bar.set_message(memory::format_bytes(rss)); }
                         }
@@ -473,10 +474,10 @@ pub fn run_pipeline_cached(
                     let mut r = 18.0 * min_vox;
                     while r >= 2.0 * max_vox { radii.push(r); r -= 2.0 * max_vox; }
                     log::info!("Background removal (V-SHARP, {} radii, threshold=0.05)", radii.len());
-                    let (mut prog, _) = iter_progress_bar("V-SHARP");
+                    let (prog, _) = iter_progress_bar("V-SHARP");
                     qsm_core::bgremove::vsharp_with_progress(
                         &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
-                        &radii, 0.05, |cur, total| prog(cur, total),
+                        &radii, 0.05, prog,
                     )
                 }
                 Some(BfAlgorithm::Pdf) => {
@@ -484,29 +485,29 @@ pub fn run_pipeline_cached(
                     let max_iter = 100;
                     log::info!("Background removal (PDF, tol=1e-5, max_iter={}, B0=[{:.2},{:.2},{:.2}])",
                         max_iter, bdir.0, bdir.1, bdir.2);
-                    let (mut prog, _) = iter_progress_bar("PDF");
+                    let (prog, _) = iter_progress_bar("PDF");
                     let lf = qsm_core::bgremove::pdf_with_progress(
                         &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
-                        bdir, 1e-5, max_iter, |cur, total| prog(cur, total),
+                        bdir, 1e-5, max_iter, prog,
                     );
                     (lf, mask.clone())
                 }
                 Some(BfAlgorithm::Lbv) => {
                     let max_iter = (3 * nx.max(ny).max(nz)).max(500);
                     log::info!("Background removal (LBV, tol=1e-6, max_iter={})", max_iter);
-                    let (mut prog, _) = iter_progress_bar("LBV");
+                    let (prog, _) = iter_progress_bar("LBV");
                     qsm_core::bgremove::lbv_with_progress(
                         &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
-                        1e-6, max_iter, |cur, total| prog(cur, total),
+                        1e-6, max_iter, prog,
                     )
                 }
                 Some(BfAlgorithm::Ismv) => {
                     let radius = 2.0 * vsx.max(vsy).max(vsz);
                     log::info!("Background removal (iSMV, radius={:.1}, tol=1e-3, max_iter=500)", radius);
-                    let (mut prog, _) = iter_progress_bar("iSMV");
+                    let (prog, _) = iter_progress_bar("iSMV");
                     qsm_core::bgremove::ismv_with_progress(
                         &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
-                        radius, 1e-3, 500, |cur, total| prog(cur, total),
+                        radius, 1e-3, 500, prog,
                     )
                 }
                 None => {
@@ -536,20 +537,20 @@ pub fn run_pipeline_cached(
                 QsmAlgorithm::Rts => {
                     log::info!("Dipole inversion (RTS, delta={}, mu={:.0e}, tol={:.0e}, max_iter=20)",
                         config.rts_delta, config.rts_mu, config.rts_tol);
-                    let (mut prog, _) = iter_progress_bar("RTS");
+                    let (prog, _) = iter_progress_bar("RTS");
                     qsm_core::inversion::rts_with_progress(
                         &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
                         bdir, config.rts_delta, config.rts_mu, 10.0, config.rts_tol, 20, 4,
-                        |cur, total| prog(cur, total),
+                        prog,
                     )
                 }
                 QsmAlgorithm::Tv => {
                     log::info!("Dipole inversion (TV-ADMM, lambda={:.0e}, max_iter=250)", config.tv_lambda);
-                    let (mut prog, _) = iter_progress_bar("TV");
+                    let (prog, _) = iter_progress_bar("TV");
                     qsm_core::inversion::tv_admm_with_progress(
                         &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
                         bdir, config.tv_lambda, 0.1, 1e-3, 250,
-                        |cur, total| prog(cur, total),
+                        prog,
                     )
                 }
                 QsmAlgorithm::Tkd => {
@@ -577,11 +578,7 @@ pub fn run_pipeline_cached(
         let t = Instant::now();
         log::info!("QSM referencing ({})", config.qsm_reference);
         progress("Referencing QSM");
-        let chi_raw_path = if config.qsm_algorithm == QsmAlgorithm::Tgv {
-            output.chi_raw_path(&qsm_run.key)
-        } else {
-            output.chi_raw_path(&qsm_run.key)
-        };
+        let chi_raw_path = output.chi_raw_path(&qsm_run.key);
         let chi = load_volume(&chi_raw_path)?;
         let mask = load_mask(&mask_path)?;
 
@@ -661,6 +658,7 @@ fn resolve_masking_input(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_mask(
     phases: &[NiftiData],
     magnitudes: &[NiftiData],
@@ -712,6 +710,7 @@ fn create_mask(
 }
 
 /// Build mask from an ordered sequence of mask operations.
+#[allow(clippy::too_many_arguments)]
 fn build_mask_from_ops(
     ops: &[MaskOp],
     phases: &[NiftiData],
@@ -808,9 +807,8 @@ fn build_mask_from_ops(
     Ok(mask)
 }
 
-/// Standard pipeline: unwrap → BG removal → dipole inversion
-
 /// Unwrap phase using the configured algorithm.
+#[allow(clippy::too_many_arguments)]
 fn unwrap_phase(
     phase: &[f64],
     mask: &[u8],

@@ -318,11 +318,10 @@ impl App {
             }
 
             // Field navigation
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.active_field > 0 {
+            KeyCode::Up | KeyCode::Char('k')
+                if self.active_field > 0 => {
                     self.active_field -= 1;
                 }
-            }
             KeyCode::Down | KeyCode::Char('j') => {
                 let max = self.field_count().saturating_sub(1);
                 if self.active_field < max {
@@ -354,12 +353,11 @@ impl App {
                 self.text_value_mut().insert(cursor, c);
                 cursor += 1;
             }
-            KeyCode::Backspace => {
-                if cursor > 0 {
+            KeyCode::Backspace
+                if cursor > 0 => {
                     cursor -= 1;
                     self.text_value_mut().remove(cursor);
                 }
-            }
             KeyCode::Delete => {
                 let len = self.text_value().len();
                 if cursor < len {
@@ -367,9 +365,7 @@ impl App {
                 }
             }
             KeyCode::Left => {
-                if cursor > 0 {
-                    cursor -= 1;
-                }
+                cursor = cursor.saturating_sub(1);
             }
             KeyCode::Right => {
                 let len = self.text_value().len();

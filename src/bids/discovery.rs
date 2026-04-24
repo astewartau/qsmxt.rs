@@ -184,7 +184,7 @@ pub fn discover_runs(bids_dir: &Path, filter: &DiscoveryFilter) -> crate::Result
 
         // Read volume dimensions from the first phase NIfTI header (fast, header-only)
         let dims = qsm_core::nifti_io::read_nifti_dims(&echoes[0].phase_nifti)
-            .map_err(|e| QsmxtError::NiftiIo(e))?;
+            .map_err(QsmxtError::NiftiIo)?;
         let has_magnitude = echoes[0].magnitude_nifti.is_some();
 
         runs.push(QsmRun {
@@ -199,7 +199,7 @@ pub fn discover_runs(bids_dir: &Path, filter: &DiscoveryFilter) -> crate::Result
     }
 
     // Sort by key for deterministic ordering
-    runs.sort_by(|a, b| a.key.to_string().cmp(&b.key.to_string()));
+    runs.sort_by_key(|a| a.key.to_string());
 
     Ok(runs)
 }

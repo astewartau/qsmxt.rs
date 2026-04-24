@@ -94,11 +94,9 @@ pub fn execute(args: RunArgs) -> crate::Result<()> {
                 })
                 .max()
                 .unwrap_or(0);
-            let max_concurrent = if per_run_max > 0 {
-                (mem / per_run_max).max(1).min(n_procs)
-            } else {
-                n_procs
-            };
+            let max_concurrent = (mem.checked_div(per_run_max))
+                .map(|v| v.max(1).min(n_procs))
+                .unwrap_or(n_procs);
             println!();
             println!(
                 "Memory: {} available, max {} concurrent run(s)",

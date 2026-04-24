@@ -558,41 +558,41 @@ impl PipelineConfig {
         s.push('\n');
 
         s.push_str("[pipeline]\n");
-        s.push_str(&format!("# QSM dipole inversion algorithm: rts | tv | tkd | tgv\n"));
+        s.push_str("# QSM dipole inversion algorithm: rts | tv | tkd | tgv\n");
         s.push_str(&format!("qsm_algorithm = \"{}\"\n", self.qsm_algorithm));
-        s.push_str(&format!("# Phase unwrapping algorithm: romeo | laplacian\n"));
+        s.push_str("# Phase unwrapping algorithm: romeo | laplacian\n");
         match &self.unwrapping_algorithm {
             Some(a) => s.push_str(&format!("unwrapping_algorithm = \"{}\"\n", a)),
             None => s.push_str("# unwrapping_algorithm = \"romeo\"  # Not used with TGV\n"),
         }
-        s.push_str(&format!("# Background field removal: vsharp | pdf | lbv | ismv\n"));
+        s.push_str("# Background field removal: vsharp | pdf | lbv | ismv\n");
         match &self.bf_algorithm {
             Some(a) => s.push_str(&format!("bf_algorithm = \"{}\"\n", a)),
             None => s.push_str("# bf_algorithm = \"pdf\"  # Not used with TGV\n"),
         }
-        s.push_str(&format!("# Masking method: bet | threshold\n"));
+        s.push_str("# Masking method: bet | threshold\n");
         s.push_str(&format!("masking_algorithm = \"{}\"\n", self.masking_algorithm));
-        s.push_str(&format!("# Masking input: magnitude | magnitude-combined | magnitude-last | phase-quality\n"));
+        s.push_str("# Masking input: magnitude | magnitude-combined | magnitude-last | phase-quality\n");
         s.push_str(&format!("masking_input = \"{}\"\n", self.masking_input));
-        s.push_str(&format!("# Combine multi-echo phase data using MCPC-3D-S\n"));
+        s.push_str("# Combine multi-echo phase data using MCPC-3D-S\n");
         s.push_str(&format!("combine_phase = {}\n", self.combine_phase));
-        s.push_str(&format!("# QSM reference: mean | none\n"));
+        s.push_str("# QSM reference: mean | none\n");
         s.push_str(&format!("qsm_reference = \"{}\"\n", self.qsm_reference));
         s.push_str(&format!("do_swi = {}\n", self.do_swi));
-        s.push_str(&format!("# Compute T2* relaxation map from multi-echo magnitude data\n"));
+        s.push_str("# Compute T2* relaxation map from multi-echo magnitude data\n");
         s.push_str(&format!("do_t2starmap = {}\n", self.do_t2starmap));
-        s.push_str(&format!("# Compute R2* decay rate map from multi-echo magnitude data\n"));
+        s.push_str("# Compute R2* decay rate map from multi-echo magnitude data\n");
         s.push_str(&format!("do_r2starmap = {}\n", self.do_r2starmap));
-        s.push_str(&format!("# Apply inhomogeneity correction to magnitude before masking\n"));
+        s.push_str("# Apply inhomogeneity correction to magnitude before masking\n");
         s.push_str(&format!("inhomogeneity_correction = {}\n", self.inhomogeneity_correction));
-        s.push_str(&format!("# Resample oblique acquisitions to axial (-1 = disabled, 0+ = threshold in degrees)\n"));
+        s.push_str("# Resample oblique acquisitions to axial (-1 = disabled, 0+ = threshold in degrees)\n");
         s.push_str(&format!("obliquity_threshold = {}\n", self.obliquity_threshold));
         s.push('\n');
 
         s.push_str("[masking]\n");
-        s.push_str(&format!("# BET fractional intensity (0.0-1.0, smaller = larger brain)\n"));
+        s.push_str("# BET fractional intensity (0.0-1.0, smaller = larger brain)\n");
         s.push_str(&format!("bet_fractional_intensity = {}\n", self.bet_fractional_intensity));
-        s.push_str(&format!("# Mask erosion iterations\n"));
+        s.push_str("# Mask erosion iterations\n");
         s.push_str(&format!("mask_erosions = {:?}\n", self.mask_erosions));
         s.push('\n');
 

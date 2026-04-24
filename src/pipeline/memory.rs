@@ -163,7 +163,7 @@ pub fn available_memory_bytes() -> usize {
         if let Ok(contents) = std::fs::read_to_string("/proc/meminfo") {
             for line in contents.lines() {
                 if let Some(rest) = line.strip_prefix("MemAvailable:") {
-                    if let Some(kb_str) = rest.trim().split_whitespace().next() {
+                    if let Some(kb_str) = rest.split_whitespace().next() {
                         if let Ok(kb) = kb_str.parse::<usize>() {
                             return kb * 1024;
                         }
@@ -186,7 +186,7 @@ pub fn process_rss_bytes() -> usize {
         if let Ok(contents) = std::fs::read_to_string("/proc/self/status") {
             for line in contents.lines() {
                 if let Some(rest) = line.strip_prefix("VmRSS:") {
-                    if let Some(kb_str) = rest.trim().split_whitespace().next() {
+                    if let Some(kb_str) = rest.split_whitespace().next() {
                         if let Ok(kb) = kb_str.parse::<usize>() {
                             return kb * 1024;
                         }

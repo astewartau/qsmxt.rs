@@ -589,7 +589,7 @@ mod tests {
         let mask = vec![1u8; 27]; // 3x3x3 all ones
         let result = erode_mask(&mask, 3, 3, 3, 1);
         // Only center voxel (1,1,1) survives — all boundary voxels touch an edge
-        let center = 1 + 1 * 3 + 1 * 9;
+        let center = 1 + 3 + 9;
         for (i, &v) in result.iter().enumerate() {
             if i == center {
                 assert_eq!(v, 1, "Center voxel should survive");
@@ -630,7 +630,7 @@ mod tests {
     fn test_dilate_mask_single_voxel() {
         // 3x3x3 with only center set
         let mut mask = vec![0u8; 27];
-        mask[1 + 1 * 3 + 1 * 9] = 1; // center
+        mask[1 + 3 + 9] = 1; // center
         let result = dilate_mask(&mask, 3, 3, 3, 1);
         // Center + 6 face neighbors should be set
         let total: u32 = result.iter().map(|&v| v as u32).sum();
@@ -739,7 +739,7 @@ mod tests {
     fn test_trilinear_midpoint() {
         // 2x2x2 all zeros except (1,1,1)=8
         let mut data = vec![0.0f64; 8];
-        data[1 + 1 * 2 + 1 * 4] = 8.0;
+        data[1 + 2 + 4] = 8.0;
         // Midpoint (0.5, 0.5, 0.5) should be 8 * 0.5 * 0.5 * 0.5 = 1.0
         let val = trilinear_sample(&data, 2, 2, 2, 0.5, 0.5, 0.5);
         assert!((val - 1.0).abs() < 1e-10, "Expected 1.0, got {}", val);
