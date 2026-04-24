@@ -4,6 +4,8 @@ mod commands;
 mod error;
 mod executor;
 mod pipeline;
+#[cfg(test)]
+mod testutils;
 mod tui;
 
 pub use error::Result;

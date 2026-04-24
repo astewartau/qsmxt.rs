@@ -28,3 +28,64 @@ pub fn save_mask(path: &Path, mask: &[u8], reference: &NiftiData) -> crate::Resu
     let data: Vec<f64> = mask.iter().map(|&m| m as f64).collect();
     save_nifti(path, &data, reference)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutils;
+
+    #[test]
+    fn test_load_nifti() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mag.nii");
+        testutils::write_magnitude(&path);
+        let nifti = load_nifti(&path).unwrap();
+        assert_eq!(nifti.dims, (8, 8, 8));
+        assert_eq!(nifti.data.len(), 512);
+    }
+
+    #[test]
+    fn test_load_mask() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mask.nii");
+        testutils::write_mask(&path);
+        let (mask, nifti) = load_mask(&path).unwrap();
+        assert_eq!(mask.len(), 512);
+        assert_eq!(nifti.dims, (8, 8, 8));
+        // Border voxels should be 0, interior 1
+        assert_eq!(mask[0], 0); // corner
+        let center = 4 + 4 * 8 + 4 * 64;
+        assert_eq!(mask[center], 1);
+    }
+
+    #[test]
+    fn test_save_and_reload_nifti() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.nii");
+        let dst = dir.path().join("dst.nii");
+        testutils::write_magnitude(&src);
+        let nifti = load_nifti(&src).unwrap();
+        save_nifti(&dst, &nifti.data, &nifti).unwrap();
+        let reloaded = load_nifti(&dst).unwrap();
+        assert_eq!(reloaded.dims, nifti.dims);
+        assert_eq!(reloaded.data.len(), nifti.data.len());
+    }
+
+    #[test]
+    fn test_save_and_reload_mask() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("mask_src.nii");
+        let dst = dir.path().join("mask_dst.nii");
+        testutils::write_mask(&src);
+        let (mask, nifti) = load_mask(&src).unwrap();
+        save_mask(&dst, &mask, &nifti).unwrap();
+        let (reloaded, _) = load_mask(&dst).unwrap();
+        assert_eq!(reloaded, mask);
+    }
+
+    #[test]
+    fn test_load_nifti_missing_file() {
+        let result = load_nifti(Path::new("/nonexistent/file.nii"));
+        assert!(result.is_err());
+    }
+}
