@@ -35,9 +35,12 @@ pub fn execute_local(
         .build_global()
         .ok();
 
-    runs.par_iter()
+    let total_start = std::time::Instant::now();
+
+    let results: Vec<crate::Result<()>> = runs.par_iter()
         .map(|run| {
             info!("Processing {}", run.key);
+            let run_start = std::time::Instant::now();
 
             let result = runner::run_pipeline_cached(
                 run,
@@ -48,14 +51,26 @@ pub fn execute_local(
                 &|msg| { info!("{}: {}", run.key, msg); },
             );
 
+            let elapsed = run_start.elapsed();
             match &result {
-                Ok(()) => info!("{}: Done", run.key),
-                Err(e) => error!("{}: FAILED - {}", run.key, e),
+                Ok(()) => info!("{}: Done ({:.1}s)", run.key, elapsed.as_secs_f64()),
+                Err(e) => error!("{}: FAILED after {:.1}s - {}", run.key, elapsed.as_secs_f64(), e),
             }
 
             result
         })
-        .collect()
+        .collect();
+
+    let total_elapsed = total_start.elapsed();
+    let n_ok = results.iter().filter(|r| r.is_ok()).count();
+    let n_fail = results.iter().filter(|r| r.is_err()).count();
+    if n_fail == 0 {
+        info!("All {} run(s) completed in {:.1}s", n_ok, total_elapsed.as_secs_f64());
+    } else {
+        info!("{} run(s) completed, {} failed in {:.1}s", n_ok, n_fail, total_elapsed.as_secs_f64());
+    }
+
+    results
 }
 
 /// Compute the effective number of concurrent threads based on memory constraints.
