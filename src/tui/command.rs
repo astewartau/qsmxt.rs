@@ -526,12 +526,13 @@ mod tests {
     }
 
     #[test]
-    fn test_build_run_args_empty_mask_ops() {
+    fn test_build_run_args_default_mask_ops() {
         let mut app = default_app();
         app.form.bids_dir = "/b".to_string();
         app.form.output_dir = "/o".to_string();
         let args = build_run_args(&app).unwrap();
-        assert!(args.mask_ops.is_none());
+        // Default pipeline_state has threshold mask_ops
+        assert!(args.mask_ops.is_some());
     }
 
     #[test]

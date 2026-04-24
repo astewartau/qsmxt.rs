@@ -467,7 +467,18 @@ impl Default for PipelineFormState {
             bet_gradient_threshold: format!("{}", bet.gradient_threshold),
             bet_iterations: format!("{}", bet.iterations),
             bet_subdivisions: format!("{}", bet.subdivisions),
-            mask_ops: Vec::new(),
+            mask_ops: vec![
+                crate::pipeline::config::MaskOp::Input {
+                    source: crate::pipeline::config::MaskingInput::MagnitudeFirst,
+                },
+                crate::pipeline::config::MaskOp::Threshold {
+                    method: crate::pipeline::config::MaskThresholdMethod::Otsu,
+                    value: None,
+                },
+                crate::pipeline::config::MaskOp::Dilate { iterations: 2 },
+                crate::pipeline::config::MaskOp::FillHoles { max_size: 0 },
+                crate::pipeline::config::MaskOp::Erode { iterations: 2 },
+            ],
             focus: 0,
             expanded: HashSet::new(),
             editing: false,
@@ -665,11 +676,40 @@ impl PipelineFormState {
             "bf_algorithm" => self.bf_algorithm = val,
             "masking_algorithm" => {
                 self.masking_algorithm = val;
-                // Auto-expand BET params when BET is selected
+                // Auto-expand BET params and update mask_ops
                 if val == 0 {
+                    // BET selected
                     self.expanded.insert("masking".to_string());
+                    self.mask_ops = vec![
+                        crate::pipeline::config::MaskOp::Bet {
+                            fractional_intensity: self.bet_fractional_intensity.parse().unwrap_or(0.5),
+                        },
+                        crate::pipeline::config::MaskOp::Erode {
+                            iterations: self.mask_erosions.trim().parse().unwrap_or(2),
+                        },
+                    ];
                 } else {
+                    // Threshold selected
                     self.expanded.remove("masking");
+                    self.mask_ops = vec![
+                        crate::pipeline::config::MaskOp::Input {
+                            source: match self.masking_input {
+                                1 => crate::pipeline::config::MaskingInput::Magnitude,
+                                2 => crate::pipeline::config::MaskingInput::MagnitudeLast,
+                                3 => crate::pipeline::config::MaskingInput::PhaseQuality,
+                                _ => crate::pipeline::config::MaskingInput::MagnitudeFirst,
+                            },
+                        },
+                        crate::pipeline::config::MaskOp::Threshold {
+                            method: crate::pipeline::config::MaskThresholdMethod::Otsu,
+                            value: None,
+                        },
+                        crate::pipeline::config::MaskOp::Dilate { iterations: 2 },
+                        crate::pipeline::config::MaskOp::FillHoles { max_size: 0 },
+                        crate::pipeline::config::MaskOp::Erode {
+                            iterations: self.mask_erosions.trim().parse().unwrap_or(2),
+                        },
+                    ];
                 }
             }
             "masking_input" => self.masking_input = val,
@@ -1751,7 +1791,7 @@ mod tests {
         assert_eq!(ps.qsm_algorithm, 0);
         assert_eq!(ps.masking_algorithm, 1); // threshold
         assert!(!ps.combine_phase);
-        assert!(ps.mask_ops.is_empty());
+        assert!(!ps.mask_ops.is_empty()); // default threshold pipeline
     }
 
     // --- Editing output_dir ---
