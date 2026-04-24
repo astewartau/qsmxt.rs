@@ -213,6 +213,62 @@ pub struct RunArgs {
     #[arg(long)]
     pub tkd_threshold: Option<f64>,
 
+    /// Tikhonov lambda
+    #[arg(long)]
+    pub tikhonov_lambda: Option<f64>,
+
+    /// NLTV lambda
+    #[arg(long)]
+    pub nltv_lambda: Option<f64>,
+
+    /// NLTV mu (penalty parameter)
+    #[arg(long)]
+    pub nltv_mu: Option<f64>,
+
+    /// NLTV tolerance
+    #[arg(long)]
+    pub nltv_tol: Option<f64>,
+
+    /// NLTV max iterations
+    #[arg(long)]
+    pub nltv_max_iter: Option<usize>,
+
+    /// NLTV Newton iterations
+    #[arg(long)]
+    pub nltv_newton_iter: Option<usize>,
+
+    /// MEDI lambda
+    #[arg(long)]
+    pub medi_lambda: Option<f64>,
+
+    /// MEDI max outer iterations
+    #[arg(long)]
+    pub medi_max_iter: Option<usize>,
+
+    /// MEDI CG max iterations
+    #[arg(long)]
+    pub medi_cg_max_iter: Option<usize>,
+
+    /// MEDI CG tolerance
+    #[arg(long)]
+    pub medi_cg_tol: Option<f64>,
+
+    /// MEDI outer tolerance
+    #[arg(long)]
+    pub medi_tol: Option<f64>,
+
+    /// MEDI edge percentage (0.0-1.0)
+    #[arg(long)]
+    pub medi_percentage: Option<f64>,
+
+    /// MEDI SMV radius in mm
+    #[arg(long)]
+    pub medi_smv_radius: Option<f64>,
+
+    /// SHARP threshold
+    #[arg(long)]
+    pub sharp_threshold: Option<f64>,
+
     // Execution
     /// Number of parallel threads
     #[arg(long)]

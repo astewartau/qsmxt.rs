@@ -331,6 +331,42 @@ pub struct PipelineConfig {
     #[serde(default = "default_tkd_threshold")]
     pub tkd_threshold: f64,
 
+    // Tikhonov parameters
+    #[serde(default = "default_tikhonov_lambda")]
+    pub tikhonov_lambda: f64,
+
+    // NLTV parameters
+    #[serde(default = "default_nltv_lambda")]
+    pub nltv_lambda: f64,
+    #[serde(default = "default_nltv_mu")]
+    pub nltv_mu: f64,
+    #[serde(default = "default_nltv_tol")]
+    pub nltv_tol: f64,
+    #[serde(default = "default_nltv_max_iter")]
+    pub nltv_max_iter: usize,
+    #[serde(default = "default_nltv_newton_iter")]
+    pub nltv_newton_iter: usize,
+
+    // MEDI parameters
+    #[serde(default = "default_medi_lambda")]
+    pub medi_lambda: f64,
+    #[serde(default = "default_medi_max_iter")]
+    pub medi_max_iter: usize,
+    #[serde(default = "default_medi_cg_max_iter")]
+    pub medi_cg_max_iter: usize,
+    #[serde(default = "default_medi_cg_tol")]
+    pub medi_cg_tol: f64,
+    #[serde(default = "default_medi_tol")]
+    pub medi_tol: f64,
+    #[serde(default = "default_medi_percentage")]
+    pub medi_percentage: f64,
+    #[serde(default = "default_medi_smv_radius")]
+    pub medi_smv_radius: f64,
+
+    // SHARP parameters
+    #[serde(default = "default_sharp_threshold")]
+    pub sharp_threshold: f64,
+
     // TGV parameters
     #[serde(default = "default_tgv_iterations")]
     pub tgv_iterations: usize,
@@ -365,6 +401,20 @@ fn default_tv_rho() -> f64 { qsm_core::inversion::TvParams::default().rho }
 fn default_tv_tol() -> f64 { qsm_core::inversion::TvParams::default().tol }
 fn default_tv_max_iter() -> usize { qsm_core::inversion::TvParams::default().max_iter }
 fn default_tkd_threshold() -> f64 { qsm_core::inversion::TkdParams::default().threshold }
+fn default_tikhonov_lambda() -> f64 { qsm_core::inversion::TikhonovParams::default().lambda }
+fn default_nltv_lambda() -> f64 { qsm_core::inversion::NltvParams::default().lambda }
+fn default_nltv_mu() -> f64 { qsm_core::inversion::NltvParams::default().mu }
+fn default_nltv_tol() -> f64 { qsm_core::inversion::NltvParams::default().tol }
+fn default_nltv_max_iter() -> usize { qsm_core::inversion::NltvParams::default().max_iter }
+fn default_nltv_newton_iter() -> usize { qsm_core::inversion::NltvParams::default().newton_iter }
+fn default_medi_lambda() -> f64 { qsm_core::inversion::MediParams::default().lambda }
+fn default_medi_max_iter() -> usize { qsm_core::inversion::MediParams::default().max_iter }
+fn default_medi_cg_max_iter() -> usize { qsm_core::inversion::MediParams::default().cg_max_iter }
+fn default_medi_cg_tol() -> f64 { qsm_core::inversion::MediParams::default().cg_tol }
+fn default_medi_tol() -> f64 { qsm_core::inversion::MediParams::default().tol }
+fn default_medi_percentage() -> f64 { qsm_core::inversion::MediParams::default().percentage }
+fn default_medi_smv_radius() -> f64 { qsm_core::inversion::MediParams::default().smv_radius }
+fn default_sharp_threshold() -> f64 { qsm_core::bgremove::SharpParams::default().threshold }
 fn default_tgv_iterations() -> usize { qsm_core::inversion::TgvParams::default().iterations }
 fn default_mask_ops() -> Vec<MaskOp> {
     vec![
@@ -425,6 +475,20 @@ impl PipelineConfig {
                 tv_tol: default_tv_tol(),
                 tv_max_iter: default_tv_max_iter(),
                 tkd_threshold: default_tkd_threshold(),
+                tikhonov_lambda: default_tikhonov_lambda(),
+                nltv_lambda: default_nltv_lambda(),
+                nltv_mu: default_nltv_mu(),
+                nltv_tol: default_nltv_tol(),
+                nltv_max_iter: default_nltv_max_iter(),
+                nltv_newton_iter: default_nltv_newton_iter(),
+                medi_lambda: default_medi_lambda(),
+                medi_max_iter: default_medi_max_iter(),
+                medi_cg_max_iter: default_medi_cg_max_iter(),
+                medi_cg_tol: default_medi_cg_tol(),
+                medi_tol: default_medi_tol(),
+                medi_percentage: default_medi_percentage(),
+                medi_smv_radius: default_medi_smv_radius(),
+                sharp_threshold: default_sharp_threshold(),
                 tgv_iterations: default_tgv_iterations(),
                 tgv_alphas: default_tgv_alphas(),
                 tgv_erosions: default_tgv_erosions(),
@@ -591,6 +655,48 @@ impl PipelineConfig {
         }
         if let Some(v) = args.tkd_threshold {
             self.tkd_threshold = v;
+        }
+        if let Some(v) = args.tikhonov_lambda {
+            self.tikhonov_lambda = v;
+        }
+        if let Some(v) = args.nltv_lambda {
+            self.nltv_lambda = v;
+        }
+        if let Some(v) = args.nltv_mu {
+            self.nltv_mu = v;
+        }
+        if let Some(v) = args.nltv_tol {
+            self.nltv_tol = v;
+        }
+        if let Some(v) = args.nltv_max_iter {
+            self.nltv_max_iter = v;
+        }
+        if let Some(v) = args.nltv_newton_iter {
+            self.nltv_newton_iter = v;
+        }
+        if let Some(v) = args.medi_lambda {
+            self.medi_lambda = v;
+        }
+        if let Some(v) = args.medi_max_iter {
+            self.medi_max_iter = v;
+        }
+        if let Some(v) = args.medi_cg_max_iter {
+            self.medi_cg_max_iter = v;
+        }
+        if let Some(v) = args.medi_cg_tol {
+            self.medi_cg_tol = v;
+        }
+        if let Some(v) = args.medi_tol {
+            self.medi_tol = v;
+        }
+        if let Some(v) = args.medi_percentage {
+            self.medi_percentage = v;
+        }
+        if let Some(v) = args.medi_smv_radius {
+            self.medi_smv_radius = v;
+        }
+        if let Some(v) = args.sharp_threshold {
+            self.sharp_threshold = v;
         }
         if let Some(v) = args.tgv_iterations {
             self.tgv_iterations = v;
@@ -770,6 +876,20 @@ mod tests {
             tv_tol: None,
             tv_max_iter: None,
             tkd_threshold: None,
+            tikhonov_lambda: None,
+            nltv_lambda: None,
+            nltv_mu: None,
+            nltv_tol: None,
+            nltv_max_iter: None,
+            nltv_newton_iter: None,
+            medi_lambda: None,
+            medi_max_iter: None,
+            medi_cg_max_iter: None,
+            medi_cg_tol: None,
+            medi_tol: None,
+            medi_percentage: None,
+            medi_smv_radius: None,
+            sharp_threshold: None,
             tgv_iterations: None,
             tgv_erosions: None,
             n_procs: None,

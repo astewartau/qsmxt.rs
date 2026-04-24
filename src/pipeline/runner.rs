@@ -512,10 +512,11 @@ pub fn run_pipeline_cached(
                 }
                 Some(BfAlgorithm::Sharp) => {
                     let radius = 18.0 * vsx.min(vsy).min(vsz);
-                    log::info!("Background removal (SHARP, radius={:.1}, threshold=0.05)", radius);
+                    log::info!("Background removal (SHARP, radius={:.1}, threshold={})",
+                        radius, config.sharp_threshold);
                     qsm_core::bgremove::sharp(
                         &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
-                        radius, 0.05,
+                        radius, config.sharp_threshold,
                     )
                 }
                 None => {
@@ -571,27 +572,25 @@ pub fn run_pipeline_cached(
                     )
                 }
                 QsmAlgorithm::Tikhonov => {
-                    log::info!("Dipole inversion (Tikhonov, lambda={:.0e})", config.tkd_threshold);
-                    let p = qsm_core::inversion::TikhonovParams::default();
+                    log::info!("Dipole inversion (Tikhonov, lambda={:.0e})", config.tikhonov_lambda);
                     qsm_core::inversion::tikhonov(
                         &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
-                        bdir, p.lambda, p.reg,
+                        bdir, config.tikhonov_lambda, qsm_core::inversion::Regularization::Identity,
                     )
                 }
                 QsmAlgorithm::Nltv => {
-                    let p = qsm_core::inversion::NltvParams::default();
-                    log::info!("Dipole inversion (NLTV, lambda={:.0e}, max_iter={})", p.lambda, p.max_iter);
+                    log::info!("Dipole inversion (NLTV, lambda={:.0e}, max_iter={})",
+                        config.nltv_lambda, config.nltv_max_iter);
                     let (prog, _) = iter_progress_bar("NLTV");
                     qsm_core::inversion::nltv_with_progress(
                         &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
-                        bdir, p.lambda, p.mu, p.tol, p.max_iter, p.newton_iter,
-                        prog,
+                        bdir, config.nltv_lambda, config.nltv_mu, config.nltv_tol,
+                        config.nltv_max_iter, config.nltv_newton_iter, prog,
                     )
                 }
                 QsmAlgorithm::Medi => {
-                    let p = qsm_core::inversion::MediParams::default();
-                    log::info!("Dipole inversion (MEDI, lambda={:.0e}, max_iter={})", p.lambda, p.max_iter);
-                    // MEDI needs magnitude data
+                    log::info!("Dipole inversion (MEDI, lambda={:.0e}, max_iter={})",
+                        config.medi_lambda, config.medi_max_iter);
                     let mag_path = output.mag_path(&qsm_run.key, 1);
                     let magnitude = if mag_path.exists() {
                         load_volume(&mag_path)?
@@ -602,9 +601,9 @@ pub fn run_pipeline_cached(
                     qsm_core::inversion::medi_l1(
                         &local_field, &n_std, &magnitude, &eroded_mask,
                         nx, ny, nz, vsx, vsy, vsz,
-                        p.lambda, bdir, p.merit, p.smv, p.smv_radius,
-                        p.data_weighting, p.percentage, p.cg_tol, p.cg_max_iter,
-                        p.max_iter, p.tol,
+                        config.medi_lambda, bdir, false, false, config.medi_smv_radius,
+                        1, config.medi_percentage, config.medi_cg_tol, config.medi_cg_max_iter,
+                        config.medi_max_iter, config.medi_tol,
                     )
                 }
                 QsmAlgorithm::Tgv => unreachable!("TGV handled separately"),

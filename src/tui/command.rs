@@ -105,6 +105,28 @@ pub fn build_command_string(app: &App) -> String {
     // TKD params
     push_if_changed(&mut parts, "--tkd-threshold", &ps.tkd_threshold, &defaults.tkd_threshold);
 
+    // Tikhonov
+    push_if_changed(&mut parts, "--tikhonov-lambda", &ps.tikhonov_lambda, &defaults.tikhonov_lambda);
+
+    // NLTV
+    push_if_changed(&mut parts, "--nltv-lambda", &ps.nltv_lambda, &defaults.nltv_lambda);
+    push_if_changed(&mut parts, "--nltv-mu", &ps.nltv_mu, &defaults.nltv_mu);
+    push_if_changed(&mut parts, "--nltv-tol", &ps.nltv_tol, &defaults.nltv_tol);
+    push_if_changed(&mut parts, "--nltv-max-iter", &ps.nltv_max_iter, &defaults.nltv_max_iter);
+    push_if_changed(&mut parts, "--nltv-newton-iter", &ps.nltv_newton_iter, &defaults.nltv_newton_iter);
+
+    // MEDI
+    push_if_changed(&mut parts, "--medi-lambda", &ps.medi_lambda, &defaults.medi_lambda);
+    push_if_changed(&mut parts, "--medi-max-iter", &ps.medi_max_iter, &defaults.medi_max_iter);
+    push_if_changed(&mut parts, "--medi-cg-max-iter", &ps.medi_cg_max_iter, &defaults.medi_cg_max_iter);
+    push_if_changed(&mut parts, "--medi-cg-tol", &ps.medi_cg_tol, &defaults.medi_cg_tol);
+    push_if_changed(&mut parts, "--medi-tol", &ps.medi_tol, &defaults.medi_tol);
+    push_if_changed(&mut parts, "--medi-percentage", &ps.medi_percentage, &defaults.medi_percentage);
+    push_if_changed(&mut parts, "--medi-smv-radius", &ps.medi_smv_radius, &defaults.medi_smv_radius);
+
+    // SHARP
+    push_if_changed(&mut parts, "--sharp-threshold", &ps.sharp_threshold, &defaults.sharp_threshold);
+
     // TGV params
     push_if_changed(&mut parts, "--tgv-iterations", &ps.tgv_iterations, &defaults.tgv_iterations);
     push_if_changed(&mut parts, "--tgv-erosions", &ps.tgv_erosions, &defaults.tgv_erosions);
@@ -230,6 +252,20 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         tv_tol: parse_optional_f64(&ps.tv_tol),
         tv_max_iter: parse_optional_usize(&ps.tv_max_iter),
         tkd_threshold: parse_optional_f64(&ps.tkd_threshold),
+        tikhonov_lambda: parse_optional_f64(&ps.tikhonov_lambda),
+        nltv_lambda: parse_optional_f64(&ps.nltv_lambda),
+        nltv_mu: parse_optional_f64(&ps.nltv_mu),
+        nltv_tol: parse_optional_f64(&ps.nltv_tol),
+        nltv_max_iter: parse_optional_usize(&ps.nltv_max_iter),
+        nltv_newton_iter: parse_optional_usize(&ps.nltv_newton_iter),
+        medi_lambda: parse_optional_f64(&ps.medi_lambda),
+        medi_max_iter: parse_optional_usize(&ps.medi_max_iter),
+        medi_cg_max_iter: parse_optional_usize(&ps.medi_cg_max_iter),
+        medi_cg_tol: parse_optional_f64(&ps.medi_cg_tol),
+        medi_tol: parse_optional_f64(&ps.medi_tol),
+        medi_percentage: parse_optional_f64(&ps.medi_percentage),
+        medi_smv_radius: parse_optional_f64(&ps.medi_smv_radius),
+        sharp_threshold: parse_optional_f64(&ps.sharp_threshold),
         n_procs: parse_optional_usize(&form.n_procs),
         do_swi: form.do_swi,
         do_t2starmap: form.do_t2starmap,

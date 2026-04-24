@@ -422,6 +422,28 @@ pub struct PipelineFormState {
     pub tgv_alpha1: String,
     pub tgv_alpha0: String,
 
+    // Tikhonov
+    pub tikhonov_lambda: String,
+
+    // NLTV
+    pub nltv_lambda: String,
+    pub nltv_mu: String,
+    pub nltv_tol: String,
+    pub nltv_max_iter: String,
+    pub nltv_newton_iter: String,
+
+    // MEDI
+    pub medi_lambda: String,
+    pub medi_max_iter: String,
+    pub medi_cg_max_iter: String,
+    pub medi_cg_tol: String,
+    pub medi_tol: String,
+    pub medi_percentage: String,
+    pub medi_smv_radius: String,
+
+    // SHARP
+    pub sharp_threshold: String,
+
     // BET
     pub bet_fractional_intensity: String,
     pub bet_smoothness: String,
@@ -472,6 +494,20 @@ impl Default for PipelineFormState {
             tgv_erosions: format!("{}", tgv.erosions),
             tgv_alpha1: format!("{}", tgv.alpha1),
             tgv_alpha0: format!("{}", tgv.alpha0),
+            tikhonov_lambda: format!("{}", qsm_core::inversion::TikhonovParams::default().lambda),
+            nltv_lambda: format!("{}", qsm_core::inversion::NltvParams::default().lambda),
+            nltv_mu: format!("{}", qsm_core::inversion::NltvParams::default().mu),
+            nltv_tol: format!("{}", qsm_core::inversion::NltvParams::default().tol),
+            nltv_max_iter: format!("{}", qsm_core::inversion::NltvParams::default().max_iter),
+            nltv_newton_iter: format!("{}", qsm_core::inversion::NltvParams::default().newton_iter),
+            medi_lambda: format!("{}", qsm_core::inversion::MediParams::default().lambda),
+            medi_max_iter: format!("{}", qsm_core::inversion::MediParams::default().max_iter),
+            medi_cg_max_iter: format!("{}", qsm_core::inversion::MediParams::default().cg_max_iter),
+            medi_cg_tol: format!("{}", qsm_core::inversion::MediParams::default().cg_tol),
+            medi_tol: format!("{}", qsm_core::inversion::MediParams::default().tol),
+            medi_percentage: format!("{}", qsm_core::inversion::MediParams::default().percentage),
+            medi_smv_radius: format!("{}", qsm_core::inversion::MediParams::default().smv_radius),
+            sharp_threshold: format!("{}", qsm_core::bgremove::SharpParams::default().threshold),
             bet_fractional_intensity: format!("{}", bet.fractional_intensity),
             bet_smoothness: format!("{}", bet.smoothness),
             bet_gradient_threshold: format!("{}", bet.gradient_threshold),
@@ -568,6 +604,9 @@ impl PipelineFormState {
                 label: "BG Removal", field: "bf_algorithm",
                 options: BF_OPTIONS, help: BF_HELP,
             });
+            if self.bf_algorithm == 4 { // SHARP
+                rows.push(PipelineRow::Param { label: "  Threshold", field: "sharp_threshold", help: "Deconvolution threshold for SHARP" });
+            }
             rows.push(PipelineRow::Separator);
         }
 
@@ -601,6 +640,25 @@ impl PipelineFormState {
                 rows.push(PipelineRow::Param { label: "  Erosions", field: "tgv_erosions", help: "Mask erosions before TGV solve" });
                 rows.push(PipelineRow::Param { label: "  Alpha1", field: "tgv_alpha1", help: "First-order TGV weight (gradient term)" });
                 rows.push(PipelineRow::Param { label: "  Alpha0", field: "tgv_alpha0", help: "Second-order TGV weight (symmetric gradient term)" });
+            }
+            4 => { // Tikhonov
+                rows.push(PipelineRow::Param { label: "  Lambda", field: "tikhonov_lambda", help: "L2 regularization weight" });
+            }
+            5 => { // NLTV
+                rows.push(PipelineRow::Param { label: "  Lambda", field: "nltv_lambda", help: "Regularization parameter" });
+                rows.push(PipelineRow::Param { label: "  Mu", field: "nltv_mu", help: "Penalty parameter" });
+                rows.push(PipelineRow::Param { label: "  Tolerance", field: "nltv_tol", help: "Convergence tolerance" });
+                rows.push(PipelineRow::Param { label: "  Max Iter", field: "nltv_max_iter", help: "Maximum ADMM iterations" });
+                rows.push(PipelineRow::Param { label: "  Newton Iter", field: "nltv_newton_iter", help: "Newton iterations for weight update" });
+            }
+            6 => { // MEDI
+                rows.push(PipelineRow::Param { label: "  Lambda", field: "medi_lambda", help: "Regularization weight" });
+                rows.push(PipelineRow::Param { label: "  Percentage", field: "medi_percentage", help: "Fraction of voxels considered edges (0.0-1.0)" });
+                rows.push(PipelineRow::Param { label: "  Max Iter", field: "medi_max_iter", help: "Maximum outer iterations" });
+                rows.push(PipelineRow::Param { label: "  CG Max Iter", field: "medi_cg_max_iter", help: "Maximum conjugate gradient iterations" });
+                rows.push(PipelineRow::Param { label: "  CG Tolerance", field: "medi_cg_tol", help: "CG convergence tolerance" });
+                rows.push(PipelineRow::Param { label: "  Tolerance", field: "medi_tol", help: "Outer convergence tolerance" });
+                rows.push(PipelineRow::Param { label: "  SMV Radius", field: "medi_smv_radius", help: "SMV preprocessing radius in mm" });
             }
             _ => {}
         }
@@ -636,6 +694,20 @@ impl PipelineFormState {
             "tgv_erosions" => &self.tgv_erosions,
             "tgv_alpha1" => &self.tgv_alpha1,
             "tgv_alpha0" => &self.tgv_alpha0,
+            "tikhonov_lambda" => &self.tikhonov_lambda,
+            "nltv_lambda" => &self.nltv_lambda,
+            "nltv_mu" => &self.nltv_mu,
+            "nltv_tol" => &self.nltv_tol,
+            "nltv_max_iter" => &self.nltv_max_iter,
+            "nltv_newton_iter" => &self.nltv_newton_iter,
+            "medi_lambda" => &self.medi_lambda,
+            "medi_max_iter" => &self.medi_max_iter,
+            "medi_cg_max_iter" => &self.medi_cg_max_iter,
+            "medi_cg_tol" => &self.medi_cg_tol,
+            "medi_tol" => &self.medi_tol,
+            "medi_percentage" => &self.medi_percentage,
+            "medi_smv_radius" => &self.medi_smv_radius,
+            "sharp_threshold" => &self.sharp_threshold,
             "bet_fractional_intensity" => &self.bet_fractional_intensity,
             "bet_smoothness" => &self.bet_smoothness,
             "bet_gradient_threshold" => &self.bet_gradient_threshold,
@@ -665,6 +737,20 @@ impl PipelineFormState {
             "tgv_erosions" => Some(&mut self.tgv_erosions),
             "tgv_alpha1" => Some(&mut self.tgv_alpha1),
             "tgv_alpha0" => Some(&mut self.tgv_alpha0),
+            "tikhonov_lambda" => Some(&mut self.tikhonov_lambda),
+            "nltv_lambda" => Some(&mut self.nltv_lambda),
+            "nltv_mu" => Some(&mut self.nltv_mu),
+            "nltv_tol" => Some(&mut self.nltv_tol),
+            "nltv_max_iter" => Some(&mut self.nltv_max_iter),
+            "nltv_newton_iter" => Some(&mut self.nltv_newton_iter),
+            "medi_lambda" => Some(&mut self.medi_lambda),
+            "medi_max_iter" => Some(&mut self.medi_max_iter),
+            "medi_cg_max_iter" => Some(&mut self.medi_cg_max_iter),
+            "medi_cg_tol" => Some(&mut self.medi_cg_tol),
+            "medi_tol" => Some(&mut self.medi_tol),
+            "medi_percentage" => Some(&mut self.medi_percentage),
+            "medi_smv_radius" => Some(&mut self.medi_smv_radius),
+            "sharp_threshold" => Some(&mut self.sharp_threshold),
             "bet_fractional_intensity" => Some(&mut self.bet_fractional_intensity),
             "bet_smoothness" => Some(&mut self.bet_smoothness),
             "bet_gradient_threshold" => Some(&mut self.bet_gradient_threshold),
