@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use super::app::{App, FieldKind, FilterFocus, TreeRow, TAB_NAMES};
+use super::app::{App, FieldKind, FilterFocus, PipelineRow, TreeRow, TAB_NAMES};
 use super::command;
 use super::widgets;
 
@@ -50,6 +50,10 @@ fn draw_tabs(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 fn draw_form(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     if app.active_tab == 1 {
         draw_filters_tab(f, app, area);
+        return;
+    }
+    if app.active_tab == 2 {
+        draw_pipeline_tab(f, app, area);
         return;
     }
 
@@ -272,6 +276,112 @@ fn draw_filters_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     }
 }
 
+fn draw_pipeline_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Pipeline ");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let ps = &app.pipeline_state;
+    let rows = ps.visible_rows();
+    let focusable = ps.focusable_rows();
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    let mut focusable_idx = 0;
+    for (i, row) in rows.iter().enumerate() {
+        let is_focusable = focusable.contains(&i);
+        let focused = is_focusable && focusable_idx == ps.focus;
+        if is_focusable {
+            focusable_idx += 1;
+        }
+
+        let line = match row {
+            PipelineRow::AlgoSelect { label, field, options } => {
+                let selected = ps.get_select(field);
+                let val = options.get(selected).unwrap_or(&"?");
+                let label_style = if focused {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                let val_style = Style::default().fg(Color::Cyan);
+                if focused {
+                    Line::from(vec![
+                        Span::styled(format!("  {:22}", format!("{}:", label)), label_style),
+                        Span::styled("◀ ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(*val, val_style),
+                        Span::styled(" ▶", Style::default().fg(Color::DarkGray)),
+                    ])
+                } else {
+                    Line::from(vec![
+                        Span::styled(format!("  {:22}", format!("{}:", label)), label_style),
+                        Span::styled(*val, Style::default().fg(Color::Gray)),
+                    ])
+                }
+            }
+            PipelineRow::Param { label, field } => {
+                let val = ps.get_param(field);
+                let label_style = if focused {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                let val_style = if focused {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                let display_val = if val.is_empty() && !(focused && ps.editing) {
+                    Span::styled("(default)", Style::default().fg(Color::DarkGray))
+                } else {
+                    Span::styled(val, val_style)
+                };
+                Line::from(vec![
+                    Span::styled(format!("  {:22}", format!("{}:", label)), label_style),
+                    display_val,
+                ])
+            }
+            PipelineRow::Toggle { label, field } => {
+                let checked = ps.get_toggle(field);
+                let label_style = if focused {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                let (marker, color) = if checked {
+                    ("[x]", Color::Green)
+                } else {
+                    ("[ ]", Color::Gray)
+                };
+                Line::from(vec![
+                    Span::styled(format!("  {:22}", format!("{}:", label)), label_style),
+                    Span::styled(marker, Style::default().fg(color)),
+                ])
+            }
+            PipelineRow::Separator => Line::from(""),
+        };
+        lines.push(line);
+    }
+
+    let para = Paragraph::new(lines);
+    f.render_widget(para, inner);
+
+    // Set cursor if editing a param
+    if ps.editing {
+        let focusable_idx = ps.focus;
+        if let Some(&row_idx) = focusable.get(focusable_idx) {
+            let y = inner.y + row_idx as u16;
+            let label_width = 24; // "  " + 22-char label
+            let x = inner.x + label_width + ps.cursor as u16;
+            if y < inner.y + inner.height {
+                f.set_cursor_position((x, y));
+            }
+        }
+    }
+}
+
 fn draw_command_preview(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let cmd = command::build_command_string(app);
     let block = Block::default()
@@ -335,7 +445,7 @@ mod tests {
     #[test]
     fn test_draw_all_tabs() {
         let mut app = App::new();
-        for tab in 0..5 {
+        for tab in 0..4 {
             app.active_tab = tab;
             app.active_field = 0;
             let _ = render_app(&app);
@@ -374,21 +484,17 @@ mod tests {
     #[test]
     fn test_draw_parameters_tab() {
         let mut app = App::new();
-        app.active_tab = 3;
-        // Checkbox focused
-        app.active_field = 0;
-        app.form.combine_phase = true;
+        app.active_tab = 2; // Pipeline tab
         let _ = render_app(&app);
-        // Text field focused
-        app.active_field = 1;
-        app.form.bet_fractional_intensity = "0.5".to_string();
+        // Change algorithm
+        app.pipeline_state.qsm_algorithm = 3; // TGV
         let _ = render_app(&app);
     }
 
     #[test]
     fn test_draw_execution_tab_with_flags() {
         let mut app = App::new();
-        app.active_tab = 4;
+        app.active_tab = 3;
         app.form.do_swi = true;
         app.form.do_t2starmap = true;
         app.form.dry_run = true;

@@ -48,48 +48,32 @@ pub fn build_command_string(app: &App) -> String {
         parts.push(format!("--num-echoes {}", app.filter_state.num_echoes));
     }
 
-    // Algorithms
-    const QSM_NAMES: [&str; 4] = ["rts", "tv", "tkd", "tgv"];
-    parts.push(format!("--qsm-algorithm {}", QSM_NAMES[form.qsm_algorithm]));
+    // Algorithms (from pipeline state)
+    let ps = &app.pipeline_state;
+    use super::app::{QSM_ALGO_OPTIONS, UNWRAP_OPTIONS, BF_OPTIONS, MASK_ALGO_OPTIONS, MASK_INPUT_OPTIONS};
+    parts.push(format!("--qsm-algorithm {}", QSM_ALGO_OPTIONS[ps.qsm_algorithm]));
+    parts.push(format!("--unwrapping-algorithm {}", UNWRAP_OPTIONS[ps.unwrapping_algorithm]));
+    parts.push(format!("--bf-algorithm {}", BF_OPTIONS[ps.bf_algorithm]));
+    parts.push(format!("--masking-algorithm {}", MASK_ALGO_OPTIONS[ps.masking_algorithm]));
+    parts.push(format!("--masking-input {}", MASK_INPUT_OPTIONS[ps.masking_input]));
 
-    const UNWRAP_NAMES: [&str; 2] = ["romeo", "laplacian"];
-    parts.push(format!(
-        "--unwrapping-algorithm {}",
-        UNWRAP_NAMES[form.unwrapping_algorithm]
-    ));
-
-    const BF_NAMES: [&str; 4] = ["vsharp", "pdf", "lbv", "ismv"];
-    parts.push(format!("--bf-algorithm {}", BF_NAMES[form.bf_algorithm]));
-
-    const MASK_ALGO_NAMES: [&str; 2] = ["bet", "threshold"];
-    parts.push(format!(
-        "--masking-algorithm {}",
-        MASK_ALGO_NAMES[form.masking_algorithm]
-    ));
-
-    const MASK_INPUT_NAMES: [&str; 4] = ["magnitude-first", "magnitude", "magnitude-last", "phase-quality"];
-    parts.push(format!(
-        "--masking-input {}",
-        MASK_INPUT_NAMES[form.masking_input]
-    ));
-
-    // Parameters (only if non-empty)
-    if form.combine_phase {
+    // Parameters
+    if ps.combine_phase {
         parts.push("--combine-phase true".to_string());
     }
-    push_if_set(&mut parts, "--bet-fractional-intensity", &form.bet_fractional_intensity);
-    push_if_set(&mut parts, "--mask-erosions", &form.mask_erosions);
-    push_if_set(&mut parts, "--rts-delta", &form.rts_delta);
-    push_if_set(&mut parts, "--rts-mu", &form.rts_mu);
-    push_if_set(&mut parts, "--rts-tol", &form.rts_tol);
-    push_if_set(&mut parts, "--tgv-iterations", &form.tgv_iterations);
-    push_if_set(&mut parts, "--tgv-erosions", &form.tgv_erosions);
-    push_if_set(&mut parts, "--tv-lambda", &form.tv_lambda);
-    push_if_set(&mut parts, "--tkd-threshold", &form.tkd_threshold);
-    push_if_set(&mut parts, "--obliquity-threshold", &form.obliquity_threshold);
+    push_if_set(&mut parts, "--bet-fractional-intensity", &ps.bet_fractional_intensity);
+    push_if_set(&mut parts, "--mask-erosions", &ps.mask_erosions);
+    push_if_set(&mut parts, "--rts-delta", &ps.rts_delta);
+    push_if_set(&mut parts, "--rts-mu", &ps.rts_mu);
+    push_if_set(&mut parts, "--rts-tol", &ps.rts_tol);
+    push_if_set(&mut parts, "--tgv-iterations", &ps.tgv_iterations);
+    push_if_set(&mut parts, "--tgv-erosions", &ps.tgv_erosions);
+    push_if_set(&mut parts, "--tv-lambda", &ps.tv_lambda);
+    push_if_set(&mut parts, "--tkd-threshold", &ps.tkd_threshold);
+    push_if_set(&mut parts, "--obliquity-threshold", &ps.obliquity_threshold);
 
-    // Mask ops (if any, overrides legacy masking)
-    for op in &form.mask_ops {
+    // Mask ops
+    for op in &ps.mask_ops {
         parts.push(format!("--mask-op {}", op));
     }
 
@@ -126,6 +110,7 @@ fn push_if_set(parts: &mut Vec<String>, flag: &str, value: &str) {
 
 pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
     let form = &app.form;
+    let ps = &app.pipeline_state;
     if form.bids_dir.is_empty() || form.output_dir.is_empty() {
         return Err(crate::error::QsmxtError::Config(
             "BIDS directory and output directory are required".to_string(),
@@ -166,35 +151,35 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         acquisitions: app.filter_state.selected_filters().2,
         runs: app.filter_state.selected_filters().3,
         num_echoes: parse_optional_usize(&app.filter_state.num_echoes),
-        qsm_algorithm: Some(qsm_options[form.qsm_algorithm]),
-        unwrapping_algorithm: Some(unwrap_options[form.unwrapping_algorithm]),
-        bf_algorithm: Some(bf_options[form.bf_algorithm]),
-        masking_algorithm: Some(mask_algo_options[form.masking_algorithm]),
-        masking_input: Some(mask_input_options[form.masking_input]),
-        combine_phase: if form.combine_phase { Some(true) } else { None },
-        bet_fractional_intensity: parse_optional_f64(&form.bet_fractional_intensity),
-        mask_erosions: parse_optional_usize_vec(&form.mask_erosions),
-        rts_delta: parse_optional_f64(&form.rts_delta),
-        rts_mu: parse_optional_f64(&form.rts_mu),
-        rts_tol: parse_optional_f64(&form.rts_tol),
-        rts_rho: None,
-        rts_max_iter: None,
-        rts_lsmr_iter: None,
-        tgv_iterations: parse_optional_usize(&form.tgv_iterations),
-        tgv_erosions: parse_optional_usize(&form.tgv_erosions),
-        tv_lambda: parse_optional_f64(&form.tv_lambda),
-        tv_rho: None,
-        tv_tol: None,
-        tv_max_iter: None,
-        tkd_threshold: parse_optional_f64(&form.tkd_threshold),
+        qsm_algorithm: Some(qsm_options[ps.qsm_algorithm]),
+        unwrapping_algorithm: Some(unwrap_options[ps.unwrapping_algorithm]),
+        bf_algorithm: Some(bf_options[ps.bf_algorithm]),
+        masking_algorithm: Some(mask_algo_options[ps.masking_algorithm]),
+        masking_input: Some(mask_input_options[ps.masking_input]),
+        combine_phase: if ps.combine_phase { Some(true) } else { None },
+        bet_fractional_intensity: parse_optional_f64(&ps.bet_fractional_intensity),
+        mask_erosions: parse_optional_usize_vec(&ps.mask_erosions),
+        rts_delta: parse_optional_f64(&ps.rts_delta),
+        rts_mu: parse_optional_f64(&ps.rts_mu),
+        rts_tol: parse_optional_f64(&ps.rts_tol),
+        rts_rho: parse_optional_f64(&ps.rts_rho),
+        rts_max_iter: parse_optional_usize(&ps.rts_max_iter),
+        rts_lsmr_iter: parse_optional_usize(&ps.rts_lsmr_iter),
+        tgv_iterations: parse_optional_usize(&ps.tgv_iterations),
+        tgv_erosions: parse_optional_usize(&ps.tgv_erosions),
+        tv_lambda: parse_optional_f64(&ps.tv_lambda),
+        tv_rho: parse_optional_f64(&ps.tv_rho),
+        tv_tol: parse_optional_f64(&ps.tv_tol),
+        tv_max_iter: parse_optional_usize(&ps.tv_max_iter),
+        tkd_threshold: parse_optional_f64(&ps.tkd_threshold),
         n_procs: parse_optional_usize(&form.n_procs),
         do_swi: form.do_swi,
         do_t2starmap: form.do_t2starmap,
         do_r2starmap: form.do_r2starmap,
         inhomogeneity_correction: form.inhomogeneity_correction,
-        obliquity_threshold: parse_optional_f64(&form.obliquity_threshold),
-        mask_ops: if form.mask_ops.is_empty() { None } else {
-            Some(form.mask_ops.iter().map(|op| format!("{}", op)).collect())
+        obliquity_threshold: parse_optional_f64(&ps.obliquity_threshold),
+        mask_ops: if ps.mask_ops.is_empty() { None } else {
+            Some(ps.mask_ops.iter().map(|op| format!("{}", op)).collect())
         },
         dry: form.dry_run,
         debug: form.debug,
@@ -322,11 +307,11 @@ mod tests {
     #[test]
     fn test_command_string_algorithms() {
         let mut app = default_app();
-        app.form.qsm_algorithm = 2; // tkd
-        app.form.unwrapping_algorithm = 1; // laplacian
-        app.form.bf_algorithm = 3; // ismv
-        app.form.masking_algorithm = 0; // bet
-        app.form.masking_input = 3; // phase-quality
+        app.pipeline_state.qsm_algorithm = 2; // tkd
+        app.pipeline_state.unwrapping_algorithm = 1; // laplacian
+        app.pipeline_state.bf_algorithm = 3; // ismv
+        app.pipeline_state.masking_algorithm = 0; // bet
+        app.pipeline_state.masking_input = 3; // phase-quality
         let cmd = build_command_string(&app);
         assert!(cmd.contains("--qsm-algorithm tkd"));
         assert!(cmd.contains("--unwrapping-algorithm laplacian"));
@@ -338,9 +323,9 @@ mod tests {
     #[test]
     fn test_command_string_parameters() {
         let mut app = default_app();
-        app.form.bet_fractional_intensity = "0.3".to_string();
-        app.form.rts_delta = "0.2".to_string();
-        app.form.obliquity_threshold = "5".to_string();
+        app.pipeline_state.bet_fractional_intensity = "0.3".to_string();
+        app.pipeline_state.rts_delta = "0.2".to_string();
+        app.pipeline_state.obliquity_threshold = "5".to_string();
         let cmd = build_command_string(&app);
         assert!(cmd.contains("--bet-fractional-intensity 0.3"));
         assert!(cmd.contains("--rts-delta 0.2"));
@@ -348,18 +333,19 @@ mod tests {
     }
 
     #[test]
-    fn test_command_string_empty_params_omitted() {
+    fn test_command_string_defaults_present() {
         let app = default_app();
         let cmd = build_command_string(&app);
-        assert!(!cmd.contains("--bet-fractional-intensity"));
-        assert!(!cmd.contains("--rts-delta"));
+        // Pipeline params now have QSM.rs defaults, so they appear
+        assert!(cmd.contains("--rts-delta"));
+        // But n-procs (execution tab) is still empty by default
         assert!(!cmd.contains("--n-procs"));
     }
 
     #[test]
     fn test_command_string_combine_phase() {
         let mut app = default_app();
-        app.form.combine_phase = true;
+        app.pipeline_state.combine_phase = true;
         let cmd = build_command_string(&app);
         assert!(cmd.contains("--combine-phase true"));
     }
@@ -387,7 +373,7 @@ mod tests {
     #[test]
     fn test_command_string_mask_ops() {
         let mut app = default_app();
-        app.form.mask_ops = vec![
+        app.pipeline_state.mask_ops = vec![
             crate::pipeline::config::MaskOp::Erode { iterations: 2 },
             crate::pipeline::config::MaskOp::Dilate { iterations: 1 },
         ];
@@ -451,11 +437,11 @@ mod tests {
         let mut app = default_app();
         app.form.bids_dir = "/b".to_string();
         app.form.output_dir = "/o".to_string();
-        app.form.qsm_algorithm = 3; // tgv
-        app.form.unwrapping_algorithm = 1; // laplacian
-        app.form.bf_algorithm = 2; // lbv
-        app.form.masking_algorithm = 0; // bet
-        app.form.masking_input = 2; // magnitude-last
+        app.pipeline_state.qsm_algorithm = 3; // tgv
+        app.pipeline_state.unwrapping_algorithm = 1; // laplacian
+        app.pipeline_state.bf_algorithm = 2; // lbv
+        app.pipeline_state.masking_algorithm = 0; // bet
+        app.pipeline_state.masking_input = 2; // magnitude-last
         let args = build_run_args(&app).unwrap();
         assert_eq!(args.qsm_algorithm, Some(crate::cli::QsmAlgorithmArg::Tgv));
         assert_eq!(args.unwrapping_algorithm, Some(crate::cli::UnwrapAlgorithmArg::Laplacian));
@@ -479,14 +465,14 @@ mod tests {
         let mut app = default_app();
         app.form.bids_dir = "/b".to_string();
         app.form.output_dir = "/o".to_string();
-        app.form.bet_fractional_intensity = "0.3".to_string();
-        app.form.rts_delta = "0.2".to_string();
-        app.form.rts_mu = "1e5".to_string();
-        app.form.rts_tol = "1e-4".to_string();
-        app.form.tgv_iterations = "500".to_string();
-        app.form.tgv_erosions = "2".to_string();
-        app.form.tv_lambda = "0.001".to_string();
-        app.form.tkd_threshold = "0.15".to_string();
+        app.pipeline_state.bet_fractional_intensity = "0.3".to_string();
+        app.pipeline_state.rts_delta = "0.2".to_string();
+        app.pipeline_state.rts_mu = "1e5".to_string();
+        app.pipeline_state.rts_tol = "1e-4".to_string();
+        app.pipeline_state.tgv_iterations = "500".to_string();
+        app.pipeline_state.tgv_erosions = "2".to_string();
+        app.pipeline_state.tv_lambda = "0.001".to_string();
+        app.pipeline_state.tkd_threshold = "0.15".to_string();
         app.form.n_procs = "8".to_string();
         let args = build_run_args(&app).unwrap();
         assert_eq!(args.bet_fractional_intensity, Some(0.3));
@@ -506,7 +492,7 @@ mod tests {
         app.form.inhomogeneity_correction = true;
         app.form.dry_run = true;
         app.form.debug = true;
-        app.form.combine_phase = true;
+        app.pipeline_state.combine_phase = true;
         let args = build_run_args(&app).unwrap();
         assert!(args.do_swi);
         assert!(args.do_t2starmap);
@@ -522,7 +508,7 @@ mod tests {
         let mut app = default_app();
         app.form.bids_dir = "/b".to_string();
         app.form.output_dir = "/o".to_string();
-        app.form.combine_phase = false;
+        app.pipeline_state.combine_phase = false;
         let args = build_run_args(&app).unwrap();
         assert_eq!(args.combine_phase, None);
     }
@@ -532,7 +518,7 @@ mod tests {
         let mut app = default_app();
         app.form.bids_dir = "/b".to_string();
         app.form.output_dir = "/o".to_string();
-        app.form.mask_ops = vec![
+        app.pipeline_state.mask_ops = vec![
             crate::pipeline::config::MaskOp::Erode { iterations: 2 },
         ];
         let args = build_run_args(&app).unwrap();
@@ -563,7 +549,7 @@ mod tests {
         let mut app = default_app();
         app.form.bids_dir = "/b".to_string();
         app.form.output_dir = "/o".to_string();
-        app.form.mask_erosions = "2 3 4".to_string();
+        app.pipeline_state.mask_erosions = "2 3 4".to_string();
         let args = build_run_args(&app).unwrap();
         assert_eq!(args.mask_erosions, Some(vec![2, 3, 4]));
     }
@@ -573,7 +559,7 @@ mod tests {
         let mut app = default_app();
         app.form.bids_dir = "/b".to_string();
         app.form.output_dir = "/o".to_string();
-        app.form.obliquity_threshold = "5.0".to_string();
+        app.pipeline_state.obliquity_threshold = "5.0".to_string();
         let args = build_run_args(&app).unwrap();
         assert_eq!(args.obliquity_threshold, Some(5.0));
     }

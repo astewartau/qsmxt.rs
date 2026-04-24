@@ -5,11 +5,10 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::bids::discovery::{self, BidsTree};
 
-pub const TAB_NAMES: [&str; 5] = [
+pub const TAB_NAMES: [&str; 4] = [
     "Input/Output",
     "Filters",
-    "Algorithms",
-    "Parameters",
+    "Pipeline",
     "Execution",
 ];
 
@@ -314,6 +313,352 @@ pub struct FieldDef {
     pub help: &'static str,
 }
 
+// ─── Pipeline tab state ───
+
+/// A visible row in the pipeline tab.
+#[derive(Debug, Clone)]
+pub enum PipelineRow {
+    /// Algorithm selector: ◀ value ▶
+    AlgoSelect {
+        label: &'static str,
+        field: &'static str, // key into PipelineFormState
+        options: &'static [&'static str],
+    },
+    /// Text parameter input
+    Param {
+        label: &'static str,
+        field: &'static str,
+    },
+    /// Checkbox toggle
+    Toggle {
+        label: &'static str,
+        field: &'static str,
+    },
+    /// Section separator (blank line, not focusable)
+    Separator,
+}
+
+/// All pipeline form values (algorithms + parameters).
+#[derive(Debug, Clone)]
+pub struct PipelineFormState {
+    // Algorithm selections (as indices)
+    pub qsm_algorithm: usize,
+    pub unwrapping_algorithm: usize,
+    pub bf_algorithm: usize,
+    pub masking_algorithm: usize,
+    pub masking_input: usize,
+    pub qsm_reference: usize,
+
+    // Parameters (as Strings for text editing)
+    pub combine_phase: bool,
+    pub mask_erosions: String,
+    pub obliquity_threshold: String,
+
+    // RTS
+    pub rts_delta: String,
+    pub rts_mu: String,
+    pub rts_tol: String,
+    pub rts_rho: String,
+    pub rts_max_iter: String,
+    pub rts_lsmr_iter: String,
+
+    // TV
+    pub tv_lambda: String,
+    pub tv_rho: String,
+    pub tv_tol: String,
+    pub tv_max_iter: String,
+
+    // TKD
+    pub tkd_threshold: String,
+
+    // TGV
+    pub tgv_iterations: String,
+    pub tgv_erosions: String,
+    pub tgv_alpha1: String,
+    pub tgv_alpha0: String,
+
+    // BET
+    pub bet_fractional_intensity: String,
+    pub bet_smoothness: String,
+    pub bet_gradient_threshold: String,
+    pub bet_iterations: String,
+    pub bet_subdivisions: String,
+
+    // Mask ops
+    pub mask_ops: Vec<crate::pipeline::config::MaskOp>,
+
+    // Pipeline tab UI state
+    pub focus: usize,
+    pub expanded: HashSet<String>,
+    pub editing: bool,
+    pub cursor: usize,
+}
+
+impl Default for PipelineFormState {
+    fn default() -> Self {
+        let rts = qsm_core::inversion::RtsParams::default();
+        let tv = qsm_core::inversion::TvParams::default();
+        let tkd = qsm_core::inversion::TkdParams::default();
+        let tgv = qsm_core::inversion::TgvParams::default();
+        let bet = qsm_core::bet::BetParams::default();
+        Self {
+            qsm_algorithm: 0, // rts
+            unwrapping_algorithm: 0, // romeo
+            bf_algorithm: 0, // vsharp
+            masking_algorithm: 1, // threshold
+            masking_input: 0, // magnitude-first
+            qsm_reference: 0, // mean
+            combine_phase: false,
+            mask_erosions: "2".to_string(),
+            obliquity_threshold: "-1".to_string(),
+            rts_delta: format!("{}", rts.delta),
+            rts_mu: format!("{}", rts.mu),
+            rts_tol: format!("{}", rts.tol),
+            rts_rho: format!("{}", rts.rho),
+            rts_max_iter: format!("{}", rts.max_iter),
+            rts_lsmr_iter: format!("{}", rts.lsmr_iter),
+            tv_lambda: format!("{}", tv.lambda),
+            tv_rho: format!("{}", tv.rho),
+            tv_tol: format!("{}", tv.tol),
+            tv_max_iter: format!("{}", tv.max_iter),
+            tkd_threshold: format!("{}", tkd.threshold),
+            tgv_iterations: format!("{}", tgv.iterations),
+            tgv_erosions: format!("{}", tgv.erosions),
+            tgv_alpha1: format!("{}", tgv.alpha1),
+            tgv_alpha0: format!("{}", tgv.alpha0),
+            bet_fractional_intensity: format!("{}", bet.fractional_intensity),
+            bet_smoothness: format!("{}", bet.smoothness),
+            bet_gradient_threshold: format!("{}", bet.gradient_threshold),
+            bet_iterations: format!("{}", bet.iterations),
+            bet_subdivisions: format!("{}", bet.subdivisions),
+            mask_ops: Vec::new(),
+            focus: 0,
+            expanded: HashSet::new(),
+            editing: false,
+            cursor: 0,
+        }
+    }
+}
+
+pub const QSM_ALGO_OPTIONS: &[&str] = &["rts", "tv", "tkd", "tgv"];
+pub const UNWRAP_OPTIONS: &[&str] = &["romeo", "laplacian"];
+pub const BF_OPTIONS: &[&str] = &["vsharp", "pdf", "lbv", "ismv"];
+pub const MASK_ALGO_OPTIONS: &[&str] = &["bet", "threshold"];
+pub const MASK_INPUT_OPTIONS: &[&str] = &["magnitude-first", "magnitude", "magnitude-last", "phase-quality"];
+pub const QSM_REF_OPTIONS: &[&str] = &["mean", "none"];
+
+impl PipelineFormState {
+    /// Build the visible rows based on current algorithm selections.
+    pub fn visible_rows(&self) -> Vec<PipelineRow> {
+        let mut rows = Vec::new();
+        let is_tgv = self.qsm_algorithm == 3;
+        let is_bet = self.masking_algorithm == 0;
+
+        // Masking section
+        rows.push(PipelineRow::AlgoSelect {
+            label: "Masking",
+            field: "masking_algorithm",
+            options: MASK_ALGO_OPTIONS,
+        });
+        rows.push(PipelineRow::AlgoSelect {
+            label: "Masking Input",
+            field: "masking_input",
+            options: MASK_INPUT_OPTIONS,
+        });
+        rows.push(PipelineRow::Param { label: "Mask Erosions", field: "mask_erosions" });
+        if is_bet && self.expanded.contains("masking") {
+            rows.push(PipelineRow::Param { label: "  Frac. Intensity", field: "bet_fractional_intensity" });
+            rows.push(PipelineRow::Param { label: "  Smoothness", field: "bet_smoothness" });
+            rows.push(PipelineRow::Param { label: "  Gradient Thresh", field: "bet_gradient_threshold" });
+            rows.push(PipelineRow::Param { label: "  Iterations", field: "bet_iterations" });
+            rows.push(PipelineRow::Param { label: "  Subdivisions", field: "bet_subdivisions" });
+        }
+
+        rows.push(PipelineRow::Separator);
+
+        // Unwrapping (hidden if TGV)
+        if !is_tgv {
+            rows.push(PipelineRow::AlgoSelect {
+                label: "Unwrapping",
+                field: "unwrapping_algorithm",
+                options: UNWRAP_OPTIONS,
+            });
+            rows.push(PipelineRow::Separator);
+
+            // BG Removal
+            rows.push(PipelineRow::AlgoSelect {
+                label: "BG Removal",
+                field: "bf_algorithm",
+                options: BF_OPTIONS,
+            });
+            rows.push(PipelineRow::Separator);
+        }
+
+        // QSM Inversion
+        rows.push(PipelineRow::AlgoSelect {
+            label: "QSM Inversion",
+            field: "qsm_algorithm",
+            options: QSM_ALGO_OPTIONS,
+        });
+
+        // Algorithm-specific params (always shown when selected)
+        match self.qsm_algorithm {
+            0 => { // RTS
+                rows.push(PipelineRow::Param { label: "  Delta", field: "rts_delta" });
+                rows.push(PipelineRow::Param { label: "  Mu", field: "rts_mu" });
+                rows.push(PipelineRow::Param { label: "  Rho", field: "rts_rho" });
+                rows.push(PipelineRow::Param { label: "  Tolerance", field: "rts_tol" });
+                rows.push(PipelineRow::Param { label: "  Max Iter", field: "rts_max_iter" });
+                rows.push(PipelineRow::Param { label: "  LSMR Iter", field: "rts_lsmr_iter" });
+            }
+            1 => { // TV
+                rows.push(PipelineRow::Param { label: "  Lambda", field: "tv_lambda" });
+                rows.push(PipelineRow::Param { label: "  Rho", field: "tv_rho" });
+                rows.push(PipelineRow::Param { label: "  Tolerance", field: "tv_tol" });
+                rows.push(PipelineRow::Param { label: "  Max Iter", field: "tv_max_iter" });
+            }
+            2 => { // TKD
+                rows.push(PipelineRow::Param { label: "  Threshold", field: "tkd_threshold" });
+            }
+            3 => { // TGV
+                rows.push(PipelineRow::Param { label: "  Iterations", field: "tgv_iterations" });
+                rows.push(PipelineRow::Param { label: "  Erosions", field: "tgv_erosions" });
+                rows.push(PipelineRow::Param { label: "  Alpha1", field: "tgv_alpha1" });
+                rows.push(PipelineRow::Param { label: "  Alpha0", field: "tgv_alpha0" });
+            }
+            _ => {}
+        }
+
+        rows.push(PipelineRow::Separator);
+
+        // General settings
+        rows.push(PipelineRow::AlgoSelect {
+            label: "QSM Reference",
+            field: "qsm_reference",
+            options: QSM_REF_OPTIONS,
+        });
+        rows.push(PipelineRow::Toggle { label: "Combine Phase", field: "combine_phase" });
+        rows.push(PipelineRow::Param { label: "Obliquity Threshold", field: "obliquity_threshold" });
+
+        rows
+    }
+
+    /// Get a string parameter value by field name.
+    pub fn get_param(&self, field: &str) -> &str {
+        match field {
+            "mask_erosions" => &self.mask_erosions,
+            "obliquity_threshold" => &self.obliquity_threshold,
+            "rts_delta" => &self.rts_delta,
+            "rts_mu" => &self.rts_mu,
+            "rts_tol" => &self.rts_tol,
+            "rts_rho" => &self.rts_rho,
+            "rts_max_iter" => &self.rts_max_iter,
+            "rts_lsmr_iter" => &self.rts_lsmr_iter,
+            "tv_lambda" => &self.tv_lambda,
+            "tv_rho" => &self.tv_rho,
+            "tv_tol" => &self.tv_tol,
+            "tv_max_iter" => &self.tv_max_iter,
+            "tkd_threshold" => &self.tkd_threshold,
+            "tgv_iterations" => &self.tgv_iterations,
+            "tgv_erosions" => &self.tgv_erosions,
+            "tgv_alpha1" => &self.tgv_alpha1,
+            "tgv_alpha0" => &self.tgv_alpha0,
+            "bet_fractional_intensity" => &self.bet_fractional_intensity,
+            "bet_smoothness" => &self.bet_smoothness,
+            "bet_gradient_threshold" => &self.bet_gradient_threshold,
+            "bet_iterations" => &self.bet_iterations,
+            "bet_subdivisions" => &self.bet_subdivisions,
+            _ => "",
+        }
+    }
+
+    /// Get a mutable reference to a string parameter.
+    pub fn get_param_mut(&mut self, field: &str) -> Option<&mut String> {
+        match field {
+            "mask_erosions" => Some(&mut self.mask_erosions),
+            "obliquity_threshold" => Some(&mut self.obliquity_threshold),
+            "rts_delta" => Some(&mut self.rts_delta),
+            "rts_mu" => Some(&mut self.rts_mu),
+            "rts_tol" => Some(&mut self.rts_tol),
+            "rts_rho" => Some(&mut self.rts_rho),
+            "rts_max_iter" => Some(&mut self.rts_max_iter),
+            "rts_lsmr_iter" => Some(&mut self.rts_lsmr_iter),
+            "tv_lambda" => Some(&mut self.tv_lambda),
+            "tv_rho" => Some(&mut self.tv_rho),
+            "tv_tol" => Some(&mut self.tv_tol),
+            "tv_max_iter" => Some(&mut self.tv_max_iter),
+            "tkd_threshold" => Some(&mut self.tkd_threshold),
+            "tgv_iterations" => Some(&mut self.tgv_iterations),
+            "tgv_erosions" => Some(&mut self.tgv_erosions),
+            "tgv_alpha1" => Some(&mut self.tgv_alpha1),
+            "tgv_alpha0" => Some(&mut self.tgv_alpha0),
+            "bet_fractional_intensity" => Some(&mut self.bet_fractional_intensity),
+            "bet_smoothness" => Some(&mut self.bet_smoothness),
+            "bet_gradient_threshold" => Some(&mut self.bet_gradient_threshold),
+            "bet_iterations" => Some(&mut self.bet_iterations),
+            "bet_subdivisions" => Some(&mut self.bet_subdivisions),
+            _ => None,
+        }
+    }
+
+    /// Get a select value by field name.
+    pub fn get_select(&self, field: &str) -> usize {
+        match field {
+            "qsm_algorithm" => self.qsm_algorithm,
+            "unwrapping_algorithm" => self.unwrapping_algorithm,
+            "bf_algorithm" => self.bf_algorithm,
+            "masking_algorithm" => self.masking_algorithm,
+            "masking_input" => self.masking_input,
+            "qsm_reference" => self.qsm_reference,
+            _ => 0,
+        }
+    }
+
+    /// Set a select value by field name.
+    pub fn set_select(&mut self, field: &str, val: usize) {
+        match field {
+            "qsm_algorithm" => self.qsm_algorithm = val,
+            "unwrapping_algorithm" => self.unwrapping_algorithm = val,
+            "bf_algorithm" => self.bf_algorithm = val,
+            "masking_algorithm" => {
+                self.masking_algorithm = val;
+                // Auto-expand BET params when BET is selected
+                if val == 0 {
+                    self.expanded.insert("masking".to_string());
+                } else {
+                    self.expanded.remove("masking");
+                }
+            }
+            "masking_input" => self.masking_input = val,
+            "qsm_reference" => self.qsm_reference = val,
+            _ => {}
+        }
+    }
+
+    /// Get a toggle value by field name.
+    pub fn get_toggle(&self, field: &str) -> bool {
+        match field {
+            "combine_phase" => self.combine_phase,
+            _ => false,
+        }
+    }
+
+    /// Toggle a boolean by field name.
+    pub fn toggle(&mut self, field: &str) {
+        if field == "combine_phase" { self.combine_phase = !self.combine_phase }
+    }
+
+    /// Get focusable row count (excludes separators).
+    pub fn focusable_rows(&self) -> Vec<usize> {
+        self.visible_rows()
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| !matches!(r, PipelineRow::Separator))
+            .map(|(i, _)| i)
+            .collect()
+    }
+}
+
 pub struct App {
     pub active_tab: usize,
     pub active_field: usize,
@@ -321,11 +666,13 @@ pub struct App {
     pub cursor_pos: usize,
     pub form: RunForm,
     pub filter_state: FilterTreeState,
+    pub pipeline_state: PipelineFormState,
     pub should_quit: bool,
     pub should_run: bool,
     pub tab_fields: Vec<Vec<FieldDef>>,
 }
 
+#[derive(Default)]
 pub struct RunForm {
     // Tab 0: Input/Output
     pub bids_dir: String,
@@ -333,32 +680,7 @@ pub struct RunForm {
     pub preset: usize,
     pub config_file: String,
 
-    // Tab 2: Algorithms
-    pub qsm_algorithm: usize,
-    pub unwrapping_algorithm: usize,
-    pub bf_algorithm: usize,
-    pub masking_algorithm: usize,
-    pub masking_input: usize,
-
-    // Tab 3: Parameters
-    pub combine_phase: bool,
-    pub bet_fractional_intensity: String,
-    pub mask_erosions: String,
-    pub rts_delta: String,
-    pub rts_mu: String,
-    pub rts_tol: String,
-    pub tgv_iterations: String,
-    pub tgv_erosions: String,
-    pub tv_lambda: String,
-    pub tkd_threshold: String,
-    pub obliquity_threshold: String,
-
-    // Mask pipeline (empty = use legacy masking)
-    pub mask_ops: Vec<crate::pipeline::config::MaskOp>,
-    #[allow(dead_code)]
-    pub mask_ops_selected: usize,
-
-    // Tab 4: Execution
+    // Tab 3: Execution
     pub do_swi: bool,
     pub do_t2starmap: bool,
     pub do_r2starmap: bool,
@@ -398,103 +720,9 @@ impl App {
             ],
             // Tab 1: Filters (custom rendering — see FilterTreeState)
             vec![],
-            // Tab 2: Algorithms
-            vec![
-                FieldDef {
-                    label: "QSM Algorithm",
-                    kind: FieldKind::Select {
-                        options: vec!["rts", "tv", "tkd", "tgv"],
-                    },
-                    help: "Dipole inversion algorithm",
-                },
-                FieldDef {
-                    label: "Unwrapping",
-                    kind: FieldKind::Select {
-                        options: vec!["romeo", "laplacian"],
-                    },
-                    help: "Phase unwrapping algorithm",
-                },
-                FieldDef {
-                    label: "BG Removal",
-                    kind: FieldKind::Select {
-                        options: vec!["vsharp", "pdf", "lbv", "ismv"],
-                    },
-                    help: "Background field removal algorithm",
-                },
-                FieldDef {
-                    label: "Masking",
-                    kind: FieldKind::Select {
-                        options: vec!["bet", "threshold"],
-                    },
-                    help: "Masking algorithm (BET or threshold-based)",
-                },
-                FieldDef {
-                    label: "Mask Input",
-                    kind: FieldKind::Select {
-                        options: vec!["magnitude-first", "magnitude", "magnitude-last", "phase-quality"],
-                    },
-                    help: "Masking input: magnitude (RSS combined), first/last echo, or ROMEO quality map",
-                },
-            ],
-            // Tab 3: Parameters
-            vec![
-                FieldDef {
-                    label: "Combine Phase",
-                    kind: FieldKind::Checkbox,
-                    help: "Combine multi-echo phase data",
-                },
-                FieldDef {
-                    label: "BET Frac. Intensity",
-                    kind: FieldKind::Text,
-                    help: "BET fractional intensity threshold (0.0-1.0)",
-                },
-                FieldDef {
-                    label: "Mask Erosions",
-                    kind: FieldKind::Text,
-                    help: "Space-separated erosion iterations (e.g. 2 3)",
-                },
-                FieldDef {
-                    label: "RTS Delta",
-                    kind: FieldKind::Text,
-                    help: "RTS delta parameter (default: 0.15)",
-                },
-                FieldDef {
-                    label: "RTS Mu",
-                    kind: FieldKind::Text,
-                    help: "RTS mu parameter (default: 1e5)",
-                },
-                FieldDef {
-                    label: "RTS Tolerance",
-                    kind: FieldKind::Text,
-                    help: "RTS convergence tolerance (default: 1e-4)",
-                },
-                FieldDef {
-                    label: "TGV Iterations",
-                    kind: FieldKind::Text,
-                    help: "TGV iteration count (default: 1000)",
-                },
-                FieldDef {
-                    label: "TGV Erosions",
-                    kind: FieldKind::Text,
-                    help: "TGV mask erosion iterations (default: 3)",
-                },
-                FieldDef {
-                    label: "TV Lambda",
-                    kind: FieldKind::Text,
-                    help: "TV regularisation lambda (default: 1e-3)",
-                },
-                FieldDef {
-                    label: "TKD Threshold",
-                    kind: FieldKind::Text,
-                    help: "TKD k-space threshold (default: 0.15)",
-                },
-                FieldDef {
-                    label: "Obliquity Threshold",
-                    kind: FieldKind::Text,
-                    help: "Resample to axial if obliquity exceeds degrees (-1 = disabled)",
-                },
-            ],
-            // Tab 4: Execution
+            // Tab 2: Pipeline (custom rendering — see PipelineFormState)
+            vec![],
+            // Tab 3: Execution
             vec![
                 FieldDef {
                     label: "Compute SWI",
@@ -541,6 +769,7 @@ impl App {
             cursor_pos: 0,
             form: RunForm::default(),
             filter_state: FilterTreeState::default(),
+            pipeline_state: PipelineFormState::default(),
             should_quit: false,
             should_run: false,
             tab_fields,
@@ -561,6 +790,11 @@ impl App {
             self.handle_filter_key(key);
             return;
         }
+        // Route tab 2 (Pipeline) to its own handler
+        if self.active_tab == 2 {
+            self.handle_pipeline_key(key);
+            return;
+        }
 
         if self.editing {
             self.handle_editing_key(key);
@@ -571,7 +805,7 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
 
             // Tab switching
-            KeyCode::Char(c @ '1'..='5') => {
+            KeyCode::Char(c @ '1'..='4') => {
                 self.active_tab = (c as usize) - ('1' as usize);
                 self.active_field = 0;
             }
@@ -626,7 +860,7 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
 
             // Tab switching (same as other tabs)
-            KeyCode::Char(c @ '1'..='5') => {
+            KeyCode::Char(c @ '1'..='4') => {
                 self.active_tab = (c as usize) - ('1' as usize);
                 self.active_field = 0;
             }
@@ -743,6 +977,120 @@ impl App {
         }
     }
 
+    // ─── Pipeline tab key handling ───
+
+    fn handle_pipeline_key(&mut self, key: KeyEvent) {
+        let ps = &mut self.pipeline_state;
+
+        if ps.editing {
+            // Text editing mode for a parameter
+            let rows = ps.visible_rows();
+            let focusable = ps.focusable_rows();
+            let focus_idx = focusable.get(ps.focus).copied().unwrap_or(0);
+            if let Some(PipelineRow::Param { field, .. }) = rows.get(focus_idx) {
+                let field = field.to_string();
+                let mut cursor = ps.cursor;
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter => { ps.editing = false; return; }
+                    KeyCode::Char(c) => {
+                        if let Some(s) = ps.get_param_mut(&field) {
+                            s.insert(cursor, c);
+                            cursor += 1;
+                        }
+                    }
+                    KeyCode::Backspace if cursor > 0 => {
+                        cursor -= 1;
+                        if let Some(s) = ps.get_param_mut(&field) {
+                            s.remove(cursor);
+                        }
+                    }
+                    KeyCode::Left => cursor = cursor.saturating_sub(1),
+                    KeyCode::Right => {
+                        let len = ps.get_param(&field).len();
+                        if cursor < len { cursor += 1; }
+                    }
+                    KeyCode::Home => cursor = 0,
+                    KeyCode::End => cursor = ps.get_param(&field).len(),
+                    _ => {}
+                }
+                ps.cursor = cursor;
+            } else {
+                ps.editing = false;
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+
+            KeyCode::Char(c @ '1'..='4') => {
+                self.active_tab = (c as usize) - ('1' as usize);
+                self.active_field = 0;
+            }
+            KeyCode::Tab => {
+                self.active_tab = (self.active_tab + 1) % TAB_NAMES.len();
+                self.active_field = 0;
+            }
+            KeyCode::BackTab => {
+                self.active_tab = (self.active_tab + TAB_NAMES.len() - 1) % TAB_NAMES.len();
+                self.active_field = 0;
+            }
+
+            // Navigation
+            KeyCode::Up | KeyCode::Char('k')
+                if self.pipeline_state.focus > 0 => {
+                    self.pipeline_state.focus -= 1;
+                }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let max = self.pipeline_state.focusable_rows().len().saturating_sub(1);
+                if self.pipeline_state.focus < max {
+                    self.pipeline_state.focus += 1;
+                }
+            }
+
+            // Interact
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let ps = &mut self.pipeline_state;
+                let rows = ps.visible_rows();
+                let focusable = ps.focusable_rows();
+                let focus_idx = focusable.get(ps.focus).copied().unwrap_or(0);
+                match rows.get(focus_idx).cloned() {
+                    Some(PipelineRow::AlgoSelect { field, options, .. }) => {
+                        let cur = ps.get_select(field);
+                        ps.set_select(field, (cur + 1) % options.len());
+                    }
+                    Some(PipelineRow::Param { field, .. }) => {
+                        ps.editing = true;
+                        ps.cursor = ps.get_param(field).len();
+                    }
+                    Some(PipelineRow::Toggle { field, .. }) => {
+                        ps.toggle(field);
+                    }
+                    _ => {}
+                }
+            }
+
+            // Left/Right for selects
+            KeyCode::Left | KeyCode::Right => {
+                let ps = &mut self.pipeline_state;
+                let rows = ps.visible_rows();
+                let focusable = ps.focusable_rows();
+                let focus_idx = focusable.get(ps.focus).copied().unwrap_or(0);
+                if let Some(PipelineRow::AlgoSelect { field, options, .. }) = rows.get(focus_idx) {
+                    let n = options.len() as isize;
+                    let cur = ps.get_select(field) as isize;
+                    let delta = if key.code == KeyCode::Left { -1 } else { 1 };
+                    let new_val = (cur + delta).rem_euclid(n) as usize;
+                    ps.set_select(field, new_val);
+                }
+            }
+
+            KeyCode::F(5) => self.should_run = true,
+
+            _ => {}
+        }
+    }
+
     fn handle_editing_key(&mut self, key: KeyEvent) {
         let mut cursor = self.cursor_pos;
 
@@ -814,16 +1162,7 @@ impl App {
             (0, 0) => &self.form.bids_dir,
             (0, 1) => &self.form.output_dir,
             (0, 3) => &self.form.config_file,
-            (3, 1) => &self.form.bet_fractional_intensity,
-            (3, 2) => &self.form.mask_erosions,
-            (3, 3) => &self.form.rts_delta,
-            (3, 4) => &self.form.rts_mu,
-            (3, 5) => &self.form.rts_tol,
-            (3, 6) => &self.form.tgv_iterations,
-            (3, 7) => &self.form.tgv_erosions,
-            (3, 8) => &self.form.tv_lambda,
-            (3, 9) => &self.form.tkd_threshold,
-            (4, 6) => &self.form.n_procs,
+            (3, 6) => &self.form.n_procs,
             _ => "",
         }
     }
@@ -833,17 +1172,7 @@ impl App {
             (0, 0) => &mut self.form.bids_dir,
             (0, 1) => &mut self.form.output_dir,
             (0, 3) => &mut self.form.config_file,
-            (3, 1) => &mut self.form.bet_fractional_intensity,
-            (3, 2) => &mut self.form.mask_erosions,
-            (3, 3) => &mut self.form.rts_delta,
-            (3, 4) => &mut self.form.rts_mu,
-            (3, 5) => &mut self.form.rts_tol,
-            (3, 6) => &mut self.form.tgv_iterations,
-            (3, 7) => &mut self.form.tgv_erosions,
-            (3, 8) => &mut self.form.tv_lambda,
-            (3, 9) => &mut self.form.tkd_threshold,
-            (3, 10) => &mut self.form.obliquity_threshold,
-            (4, 6) => &mut self.form.n_procs,
+            (3, 6) => &mut self.form.n_procs,
             _ => unreachable!("text_value_mut called on non-text field"),
         }
     }
@@ -851,50 +1180,35 @@ impl App {
     pub fn select_value(&self) -> usize {
         match (self.active_tab, self.active_field) {
             (0, 2) => self.form.preset,
-            (2, 0) => self.form.qsm_algorithm,
-            (2, 1) => self.form.unwrapping_algorithm,
-            (2, 2) => self.form.bf_algorithm,
-            (2, 3) => self.form.masking_algorithm,
-            (2, 4) => self.form.masking_input,
             _ => 0,
         }
     }
 
     fn set_select_value(&mut self, val: usize) {
-        match (self.active_tab, self.active_field) {
-            (0, 2) => self.form.preset = val,
-            (2, 0) => self.form.qsm_algorithm = val,
-            (2, 1) => self.form.unwrapping_algorithm = val,
-            (2, 2) => self.form.bf_algorithm = val,
-            (2, 3) => self.form.masking_algorithm = val,
-            (2, 4) => self.form.masking_input = val,
-            _ => {}
-        }
+        if let (0, 2) = (self.active_tab, self.active_field) { self.form.preset = val }
     }
 
     #[allow(dead_code)]
     fn checkbox_value(&self) -> bool {
         match (self.active_tab, self.active_field) {
-            (3, 0) => self.form.combine_phase,
-            (4, 0) => self.form.do_swi,
-            (4, 1) => self.form.do_t2starmap,
-            (4, 2) => self.form.do_r2starmap,
-            (4, 3) => self.form.inhomogeneity_correction,
-            (4, 4) => self.form.dry_run,
-            (4, 5) => self.form.debug,
+            (3, 0) => self.form.do_swi,
+            (3, 1) => self.form.do_t2starmap,
+            (3, 2) => self.form.do_r2starmap,
+            (3, 3) => self.form.inhomogeneity_correction,
+            (3, 4) => self.form.dry_run,
+            (3, 5) => self.form.debug,
             _ => false,
         }
     }
 
     fn toggle_checkbox(&mut self) {
         match (self.active_tab, self.active_field) {
-            (3, 0) => self.form.combine_phase = !self.form.combine_phase,
-            (4, 0) => self.form.do_swi = !self.form.do_swi,
-            (4, 1) => self.form.do_t2starmap = !self.form.do_t2starmap,
-            (4, 2) => self.form.do_r2starmap = !self.form.do_r2starmap,
-            (4, 3) => self.form.inhomogeneity_correction = !self.form.inhomogeneity_correction,
-            (4, 4) => self.form.dry_run = !self.form.dry_run,
-            (4, 5) => self.form.debug = !self.form.debug,
+            (3, 0) => self.form.do_swi = !self.form.do_swi,
+            (3, 1) => self.form.do_t2starmap = !self.form.do_t2starmap,
+            (3, 2) => self.form.do_r2starmap = !self.form.do_r2starmap,
+            (3, 3) => self.form.inhomogeneity_correction = !self.form.inhomogeneity_correction,
+            (3, 4) => self.form.dry_run = !self.form.dry_run,
+            (3, 5) => self.form.debug = !self.form.debug,
             _ => {}
         }
     }
@@ -905,17 +1219,7 @@ impl App {
             (0, 0) => &self.form.bids_dir,
             (0, 1) => &self.form.output_dir,
             (0, 3) => &self.form.config_file,
-            (3, 1) => &self.form.bet_fractional_intensity,
-            (3, 2) => &self.form.mask_erosions,
-            (3, 3) => &self.form.rts_delta,
-            (3, 4) => &self.form.rts_mu,
-            (3, 5) => &self.form.rts_tol,
-            (3, 6) => &self.form.tgv_iterations,
-            (3, 7) => &self.form.tgv_erosions,
-            (3, 8) => &self.form.tv_lambda,
-            (3, 9) => &self.form.tkd_threshold,
-            (3, 10) => &self.form.obliquity_threshold,
-            (4, 6) => &self.form.n_procs,
+            (3, 6) => &self.form.n_procs,
             _ => "",
         }
     }
@@ -923,64 +1227,23 @@ impl App {
     pub fn get_select_value(&self, tab: usize, field: usize) -> usize {
         match (tab, field) {
             (0, 2) => self.form.preset,
-            (2, 0) => self.form.qsm_algorithm,
-            (2, 1) => self.form.unwrapping_algorithm,
-            (2, 2) => self.form.bf_algorithm,
-            (2, 3) => self.form.masking_algorithm,
-            (2, 4) => self.form.masking_input,
             _ => 0,
         }
     }
 
     pub fn get_checkbox_value(&self, tab: usize, field: usize) -> bool {
         match (tab, field) {
-            (3, 0) => self.form.combine_phase,
-            (4, 0) => self.form.do_swi,
-            (4, 1) => self.form.do_t2starmap,
-            (4, 2) => self.form.do_r2starmap,
-            (4, 3) => self.form.inhomogeneity_correction,
-            (4, 4) => self.form.dry_run,
-            (4, 5) => self.form.debug,
+            (3, 0) => self.form.do_swi,
+            (3, 1) => self.form.do_t2starmap,
+            (3, 2) => self.form.do_r2starmap,
+            (3, 3) => self.form.inhomogeneity_correction,
+            (3, 4) => self.form.dry_run,
+            (3, 5) => self.form.debug,
             _ => false,
         }
     }
 }
 
-impl Default for RunForm {
-    fn default() -> Self {
-        Self {
-            bids_dir: String::new(),
-            output_dir: String::new(),
-            preset: 0,
-            config_file: String::new(),
-            qsm_algorithm: 0,
-            unwrapping_algorithm: 0,
-            bf_algorithm: 1, // pdf (GRE preset default)
-            masking_algorithm: 1, // threshold (otsu)
-            masking_input: 0,
-            combine_phase: false,
-            bet_fractional_intensity: String::new(),
-            mask_erosions: String::new(),
-            rts_delta: String::new(),
-            rts_mu: String::new(),
-            rts_tol: String::new(),
-            tgv_iterations: String::new(),
-            tgv_erosions: String::new(),
-            tv_lambda: String::new(),
-            tkd_threshold: String::new(),
-            obliquity_threshold: String::new(),
-            mask_ops: Vec::new(),
-            mask_ops_selected: 0,
-            do_swi: false,
-            do_t2starmap: false,
-            do_r2starmap: false,
-            inhomogeneity_correction: false,
-            dry_run: false,
-            debug: false,
-            n_procs: String::new(),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -1001,7 +1264,7 @@ mod tests {
         assert!(!app.editing);
         assert!(!app.should_quit);
         assert!(!app.should_run);
-        assert_eq!(app.tab_fields.len(), 5);
+        assert_eq!(app.tab_fields.len(), 4);
     }
 
     #[test]
@@ -1011,11 +1274,9 @@ mod tests {
         app.active_tab = 1;
         assert_eq!(app.field_count(), 0); // Tab 1: Filters (custom rendering)
         app.active_tab = 2;
-        assert_eq!(app.field_count(), 5); // Tab 2: Algorithms
+        assert_eq!(app.field_count(), 0); // Tab 2: Pipeline (custom rendering)
         app.active_tab = 3;
-        assert_eq!(app.field_count(), 11); // Tab 3: Parameters
-        app.active_tab = 4;
-        assert_eq!(app.field_count(), 7); // Tab 4: Execution
+        assert_eq!(app.field_count(), 7); // Tab 3: Execution
     }
 
     // --- Navigation ---
@@ -1041,8 +1302,8 @@ mod tests {
         assert_eq!(app.active_tab, 2);
         app.handle_key(key(KeyCode::Char('1')));
         assert_eq!(app.active_tab, 0);
-        app.handle_key(key(KeyCode::Char('5')));
-        assert_eq!(app.active_tab, 4);
+        app.handle_key(key(KeyCode::Char('4')));
+        assert_eq!(app.active_tab, 3);
     }
 
     #[test]
@@ -1053,7 +1314,7 @@ mod tests {
         app.handle_key(key(KeyCode::Tab));
         assert_eq!(app.active_tab, 2);
         // Wraps around
-        app.active_tab = 4;
+        app.active_tab = 3;
         app.handle_key(key(KeyCode::Tab));
         assert_eq!(app.active_tab, 0);
     }
@@ -1062,7 +1323,7 @@ mod tests {
     fn test_tab_switching_backtab() {
         let mut app = App::new();
         app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
-        assert_eq!(app.active_tab, 4); // wraps from 0 to 4
+        assert_eq!(app.active_tab, 3); // wraps from 0 to 3
     }
 
     #[test]
@@ -1246,7 +1507,7 @@ mod tests {
     #[test]
     fn test_checkbox_toggle() {
         let mut app = App::new();
-        app.active_tab = 4; // Execution tab
+        app.active_tab = 3; // Execution tab
         app.active_field = 0; // do_swi
         assert!(!app.form.do_swi);
         app.handle_key(key(KeyCode::Enter));
@@ -1258,7 +1519,7 @@ mod tests {
     #[test]
     fn test_checkbox_all_fields() {
         let mut app = App::new();
-        app.active_tab = 4;
+        app.active_tab = 3;
 
         // Toggle each checkbox
         for field in 0..6 {
@@ -1274,13 +1535,11 @@ mod tests {
     }
 
     #[test]
-    fn test_combine_phase_checkbox() {
+    fn test_pipeline_combine_phase() {
         let mut app = App::new();
-        app.active_tab = 3;
-        app.active_field = 0;
-        assert!(!app.form.combine_phase);
-        app.handle_key(key(KeyCode::Enter));
-        assert!(app.form.combine_phase);
+        assert!(!app.pipeline_state.combine_phase);
+        app.pipeline_state.toggle("combine_phase");
+        assert!(app.pipeline_state.combine_phase);
     }
 
     // --- F5 triggers run ---
@@ -1292,38 +1551,17 @@ mod tests {
         assert!(app.should_run);
     }
 
-    // --- Algorithm select fields ---
+    // --- Pipeline state selects ---
 
     #[test]
-    fn test_algorithm_selects() {
+    fn test_pipeline_algorithm_selects() {
         let mut app = App::new();
-        app.active_tab = 2;
-
-        // QSM algorithm (field 0)
-        app.active_field = 0;
-        app.handle_key(key(KeyCode::Right));
-        assert_eq!(app.form.qsm_algorithm, 1); // tv
-
-        // Unwrapping (field 1)
-        app.active_field = 1;
-        app.handle_key(key(KeyCode::Right));
-        assert_eq!(app.form.unwrapping_algorithm, 1); // laplacian
-
-        // BG removal (field 2)
-        app.active_field = 2;
-        app.handle_key(key(KeyCode::Right));
-        assert_eq!(app.form.bf_algorithm, 2); // default 1 (pdf) + 1 = 2 (lbv)
-
-        // Masking algorithm (field 3)
-        app.active_field = 3;
-        app.handle_key(key(KeyCode::Right));
-        // default is 1 (threshold), cycles to 0 (bet) since only 2 options
-        assert_eq!(app.form.masking_algorithm, 0); // bet
-
-        // Masking input (field 4)
-        app.active_field = 4;
-        app.handle_key(key(KeyCode::Right));
-        assert_eq!(app.form.masking_input, 1); // magnitude
+        let ps = &mut app.pipeline_state;
+        assert_eq!(ps.qsm_algorithm, 0); // rts
+        ps.set_select("qsm_algorithm", 1);
+        assert_eq!(ps.qsm_algorithm, 1); // tv
+        ps.set_select("qsm_algorithm", 3);
+        assert_eq!(ps.qsm_algorithm, 3); // tgv
     }
 
     // --- Text value accessors for different tabs ---
@@ -1340,19 +1578,17 @@ mod tests {
     }
 
     #[test]
-    fn test_text_value_params_tab() {
+    fn test_pipeline_get_param() {
         let mut app = App::new();
-        app.form.rts_delta = "0.2".to_string();
-        app.active_tab = 3;
-        app.active_field = 3;
-        assert_eq!(app.text_value(), "0.2");
+        app.pipeline_state.rts_delta = "0.2".to_string();
+        assert_eq!(app.pipeline_state.get_param("rts_delta"), "0.2");
     }
 
     #[test]
     fn test_text_value_n_procs() {
         let mut app = App::new();
         app.form.n_procs = "8".to_string();
-        app.active_tab = 4;
+        app.active_tab = 3;
         app.active_field = 6;
         assert_eq!(app.text_value(), "8");
     }
@@ -1382,10 +1618,9 @@ mod tests {
     fn test_get_select_value_defaults() {
         let app = App::new();
         assert_eq!(app.get_select_value(0, 2), 0); // preset
-        assert_eq!(app.get_select_value(2, 0), 0); // qsm_algorithm (rts)
-        assert_eq!(app.get_select_value(2, 1), 0); // unwrapping (romeo)
-        assert_eq!(app.get_select_value(2, 2), 1); // bf_algorithm (pdf, default index 1)
         assert_eq!(app.get_select_value(99, 99), 0); // unknown returns 0
+        // Algorithm selects are now in pipeline_state, not tab-indexed
+        assert_eq!(app.pipeline_state.get_select("qsm_algorithm"), 0);
     }
 
     #[test]
@@ -1402,7 +1637,7 @@ mod tests {
     fn test_checkbox_value_accessor() {
         let mut app = App::new();
         app.form.do_swi = true;
-        app.active_tab = 4;
+        app.active_tab = 3;
         app.active_field = 0;
         assert!(app.checkbox_value());
 
@@ -1423,10 +1658,16 @@ mod tests {
         assert!(form.bids_dir.is_empty());
         assert!(form.output_dir.is_empty());
         assert_eq!(form.preset, 0);
-        assert_eq!(form.bf_algorithm, 1); // pdf
-        assert_eq!(form.masking_algorithm, 1); // threshold
-        assert!(!form.combine_phase);
-        assert!(form.mask_ops.is_empty());
+        assert!(!form.do_swi);
+    }
+
+    #[test]
+    fn test_pipeline_state_default() {
+        let ps = super::PipelineFormState::default();
+        assert_eq!(ps.qsm_algorithm, 0);
+        assert_eq!(ps.masking_algorithm, 1); // threshold
+        assert!(!ps.combine_phase);
+        assert!(ps.mask_ops.is_empty());
     }
 
     // --- Editing output_dir ---
@@ -1457,72 +1698,37 @@ mod tests {
     // --- Editing all parameter text fields ---
 
     #[test]
-    fn test_edit_parameter_fields() {
-        let mut app = App::new();
-        app.active_tab = 3;
+    fn test_pipeline_param_mutation() {
+        let mut ps = super::PipelineFormState::default();
+        assert!(!ps.rts_delta.is_empty()); // has QSM.rs default
 
-        // bet_fractional_intensity (field 1)
-        app.active_field = 1;
-        app.handle_key(key(KeyCode::Enter));
-        app.handle_key(key(KeyCode::Char('5')));
-        app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.form.bet_fractional_intensity, "5");
+        // Test get_param_mut
+        if let Some(s) = ps.get_param_mut("rts_delta") {
+            *s = "0.25".to_string();
+        }
+        assert_eq!(ps.get_param("rts_delta"), "0.25");
 
-        // mask_erosions (field 2)
-        app.active_field = 2;
-        app.handle_key(key(KeyCode::Enter));
-        app.handle_key(key(KeyCode::Char('2')));
-        app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.form.mask_erosions, "2");
+        // Test toggle
+        assert!(!ps.combine_phase);
+        ps.toggle("combine_phase");
+        assert!(ps.combine_phase);
 
-        // rts_mu (field 4)
-        app.active_field = 4;
-        app.handle_key(key(KeyCode::Enter));
-        app.handle_key(key(KeyCode::Char('9')));
-        app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.form.rts_mu, "9");
+        // Test select
+        ps.set_select("qsm_algorithm", 2);
+        assert_eq!(ps.get_select("qsm_algorithm"), 2);
+    }
 
-        // rts_tol (field 5)
-        app.active_field = 5;
-        app.handle_key(key(KeyCode::Enter));
-        app.handle_key(key(KeyCode::Char('1')));
-        app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.form.rts_tol, "1");
+    #[test]
+    fn test_pipeline_visible_rows_change_with_algorithm() {
+        let mut ps = super::PipelineFormState::default();
+        let rows_rts = ps.visible_rows().len();
+        ps.qsm_algorithm = 2; // TKD (fewer params)
+        let rows_tkd = ps.visible_rows().len();
+        assert!(rows_tkd < rows_rts, "TKD should have fewer rows than RTS");
 
-        // tgv_iterations (field 6)
-        app.active_field = 6;
-        app.handle_key(key(KeyCode::Enter));
-        app.handle_key(key(KeyCode::Char('5')));
-        app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.form.tgv_iterations, "5");
-
-        // tgv_erosions (field 7)
-        app.active_field = 7;
-        app.handle_key(key(KeyCode::Enter));
-        app.handle_key(key(KeyCode::Char('3')));
-        app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.form.tgv_erosions, "3");
-
-        // tv_lambda (field 8)
-        app.active_field = 8;
-        app.handle_key(key(KeyCode::Enter));
-        app.handle_key(key(KeyCode::Char('7')));
-        app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.form.tv_lambda, "7");
-
-        // tkd_threshold (field 9)
-        app.active_field = 9;
-        app.handle_key(key(KeyCode::Enter));
-        app.handle_key(key(KeyCode::Char('4')));
-        app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.form.tkd_threshold, "4");
-
-        // obliquity_threshold (field 10)
-        app.active_field = 10;
-        app.handle_key(key(KeyCode::Enter));
-        app.handle_key(key(KeyCode::Char('5')));
-        app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.form.obliquity_threshold, "5");
+        ps.qsm_algorithm = 3; // TGV (hides unwrapping + bgremove)
+        let rows_tgv = ps.visible_rows().len();
+        assert!(rows_tgv < rows_rts, "TGV should hide unwrapping/bgremove");
     }
 
     // --- Filter tree tests ---
