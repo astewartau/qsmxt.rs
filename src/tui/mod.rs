@@ -39,6 +39,12 @@ pub fn run_tui() -> crate::Result<()> {
 
     // Main loop
     loop {
+        // Rescan BIDS tree when on Filters tab if bids_dir changed
+        if app.active_tab == 1 {
+            let bids_dir = app.form.bids_dir.clone();
+            app.filter_state.maybe_rescan(&bids_dir);
+        }
+
         terminal.draw(|f| ui::draw(f, &app))?;
 
         if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
@@ -54,7 +60,7 @@ pub fn run_tui() -> crate::Result<()> {
             restore_terminal(&mut terminal);
 
             // Now that the terminal is restored, init the logger
-            let args = command::build_run_args(&app.form)?;
+            let args = command::build_run_args(&app)?;
             let log_level = if args.debug {
                 log::LevelFilter::Debug
             } else {
@@ -65,7 +71,7 @@ pub fn run_tui() -> crate::Result<()> {
                 .format_timestamp(None)
                 .init();
 
-            let cmd_string = command::build_command_string(&app.form);
+            let cmd_string = command::build_command_string(&app);
             println!("\n  Running: {}\n", cmd_string);
 
             return crate::commands::run::execute(args);

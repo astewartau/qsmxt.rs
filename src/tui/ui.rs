@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use super::app::{App, FieldKind, TAB_NAMES};
+use super::app::{App, FieldKind, FilterFocus, TreeRow, TAB_NAMES};
 use super::command;
 use super::widgets;
 
@@ -48,6 +48,11 @@ fn draw_tabs(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn draw_form(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    if app.active_tab == 1 {
+        draw_filters_tab(f, app, area);
+        return;
+    }
+
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", TAB_NAMES[app.active_tab]));
@@ -106,8 +111,169 @@ fn draw_form(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     }
 }
 
+fn draw_filters_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Filters ");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let fs = &app.filter_state;
+
+    // If no BIDS dir set
+    if app.form.bids_dir.trim().is_empty() {
+        let msg = Paragraph::new(Line::from(Span::styled(
+            "  Set BIDS directory in Input/Output tab first",
+            Style::default().fg(Color::DarkGray),
+        )));
+        f.render_widget(msg, inner);
+        return;
+    }
+
+    // If scanned but no tree
+    let has_runs = fs.tree.as_ref().is_some_and(|t| !t.subjects.is_empty());
+    if !has_runs {
+        let msg = Paragraph::new(Line::from(Span::styled(
+            "  No QSM-compatible runs found in BIDS directory",
+            Style::default().fg(Color::DarkGray),
+        )));
+        f.render_widget(msg, inner);
+        return;
+    }
+
+    let tree = fs.tree.as_ref().unwrap();
+
+    // Build lines to render
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Pattern input
+    let pattern_focused = fs.focus == FilterFocus::Pattern;
+    let pattern_label = Span::styled(
+        "  Pattern: ",
+        if pattern_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
+        else { Style::default().fg(Color::White) },
+    );
+    let pattern_val = if fs.pattern.is_empty() && !fs.pattern_editing {
+        Span::styled("(enter glob to filter)", Style::default().fg(Color::DarkGray))
+    } else {
+        Span::styled(&fs.pattern, Style::default().fg(Color::Cyan))
+    };
+    lines.push(Line::from(vec![pattern_label, pattern_val]));
+    lines.push(Line::from(""));
+
+    // Tree rows
+    let visible = fs.visible_rows();
+    for (i, row) in visible.iter().enumerate() {
+        let focused = fs.focus == FilterFocus::TreeNode(i);
+        let line = match row {
+            TreeRow::Subject(si) => {
+                let sub = &tree.subjects[*si];
+                let collapsed = fs.collapsed.contains(&format!("sub-{}", sub.name));
+                let arrow = if collapsed { "▶" } else { "▼" };
+                let sel = sub.selected_runs();
+                let total = sub.total_runs();
+                let sel_info = if sel == total { "all selected".to_string() } else { format!("{}/{} selected", sel, total) };
+                let style = if focused {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                };
+                Line::from(Span::styled(
+                    format!("  {} sub-{} ({} run{}, {})", arrow, sub.name, total, if total == 1 { "" } else { "s" }, sel_info),
+                    style,
+                ))
+            }
+            TreeRow::Session(si, sei) => {
+                let sub = &tree.subjects[*si];
+                let ses = &sub.sessions[*sei];
+                let collapsed = fs.collapsed.contains(&format!("sub-{}/ses-{}", sub.name, ses.name));
+                let arrow = if collapsed { "▶" } else { "▼" };
+                let style = if focused {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                Line::from(Span::styled(
+                    format!("    {} ses-{}", arrow, ses.name),
+                    style,
+                ))
+            }
+            TreeRow::Run { sub, ses, run } => {
+                let leaf = match ses {
+                    Some(sei) => &tree.subjects[*sub].sessions[*sei].runs[*run],
+                    None => &tree.subjects[*sub].runs[*run],
+                };
+                let indent = if ses.is_some() { "      " } else { "    " };
+                let (marker, color) = if leaf.selected {
+                    ("[x]", Color::Green)
+                } else {
+                    ("[ ]", Color::Gray)
+                };
+                let style = if focused {
+                    Style::default().fg(color).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(color)
+                };
+                Line::from(Span::styled(
+                    format!("{}{} {}", indent, marker, leaf.display),
+                    style,
+                ))
+            }
+        };
+        lines.push(line);
+    }
+
+    // Blank line + Num Echoes
+    lines.push(Line::from(""));
+    let ne_focused = fs.focus == FilterFocus::NumEchoes;
+    let ne_label = Span::styled(
+        "  Num Echoes: ",
+        if ne_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
+        else { Style::default().fg(Color::White) },
+    );
+    let ne_val = if fs.num_echoes.is_empty() && !fs.num_echoes_editing {
+        Span::styled("(all)", Style::default().fg(Color::DarkGray))
+    } else {
+        Span::styled(&fs.num_echoes, Style::default().fg(Color::Cyan))
+    };
+    lines.push(Line::from(vec![ne_label, ne_val]));
+
+    // Summary line
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("  {} run(s), {} selected", tree.total_runs(), tree.selected_runs()),
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    // Handle scrolling
+    let visible_height = inner.height as usize;
+    let total_lines = lines.len();
+    let scroll = if total_lines > visible_height {
+        fs.scroll_offset.min(total_lines.saturating_sub(visible_height))
+    } else {
+        0
+    };
+
+    let para = Paragraph::new(lines).scroll((scroll as u16, 0));
+    f.render_widget(para, inner);
+
+    // Set cursor position if editing
+    if fs.pattern_editing {
+        let x = inner.x + 11 + fs.pattern_cursor as u16; // "  Pattern: " = 11 chars
+        f.set_cursor_position((x, inner.y));
+    } else if fs.num_echoes_editing {
+        // Find the line offset for num_echoes
+        let ne_line = visible.len() + 3; // pattern + blank + tree rows + blank
+        if ne_line >= scroll && ne_line < scroll + visible_height {
+            let y = inner.y + (ne_line - scroll) as u16;
+            let x = inner.x + 14 + fs.num_echoes_cursor as u16; // "  Num Echoes: " = 14
+            f.set_cursor_position((x, y));
+        }
+    }
+}
+
 fn draw_command_preview(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let cmd = command::build_command_string(&app.form);
+    let cmd = command::build_command_string(app);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Command Preview ");

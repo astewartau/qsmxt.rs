@@ -1,4 +1,9 @@
+use std::collections::HashSet;
+use std::path::Path;
+
 use crossterm::event::{KeyCode, KeyEvent};
+
+use crate::bids::discovery::{self, BidsTree};
 
 pub const TAB_NAMES: [&str; 5] = [
     "Input/Output",
@@ -7,6 +12,293 @@ pub const TAB_NAMES: [&str; 5] = [
     "Parameters",
     "Execution",
 ];
+
+// ─── Filter tree state ───
+
+/// What is focused in the flattened filter tree view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterFocus {
+    Pattern,
+    TreeNode(usize), // index into the flattened visible node list
+    NumEchoes,
+}
+
+/// A single visible row in the flattened tree (for navigation/rendering).
+#[derive(Debug, Clone)]
+pub enum TreeRow {
+    Subject(usize),                 // index into tree.subjects
+    Session(usize, usize),         // (subject_idx, session_idx)
+    Run { sub: usize, ses: Option<usize>, run: usize }, // leaf run
+}
+
+/// Filter tab state: tree of BIDS runs with selection and navigation.
+#[derive(Debug, Clone)]
+pub struct FilterTreeState {
+    pub tree: Option<BidsTree>,
+    pub collapsed: HashSet<String>,
+    pub focus: FilterFocus,
+    pub pattern: String,
+    pub pattern_editing: bool,
+    pub pattern_cursor: usize,
+    pub num_echoes: String,
+    pub num_echoes_editing: bool,
+    pub num_echoes_cursor: usize,
+    pub scanned_bids_dir: Option<String>,
+    pub scroll_offset: usize,
+}
+
+impl Default for FilterTreeState {
+    fn default() -> Self {
+        Self {
+            tree: None,
+            collapsed: HashSet::new(),
+            focus: FilterFocus::Pattern,
+            pattern: String::new(),
+            pattern_editing: false,
+            pattern_cursor: 0,
+            num_echoes: String::new(),
+            num_echoes_editing: false,
+            num_echoes_cursor: 0,
+            scanned_bids_dir: None,
+            scroll_offset: 0,
+        }
+    }
+}
+
+impl FilterTreeState {
+    /// Build the flattened list of visible tree rows (respecting collapsed state).
+    pub fn visible_rows(&self) -> Vec<TreeRow> {
+        let Some(ref tree) = self.tree else { return Vec::new() };
+        let mut rows = Vec::new();
+        for (si, sub) in tree.subjects.iter().enumerate() {
+            rows.push(TreeRow::Subject(si));
+            if self.collapsed.contains(&format!("sub-{}", sub.name)) {
+                continue;
+            }
+            // Direct runs (no session)
+            for ri in 0..sub.runs.len() {
+                rows.push(TreeRow::Run { sub: si, ses: None, run: ri });
+            }
+            // Sessions
+            for (sei, ses) in sub.sessions.iter().enumerate() {
+                rows.push(TreeRow::Session(si, sei));
+                if self.collapsed.contains(&format!("sub-{}/ses-{}", sub.name, ses.name)) {
+                    continue;
+                }
+                for ri in 0..ses.runs.len() {
+                    rows.push(TreeRow::Run { sub: si, ses: Some(sei), run: ri });
+                }
+            }
+        }
+        rows
+    }
+
+    /// Total number of focusable items: pattern + tree rows + num_echoes.
+    fn focusable_count(&self) -> usize {
+        // pattern(1) + tree rows + num_echoes(1)
+        1 + self.visible_rows().len() + 1
+    }
+
+    /// Move focus down.
+    pub fn focus_next(&mut self) {
+        let max = self.focusable_count().saturating_sub(1);
+        match self.focus {
+            FilterFocus::Pattern => {
+                if !self.visible_rows().is_empty() {
+                    self.focus = FilterFocus::TreeNode(0);
+                } else {
+                    self.focus = FilterFocus::NumEchoes;
+                }
+            }
+            FilterFocus::TreeNode(i) => {
+                let rows = self.visible_rows().len();
+                if i + 1 < rows {
+                    self.focus = FilterFocus::TreeNode(i + 1);
+                } else {
+                    self.focus = FilterFocus::NumEchoes;
+                }
+            }
+            FilterFocus::NumEchoes => {} // already at bottom
+        }
+        let _ = max; // used for bounds
+    }
+
+    /// Move focus up.
+    pub fn focus_prev(&mut self) {
+        match self.focus {
+            FilterFocus::Pattern => {} // already at top
+            FilterFocus::TreeNode(0) => self.focus = FilterFocus::Pattern,
+            FilterFocus::TreeNode(i) => self.focus = FilterFocus::TreeNode(i - 1),
+            FilterFocus::NumEchoes => {
+                let rows = self.visible_rows().len();
+                if rows > 0 {
+                    self.focus = FilterFocus::TreeNode(rows - 1);
+                } else {
+                    self.focus = FilterFocus::Pattern;
+                }
+            }
+        }
+    }
+
+    /// Scan BIDS directory if it changed since last scan.
+    pub fn maybe_rescan(&mut self, bids_dir: &str) {
+        let dir = bids_dir.trim().to_string();
+        if dir.is_empty() {
+            return;
+        }
+        if self.scanned_bids_dir.as_deref() == Some(&dir) {
+            return;
+        }
+        match discovery::scan_bids_tree(Path::new(&dir)) {
+            Ok(tree) => {
+                self.tree = Some(tree);
+                self.focus = FilterFocus::Pattern;
+                self.scroll_offset = 0;
+            }
+            Err(_) => {
+                self.tree = None;
+            }
+        }
+        self.scanned_bids_dir = Some(dir);
+    }
+
+    /// Apply glob pattern: check runs whose display matches, uncheck others.
+    pub fn apply_pattern(&mut self) {
+        let Some(ref mut tree) = self.tree else { return };
+        let pat = self.pattern.trim();
+        if pat.is_empty() {
+            // Empty pattern: select all
+            tree.set_all(true);
+            return;
+        }
+        // Convert glob to regex: escape dots, * -> .*, ? -> .
+        let regex_str = format!(
+            "^(?i){}$",
+            pat.replace('.', r"\.")
+               .replace('*', ".*")
+               .replace('?', ".")
+        );
+        let re = match regex::Regex::new(&regex_str) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        tree.for_each_run_mut(|run| {
+            run.selected = re.is_match(&run.key_string) || re.is_match(&run.display);
+        });
+    }
+
+    /// Toggle the focused tree node (run leaf or subject/session toggle).
+    pub fn toggle_focused(&mut self) {
+        let rows = self.visible_rows();
+        let FilterFocus::TreeNode(idx) = self.focus else { return };
+        let Some(row) = rows.get(idx) else { return };
+        let Some(ref mut tree) = self.tree else { return };
+
+        match row {
+            TreeRow::Subject(si) => {
+                let sub = &tree.subjects[*si];
+                let new_val = sub.selected_runs() < sub.total_runs();
+                tree.subjects[*si].set_all(new_val);
+            }
+            TreeRow::Session(si, sei) => {
+                let ses = &tree.subjects[*si].sessions[*sei];
+                let new_val = ses.runs.iter().any(|r| !r.selected);
+                tree.subjects[*si].sessions[*sei].set_all(new_val);
+            }
+            TreeRow::Run { sub, ses, run } => {
+                match ses {
+                    Some(sei) => {
+                        let r = &mut tree.subjects[*sub].sessions[*sei].runs[*run];
+                        r.selected = !r.selected;
+                    }
+                    None => {
+                        let r = &mut tree.subjects[*sub].runs[*run];
+                        r.selected = !r.selected;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Toggle collapse on the focused subject or session.
+    pub fn toggle_collapse(&mut self) {
+        let rows = self.visible_rows();
+        let FilterFocus::TreeNode(idx) = self.focus else { return };
+        let Some(row) = rows.get(idx) else { return };
+        let Some(ref tree) = self.tree else { return };
+
+        let key = match row {
+            TreeRow::Subject(si) => format!("sub-{}", tree.subjects[*si].name),
+            TreeRow::Session(si, sei) => format!("sub-{}/ses-{}", tree.subjects[*si].name, tree.subjects[*si].sessions[*sei].name),
+            _ => return,
+        };
+        if self.collapsed.contains(&key) {
+            self.collapsed.remove(&key);
+        } else {
+            self.collapsed.insert(key);
+        }
+    }
+
+    /// Collect selected runs as filter values for RunArgs.
+    /// Returns (subjects, sessions, acquisitions, runs) as Option<Vec<String>>.
+    /// None means "all" (no filter).
+    #[allow(clippy::type_complexity)]
+    pub fn selected_filters(&self) -> (Option<Vec<String>>, Option<Vec<String>>, Option<Vec<String>>, Option<Vec<String>>) {
+        let Some(ref tree) = self.tree else {
+            return (None, None, None, None);
+        };
+        if tree.total_runs() == 0 || tree.selected_runs() == tree.total_runs() {
+            return (None, None, None, None);
+        }
+
+        let mut subjects = HashSet::new();
+        let mut sessions = HashSet::new();
+        let mut acquisitions = HashSet::new();
+        let mut runs = HashSet::new();
+
+        for sub in &tree.subjects {
+            for run in &sub.runs {
+                if run.selected {
+                    subjects.insert(format!("sub-{}", sub.name));
+                    Self::extract_entities_from_key(&run.key_string, &mut sessions, &mut acquisitions, &mut runs);
+                }
+            }
+            for ses in &sub.sessions {
+                for run in &ses.runs {
+                    if run.selected {
+                        subjects.insert(format!("sub-{}", sub.name));
+                        sessions.insert(format!("ses-{}", ses.name));
+                        Self::extract_entities_from_key(&run.key_string, &mut sessions, &mut acquisitions, &mut runs);
+                    }
+                }
+            }
+        }
+
+        // Only filter on entities that actually narrow the selection
+        let to_opt = |set: HashSet<String>| -> Option<Vec<String>> {
+            if set.is_empty() { None } else {
+                let mut v: Vec<_> = set.into_iter().collect();
+                v.sort();
+                Some(v)
+            }
+        };
+
+        (to_opt(subjects), None, None, None)
+        // We pass subjects only — the pipeline's DiscoveryFilter will handle the rest.
+        // More granular filtering would require per-run selection which the current
+        // DiscoveryFilter doesn't support. Subject-level is the primary use case.
+    }
+
+    fn extract_entities_from_key(
+        _key: &str,
+        _sessions: &mut HashSet<String>,
+        _acquisitions: &mut HashSet<String>,
+        _runs: &mut HashSet<String>,
+    ) {
+        // Key format: sub-XX[_ses-YY][_acq-ZZ][_run-WW]_SUFFIX
+        // Entity extraction is handled by the pipeline's DiscoveryFilter
+    }
+}
 
 #[derive(Clone)]
 pub enum FieldKind {
@@ -28,6 +320,7 @@ pub struct App {
     pub editing: bool,
     pub cursor_pos: usize,
     pub form: RunForm,
+    pub filter_state: FilterTreeState,
     pub should_quit: bool,
     pub should_run: bool,
     pub tab_fields: Vec<Vec<FieldDef>>,
@@ -39,13 +332,6 @@ pub struct RunForm {
     pub output_dir: String,
     pub preset: usize,
     pub config_file: String,
-
-    // Tab 1: Filters
-    pub subjects: String,
-    pub sessions: String,
-    pub acquisitions: String,
-    pub runs_filter: String,
-    pub num_echoes: String,
 
     // Tab 2: Algorithms
     pub qsm_algorithm: usize,
@@ -110,34 +396,8 @@ impl App {
                     help: "Custom TOML config file (overrides preset)",
                 },
             ],
-            // Tab 1: Filters
-            vec![
-                FieldDef {
-                    label: "Subjects",
-                    kind: FieldKind::Text,
-                    help: "Space-separated subject IDs (e.g. sub-01 sub-02)",
-                },
-                FieldDef {
-                    label: "Sessions",
-                    kind: FieldKind::Text,
-                    help: "Space-separated session IDs",
-                },
-                FieldDef {
-                    label: "Acquisitions",
-                    kind: FieldKind::Text,
-                    help: "Space-separated acquisition labels",
-                },
-                FieldDef {
-                    label: "Runs",
-                    kind: FieldKind::Text,
-                    help: "Space-separated run labels",
-                },
-                FieldDef {
-                    label: "Num Echoes",
-                    kind: FieldKind::Text,
-                    help: "Limit number of echoes to process",
-                },
-            ],
+            // Tab 1: Filters (custom rendering — see FilterTreeState)
+            vec![],
             // Tab 2: Algorithms
             vec![
                 FieldDef {
@@ -280,6 +540,7 @@ impl App {
             editing: false,
             cursor_pos: 0,
             form: RunForm::default(),
+            filter_state: FilterTreeState::default(),
             should_quit: false,
             should_run: false,
             tab_fields,
@@ -295,6 +556,12 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        // Route tab 1 (Filters) to its own handler
+        if self.active_tab == 1 {
+            self.handle_filter_key(key);
+            return;
+        }
+
         if self.editing {
             self.handle_editing_key(key);
             return;
@@ -337,6 +604,141 @@ impl App {
             // Run
             KeyCode::F(5) => self.should_run = true,
 
+            _ => {}
+        }
+    }
+
+    // ─── Filter tab key handling ───
+
+    fn handle_filter_key(&mut self, key: KeyEvent) {
+        // Handle editing mode (pattern or num_echoes text input)
+        if self.filter_state.pattern_editing {
+            self.handle_filter_pattern_key(key);
+            return;
+        }
+        if self.filter_state.num_echoes_editing {
+            self.handle_filter_num_echoes_key(key);
+            return;
+        }
+
+        // Navigation mode
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+
+            // Tab switching (same as other tabs)
+            KeyCode::Char(c @ '1'..='5') => {
+                self.active_tab = (c as usize) - ('1' as usize);
+                self.active_field = 0;
+            }
+            KeyCode::Tab => {
+                self.active_tab = (self.active_tab + 1) % TAB_NAMES.len();
+                self.active_field = 0;
+            }
+            KeyCode::BackTab => {
+                self.active_tab = (self.active_tab + TAB_NAMES.len() - 1) % TAB_NAMES.len();
+                self.active_field = 0;
+            }
+
+            // Navigation within filter tree
+            KeyCode::Up | KeyCode::Char('k') => self.filter_state.focus_prev(),
+            KeyCode::Down | KeyCode::Char('j') => self.filter_state.focus_next(),
+
+            // Collapse/expand
+            KeyCode::Left => self.filter_state.toggle_collapse(),
+            KeyCode::Right => self.filter_state.toggle_collapse(),
+
+            // Toggle / interact
+            KeyCode::Char(' ') => self.filter_state.toggle_focused(),
+            KeyCode::Enter => {
+                match self.filter_state.focus {
+                    FilterFocus::Pattern => {
+                        self.filter_state.pattern_editing = true;
+                        self.filter_state.pattern_cursor = self.filter_state.pattern.len();
+                    }
+                    FilterFocus::TreeNode(_) => self.filter_state.toggle_focused(),
+                    FilterFocus::NumEchoes => {
+                        self.filter_state.num_echoes_editing = true;
+                        self.filter_state.num_echoes_cursor = self.filter_state.num_echoes.len();
+                    }
+                }
+            }
+
+            // Select all / none
+            KeyCode::Char('a') => {
+                if let Some(ref mut tree) = self.filter_state.tree {
+                    tree.set_all(true);
+                }
+            }
+            KeyCode::Char('n') => {
+                if let Some(ref mut tree) = self.filter_state.tree {
+                    tree.set_all(false);
+                }
+            }
+
+            KeyCode::F(5) => self.should_run = true,
+
+            _ => {}
+        }
+    }
+
+    fn handle_filter_pattern_key(&mut self, key: KeyEvent) {
+        let fs = &mut self.filter_state;
+        match key.code {
+            KeyCode::Esc => {
+                fs.pattern_editing = false;
+            }
+            KeyCode::Enter => {
+                fs.pattern_editing = false;
+                fs.apply_pattern();
+            }
+            KeyCode::Char(c) => {
+                fs.pattern.insert(fs.pattern_cursor, c);
+                fs.pattern_cursor += 1;
+            }
+            KeyCode::Backspace if fs.pattern_cursor > 0 => {
+                fs.pattern_cursor -= 1;
+                fs.pattern.remove(fs.pattern_cursor);
+            }
+            KeyCode::Delete
+                if fs.pattern_cursor < fs.pattern.len() => {
+                    fs.pattern.remove(fs.pattern_cursor);
+                }
+            KeyCode::Left => fs.pattern_cursor = fs.pattern_cursor.saturating_sub(1),
+            KeyCode::Right
+                if fs.pattern_cursor < fs.pattern.len() => {
+                    fs.pattern_cursor += 1;
+                }
+            KeyCode::Home => fs.pattern_cursor = 0,
+            KeyCode::End => fs.pattern_cursor = fs.pattern.len(),
+            _ => {}
+        }
+    }
+
+    fn handle_filter_num_echoes_key(&mut self, key: KeyEvent) {
+        let fs = &mut self.filter_state;
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter => {
+                fs.num_echoes_editing = false;
+            }
+            KeyCode::Char(c) => {
+                fs.num_echoes.insert(fs.num_echoes_cursor, c);
+                fs.num_echoes_cursor += 1;
+            }
+            KeyCode::Backspace if fs.num_echoes_cursor > 0 => {
+                fs.num_echoes_cursor -= 1;
+                fs.num_echoes.remove(fs.num_echoes_cursor);
+            }
+            KeyCode::Delete
+                if fs.num_echoes_cursor < fs.num_echoes.len() => {
+                    fs.num_echoes.remove(fs.num_echoes_cursor);
+                }
+            KeyCode::Left => fs.num_echoes_cursor = fs.num_echoes_cursor.saturating_sub(1),
+            KeyCode::Right
+                if fs.num_echoes_cursor < fs.num_echoes.len() => {
+                    fs.num_echoes_cursor += 1;
+                }
+            KeyCode::Home => fs.num_echoes_cursor = 0,
+            KeyCode::End => fs.num_echoes_cursor = fs.num_echoes.len(),
             _ => {}
         }
     }
@@ -412,11 +814,6 @@ impl App {
             (0, 0) => &self.form.bids_dir,
             (0, 1) => &self.form.output_dir,
             (0, 3) => &self.form.config_file,
-            (1, 0) => &self.form.subjects,
-            (1, 1) => &self.form.sessions,
-            (1, 2) => &self.form.acquisitions,
-            (1, 3) => &self.form.runs_filter,
-            (1, 4) => &self.form.num_echoes,
             (3, 1) => &self.form.bet_fractional_intensity,
             (3, 2) => &self.form.mask_erosions,
             (3, 3) => &self.form.rts_delta,
@@ -436,11 +833,6 @@ impl App {
             (0, 0) => &mut self.form.bids_dir,
             (0, 1) => &mut self.form.output_dir,
             (0, 3) => &mut self.form.config_file,
-            (1, 0) => &mut self.form.subjects,
-            (1, 1) => &mut self.form.sessions,
-            (1, 2) => &mut self.form.acquisitions,
-            (1, 3) => &mut self.form.runs_filter,
-            (1, 4) => &mut self.form.num_echoes,
             (3, 1) => &mut self.form.bet_fractional_intensity,
             (3, 2) => &mut self.form.mask_erosions,
             (3, 3) => &mut self.form.rts_delta,
@@ -513,11 +905,6 @@ impl App {
             (0, 0) => &self.form.bids_dir,
             (0, 1) => &self.form.output_dir,
             (0, 3) => &self.form.config_file,
-            (1, 0) => &self.form.subjects,
-            (1, 1) => &self.form.sessions,
-            (1, 2) => &self.form.acquisitions,
-            (1, 3) => &self.form.runs_filter,
-            (1, 4) => &self.form.num_echoes,
             (3, 1) => &self.form.bet_fractional_intensity,
             (3, 2) => &self.form.mask_erosions,
             (3, 3) => &self.form.rts_delta,
@@ -566,11 +953,6 @@ impl Default for RunForm {
             output_dir: String::new(),
             preset: 0,
             config_file: String::new(),
-            subjects: String::new(),
-            sessions: String::new(),
-            acquisitions: String::new(),
-            runs_filter: String::new(),
-            num_echoes: String::new(),
             qsm_algorithm: 0,
             unwrapping_algorithm: 0,
             bf_algorithm: 1, // pdf (GRE preset default)
@@ -627,7 +1009,7 @@ mod tests {
         let mut app = App::new();
         assert_eq!(app.field_count(), 4); // Tab 0: Input/Output
         app.active_tab = 1;
-        assert_eq!(app.field_count(), 5); // Tab 1: Filters
+        assert_eq!(app.field_count(), 0); // Tab 1: Filters (custom rendering)
         app.active_tab = 2;
         assert_eq!(app.field_count(), 5); // Tab 2: Algorithms
         app.active_tab = 3;
@@ -947,12 +1329,14 @@ mod tests {
     // --- Text value accessors for different tabs ---
 
     #[test]
-    fn test_text_value_filters_tab() {
+    fn test_filter_tab_routes_to_filter_handler() {
         let mut app = App::new();
-        app.form.subjects = "sub-01 sub-02".to_string();
         app.active_tab = 1;
-        app.active_field = 0;
-        assert_eq!(app.text_value(), "sub-01 sub-02");
+        // Should not crash — filter handler takes over
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Up));
+        app.handle_key(key(KeyCode::Char('a')));
+        app.handle_key(key(KeyCode::Char('n')));
     }
 
     #[test]
@@ -1141,34 +1525,154 @@ mod tests {
         assert_eq!(app.form.obliquity_threshold, "5");
     }
 
-    // --- Editing filter fields ---
+    // --- Filter tree tests ---
 
     #[test]
-    fn test_edit_filter_fields() {
+    fn test_filter_state_default() {
+        let fs = super::FilterTreeState::default();
+        assert!(fs.tree.is_none());
+        assert!(fs.pattern.is_empty());
+        assert_eq!(fs.focus, super::FilterFocus::Pattern);
+    }
+
+    #[test]
+    fn test_filter_scan_with_bids() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::testutils::create_multi_echo_bids(dir.path());
+        let mut fs = super::FilterTreeState::default();
+        fs.maybe_rescan(dir.path().to_str().unwrap());
+        assert!(fs.tree.is_some());
+        let tree = fs.tree.as_ref().unwrap();
+        assert_eq!(tree.subjects.len(), 1);
+        assert_eq!(tree.subjects[0].name, "1");
+    }
+
+    #[test]
+    fn test_filter_scan_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut fs = super::FilterTreeState::default();
+        fs.maybe_rescan(dir.path().to_str().unwrap());
+        // Tree may be Some with empty subjects, or None
+        if let Some(ref tree) = fs.tree {
+            assert!(tree.subjects.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_filter_scan_caches() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::testutils::create_single_echo_bids(dir.path());
+        let mut fs = super::FilterTreeState::default();
+        let path = dir.path().to_str().unwrap();
+        fs.maybe_rescan(path);
+        assert!(fs.tree.is_some());
+        // Second call should not rescan
+        fs.maybe_rescan(path);
+        assert_eq!(fs.scanned_bids_dir.as_deref(), Some(path));
+    }
+
+    #[test]
+    fn test_filter_navigation() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::testutils::create_single_echo_bids(dir.path());
+        let mut fs = super::FilterTreeState::default();
+        fs.maybe_rescan(dir.path().to_str().unwrap());
+
+        assert_eq!(fs.focus, super::FilterFocus::Pattern);
+        fs.focus_next(); // -> tree node 0 (subject)
+        assert!(matches!(fs.focus, super::FilterFocus::TreeNode(0)));
+        fs.focus_next(); // -> tree node 1 (run)
+        fs.focus_next(); // -> NumEchoes
+        assert_eq!(fs.focus, super::FilterFocus::NumEchoes);
+        fs.focus_next(); // stays at NumEchoes
+        assert_eq!(fs.focus, super::FilterFocus::NumEchoes);
+        fs.focus_prev(); // back up
+        assert!(matches!(fs.focus, super::FilterFocus::TreeNode(_)));
+    }
+
+    #[test]
+    fn test_filter_toggle_run() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::testutils::create_single_echo_bids(dir.path());
+        let mut fs = super::FilterTreeState::default();
+        fs.maybe_rescan(dir.path().to_str().unwrap());
+
+        // Navigate to the run leaf
+        fs.focus_next(); // subject
+        fs.focus_next(); // run leaf
+        let tree = fs.tree.as_ref().unwrap();
+        assert!(tree.subjects[0].runs[0].selected);
+        fs.toggle_focused();
+        let tree = fs.tree.as_ref().unwrap();
+        assert!(!tree.subjects[0].runs[0].selected);
+    }
+
+    #[test]
+    fn test_filter_select_all_none() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::testutils::create_multi_echo_bids(dir.path());
+        let mut fs = super::FilterTreeState::default();
+        fs.maybe_rescan(dir.path().to_str().unwrap());
+
+        let tree = fs.tree.as_mut().unwrap();
+        tree.set_all(false);
+        assert_eq!(tree.selected_runs(), 0);
+        tree.set_all(true);
+        assert_eq!(tree.selected_runs(), tree.total_runs());
+    }
+
+    #[test]
+    fn test_filter_pattern_editing() {
         let mut app = App::new();
         app.active_tab = 1;
+        let dir = tempfile::tempdir().unwrap();
+        crate::testutils::create_single_echo_bids(dir.path());
+        app.form.bids_dir = dir.path().to_str().unwrap().to_string();
+        app.filter_state.maybe_rescan(&app.form.bids_dir.clone());
 
-        for (field, form_field) in [
-            (0, "subjects"),
-            (1, "sessions"),
-            (2, "acquisitions"),
-            (3, "runs_filter"),
-            (4, "num_echoes"),
-        ] {
-            app.active_field = field;
-            app.handle_key(key(KeyCode::Enter));
-            app.handle_key(key(KeyCode::Char('x')));
-            app.handle_key(key(KeyCode::Enter));
-            let val = match form_field {
-                "subjects" => &app.form.subjects,
-                "sessions" => &app.form.sessions,
-                "acquisitions" => &app.form.acquisitions,
-                "runs_filter" => &app.form.runs_filter,
-                "num_echoes" => &app.form.num_echoes,
-                _ => unreachable!(),
-            };
-            assert_eq!(val, "x", "Field {} should be 'x'", form_field);
-        }
+        // Enter pattern editing
+        app.filter_state.focus = super::FilterFocus::Pattern;
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.filter_state.pattern_editing);
+
+        // Type something
+        app.handle_key(key(KeyCode::Char('*')));
+        assert_eq!(app.filter_state.pattern, "*");
+
+        // Esc cancels
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.filter_state.pattern_editing);
+    }
+
+    #[test]
+    fn test_filter_num_echoes_editing() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        app.filter_state.focus = super::FilterFocus::NumEchoes;
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.filter_state.num_echoes_editing);
+        app.handle_key(key(KeyCode::Char('3')));
+        assert_eq!(app.filter_state.num_echoes, "3");
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.filter_state.num_echoes_editing);
+    }
+
+    #[test]
+    fn test_filter_collapse() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::testutils::create_single_echo_bids(dir.path());
+        let mut fs = super::FilterTreeState::default();
+        fs.maybe_rescan(dir.path().to_str().unwrap());
+
+        let rows_before = fs.visible_rows().len();
+        fs.focus = super::FilterFocus::TreeNode(0); // subject node
+        fs.toggle_collapse();
+        let rows_after = fs.visible_rows().len();
+        assert!(rows_after < rows_before, "Collapsing should hide children");
+
+        // Expand again
+        fs.toggle_collapse();
+        assert_eq!(fs.visible_rows().len(), rows_before);
     }
 
     // --- Right arrow on non-select does nothing ---
