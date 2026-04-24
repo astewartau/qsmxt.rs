@@ -5,6 +5,8 @@ use super::app::App;
 
 pub fn build_command_string(app: &App) -> String {
     let form = &app.form;
+    let ps = &app.pipeline_state;
+    let defaults = super::app::PipelineFormState::default();
     let mut parts = vec!["qsmxt".to_string(), "run".to_string()];
 
     // Positional args
@@ -48,36 +50,74 @@ pub fn build_command_string(app: &App) -> String {
         parts.push(format!("--num-echoes {}", app.filter_state.num_echoes));
     }
 
-    // Algorithms (from pipeline state)
-    let ps = &app.pipeline_state;
-    use super::app::{QSM_ALGO_OPTIONS, UNWRAP_OPTIONS, BF_OPTIONS, MASK_ALGO_OPTIONS, MASK_INPUT_OPTIONS};
-    parts.push(format!("--qsm-algorithm {}", QSM_ALGO_OPTIONS[ps.qsm_algorithm]));
-    parts.push(format!("--unwrapping-algorithm {}", UNWRAP_OPTIONS[ps.unwrapping_algorithm]));
-    parts.push(format!("--bf-algorithm {}", BF_OPTIONS[ps.bf_algorithm]));
-    parts.push(format!("--masking-algorithm {}", MASK_ALGO_OPTIONS[ps.masking_algorithm]));
-    parts.push(format!("--masking-input {}", MASK_INPUT_OPTIONS[ps.masking_input]));
-
-    // Parameters
-    if ps.combine_phase {
-        parts.push("--combine-phase true".to_string());
+    // Algorithm selects (only if changed from default)
+    use super::app::{QSM_ALGO_OPTIONS, UNWRAP_OPTIONS, BF_OPTIONS, MASK_ALGO_OPTIONS, MASK_INPUT_OPTIONS, QSM_REF_OPTIONS};
+    if ps.qsm_algorithm != defaults.qsm_algorithm {
+        parts.push(format!("--qsm-algorithm {}", QSM_ALGO_OPTIONS[ps.qsm_algorithm]));
     }
-    push_if_set(&mut parts, "--bet-fractional-intensity", &ps.bet_fractional_intensity);
-    push_if_set(&mut parts, "--mask-erosions", &ps.mask_erosions);
-    push_if_set(&mut parts, "--rts-delta", &ps.rts_delta);
-    push_if_set(&mut parts, "--rts-mu", &ps.rts_mu);
-    push_if_set(&mut parts, "--rts-tol", &ps.rts_tol);
-    push_if_set(&mut parts, "--tgv-iterations", &ps.tgv_iterations);
-    push_if_set(&mut parts, "--tgv-erosions", &ps.tgv_erosions);
-    push_if_set(&mut parts, "--tv-lambda", &ps.tv_lambda);
-    push_if_set(&mut parts, "--tkd-threshold", &ps.tkd_threshold);
-    push_if_set(&mut parts, "--obliquity-threshold", &ps.obliquity_threshold);
-
-    // Mask ops
-    for op in &ps.mask_ops {
-        parts.push(format!("--mask-op {}", op));
+    if ps.unwrapping_algorithm != defaults.unwrapping_algorithm {
+        parts.push(format!("--unwrapping-algorithm {}", UNWRAP_OPTIONS[ps.unwrapping_algorithm]));
+    }
+    if ps.bf_algorithm != defaults.bf_algorithm {
+        parts.push(format!("--bf-algorithm {}", BF_OPTIONS[ps.bf_algorithm]));
+    }
+    if ps.masking_algorithm != defaults.masking_algorithm {
+        parts.push(format!("--masking-algorithm {}", MASK_ALGO_OPTIONS[ps.masking_algorithm]));
+    }
+    if ps.masking_input != defaults.masking_input {
+        parts.push(format!("--masking-input {}", MASK_INPUT_OPTIONS[ps.masking_input]));
+    }
+    if ps.qsm_reference != defaults.qsm_reference {
+        parts.push(format!("--qsm-reference {}", QSM_REF_OPTIONS[ps.qsm_reference]));
     }
 
-    // Execution flags
+    // Boolean toggles (only if changed from default)
+    if ps.combine_phase != defaults.combine_phase {
+        parts.push(format!("--combine-phase {}", ps.combine_phase));
+    }
+
+    // Parameters (only if changed from default)
+    push_if_changed(&mut parts, "--obliquity-threshold", &ps.obliquity_threshold, &defaults.obliquity_threshold);
+    push_if_changed(&mut parts, "--mask-erosions", &ps.mask_erosions, &defaults.mask_erosions);
+
+    // BET params
+    push_if_changed(&mut parts, "--bet-fractional-intensity", &ps.bet_fractional_intensity, &defaults.bet_fractional_intensity);
+    push_if_changed(&mut parts, "--bet-smoothness", &ps.bet_smoothness, &defaults.bet_smoothness);
+    push_if_changed(&mut parts, "--bet-gradient-threshold", &ps.bet_gradient_threshold, &defaults.bet_gradient_threshold);
+    push_if_changed(&mut parts, "--bet-iterations", &ps.bet_iterations, &defaults.bet_iterations);
+    push_if_changed(&mut parts, "--bet-subdivisions", &ps.bet_subdivisions, &defaults.bet_subdivisions);
+
+    // RTS params
+    push_if_changed(&mut parts, "--rts-delta", &ps.rts_delta, &defaults.rts_delta);
+    push_if_changed(&mut parts, "--rts-mu", &ps.rts_mu, &defaults.rts_mu);
+    push_if_changed(&mut parts, "--rts-tol", &ps.rts_tol, &defaults.rts_tol);
+    push_if_changed(&mut parts, "--rts-rho", &ps.rts_rho, &defaults.rts_rho);
+    push_if_changed(&mut parts, "--rts-max-iter", &ps.rts_max_iter, &defaults.rts_max_iter);
+    push_if_changed(&mut parts, "--rts-lsmr-iter", &ps.rts_lsmr_iter, &defaults.rts_lsmr_iter);
+
+    // TV params
+    push_if_changed(&mut parts, "--tv-lambda", &ps.tv_lambda, &defaults.tv_lambda);
+    push_if_changed(&mut parts, "--tv-rho", &ps.tv_rho, &defaults.tv_rho);
+    push_if_changed(&mut parts, "--tv-tol", &ps.tv_tol, &defaults.tv_tol);
+    push_if_changed(&mut parts, "--tv-max-iter", &ps.tv_max_iter, &defaults.tv_max_iter);
+
+    // TKD params
+    push_if_changed(&mut parts, "--tkd-threshold", &ps.tkd_threshold, &defaults.tkd_threshold);
+
+    // TGV params
+    push_if_changed(&mut parts, "--tgv-iterations", &ps.tgv_iterations, &defaults.tgv_iterations);
+    push_if_changed(&mut parts, "--tgv-erosions", &ps.tgv_erosions, &defaults.tgv_erosions);
+    push_if_changed(&mut parts, "--tgv-alpha1", &ps.tgv_alpha1, &defaults.tgv_alpha1);
+    push_if_changed(&mut parts, "--tgv-alpha0", &ps.tgv_alpha0, &defaults.tgv_alpha0);
+
+    // Mask ops (only if changed from default)
+    if ps.mask_ops != defaults.mask_ops {
+        for op in &ps.mask_ops {
+            parts.push(format!("--mask-op {}", op));
+        }
+    }
+
+    // Execution flags (only if non-default — defaults are all false/empty)
     if form.do_swi {
         parts.push("--do-swi".to_string());
     }
@@ -96,15 +136,16 @@ pub fn build_command_string(app: &App) -> String {
     if form.debug {
         parts.push("--debug".to_string());
     }
-    push_if_set(&mut parts, "--n-procs", &form.n_procs);
+    if !form.n_procs.trim().is_empty() {
+        parts.push(format!("--n-procs {}", form.n_procs.trim()));
+    }
 
     parts.join(" ")
 }
 
-fn push_if_set(parts: &mut Vec<String>, flag: &str, value: &str) {
-    let trimmed = value.trim();
-    if !trimmed.is_empty() {
-        parts.push(format!("{} {}", flag, trimmed));
+fn push_if_changed(parts: &mut Vec<String>, flag: &str, current: &str, default: &str) {
+    if current.trim() != default.trim() {
+        parts.push(format!("{} {}", flag, current.trim()));
     }
 }
 
@@ -344,13 +385,15 @@ mod tests {
     }
 
     #[test]
-    fn test_command_string_defaults_present() {
+    fn test_command_string_no_defaults_shown() {
         let app = default_app();
         let cmd = build_command_string(&app);
-        // Pipeline params now have QSM.rs defaults, so they appear
-        assert!(cmd.contains("--rts-delta"));
-        // But n-procs (execution tab) is still empty by default
+        // With no changes, only positional args should appear
+        assert!(cmd.starts_with("qsmxt run <bids_dir> <output_dir>"));
+        assert!(!cmd.contains("--rts-delta"));
+        assert!(!cmd.contains("--qsm-algorithm"));
         assert!(!cmd.contains("--n-procs"));
+        assert!(!cmd.contains("--mask-op"));
     }
 
     #[test]
@@ -657,17 +700,16 @@ mod tests {
     }
 
     #[test]
-    fn test_push_if_set_empty() {
+    fn test_push_if_changed_same() {
         let mut parts = vec![];
-        push_if_set(&mut parts, "--flag", "");
-        push_if_set(&mut parts, "--flag", "  ");
+        push_if_changed(&mut parts, "--flag", "val", "val");
         assert!(parts.is_empty());
     }
 
     #[test]
-    fn test_push_if_set_value() {
+    fn test_push_if_changed_different() {
         let mut parts = vec![];
-        push_if_set(&mut parts, "--flag", "val");
-        assert_eq!(parts, vec!["--flag val"]);
+        push_if_changed(&mut parts, "--flag", "new", "old");
+        assert_eq!(parts, vec!["--flag new"]);
     }
 }
