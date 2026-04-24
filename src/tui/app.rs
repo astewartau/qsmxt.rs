@@ -575,6 +575,10 @@ impl PipelineFormState {
             label: "Obliquity", field: "obliquity_threshold",
             help: "Resample oblique acquisitions to axial if obliquity exceeds this (degrees, -1 = disabled)",
         });
+        rows.push(PipelineRow::Toggle {
+            label: "Inhomog. Correction", field: "inhomogeneity_correction",
+            help: "Apply B1 field correction to magnitude (improves masking, ROMEO weights, MEDI edges, SWI)",
+        });
 
         rows.push(PipelineRow::Separator);
 
@@ -587,14 +591,6 @@ impl PipelineFormState {
             label: "Masking Input", field: "masking_input",
             options: MASK_INPUT_OPTIONS, help: MASK_INPUT_HELP,
         });
-        // Inhomogeneity correction (only relevant for magnitude-based masking input)
-        let is_magnitude_input = self.masking_input != 3; // not phase-quality
-        if is_magnitude_input {
-            rows.push(PipelineRow::Toggle {
-                label: "Inhomog. Correction", field: "inhomogeneity_correction",
-                help: "Apply B1 field correction to magnitude before masking (improves mask quality for non-uniform data)",
-            });
-        }
         rows.push(PipelineRow::Param {
             label: "Mask Erosions", field: "mask_erosions",
             help: "Number of mask erosion iterations (space-separated for multiple passes)",
