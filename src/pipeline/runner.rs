@@ -598,12 +598,13 @@ pub fn run_pipeline_cached(
                         vec![1.0f64; nx * ny * nz]
                     };
                     let n_std = vec![1.0f64; nx * ny * nz];
-                    qsm_core::inversion::medi_l1(
+                    let (prog, _) = iter_progress_bar("MEDI");
+                    qsm_core::inversion::medi_l1_with_progress(
                         &local_field, &n_std, &magnitude, &eroded_mask,
                         nx, ny, nz, vsx, vsy, vsz,
                         config.medi_lambda, bdir, false, false, config.medi_smv_radius,
                         1, config.medi_percentage, config.medi_cg_tol, config.medi_cg_max_iter,
-                        config.medi_max_iter, config.medi_tol,
+                        config.medi_max_iter, config.medi_tol, prog,
                     )
                 }
                 QsmAlgorithm::Tgv => unreachable!("TGV handled separately"),
