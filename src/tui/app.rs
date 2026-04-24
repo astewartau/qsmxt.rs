@@ -321,22 +321,58 @@ pub enum PipelineRow {
     /// Algorithm selector: ◀ value ▶
     AlgoSelect {
         label: &'static str,
-        field: &'static str, // key into PipelineFormState
+        field: &'static str,
         options: &'static [&'static str],
+        help: &'static [&'static str], // help text per option
     },
     /// Text parameter input
     Param {
         label: &'static str,
         field: &'static str,
+        help: &'static str,
     },
     /// Checkbox toggle
     Toggle {
         label: &'static str,
         field: &'static str,
+        help: &'static str,
     },
     /// Section separator (blank line, not focusable)
     Separator,
 }
+
+// ─── Algorithm help text (name + DOI) ───
+
+const QSM_ALGO_HELP: &[&str] = &[
+    "Rapid Two-Step (RTS) — https://doi.org/10.1016/j.neuroimage.2017.11.018",
+    "Total Variation ADMM (TV) — https://doi.org/10.1002/mrm.25029",
+    "Truncated K-space Division (TKD) — https://doi.org/10.1002/mrm.22135",
+    "Total Generalized Variation (TGV, single-step) — https://doi.org/10.1016/j.neuroimage.2015.02.041",
+];
+const UNWRAP_HELP: &[&str] = &[
+    "ROMEO region-growing unwrapping — https://doi.org/10.1002/mrm.28563",
+    "Laplacian phase unwrapping (FFT-based) — https://doi.org/10.1364/OL.28.001194",
+];
+const BF_HELP: &[&str] = &[
+    "Variable-kernel SHARP (V-SHARP) — https://doi.org/10.1002/mrm.23000",
+    "Projection onto Dipole Fields (PDF) — https://doi.org/10.1002/nbm.1670",
+    "Laplacian Boundary Value (LBV) — https://doi.org/10.1002/nbm.3064",
+    "Iterative Spherical Mean Value (iSMV) — https://doi.org/10.1002/mrm.24998",
+];
+const MASK_ALGO_HELP: &[&str] = &[
+    "Brain Extraction Tool (BET) — Smith 2002, https://doi.org/10.1002/hbm.10062",
+    "Otsu thresholding (automatic intensity threshold)",
+];
+const MASK_INPUT_HELP: &[&str] = &[
+    "First echo magnitude image",
+    "RSS combination of all echo magnitudes",
+    "Last echo magnitude image",
+    "ROMEO phase quality map (spatial phase coherence)",
+];
+const QSM_REF_HELP: &[&str] = &[
+    "Subtract mean susceptibility within mask (recommended)",
+    "No referencing (raw susceptibility values)",
+];
 
 /// All pipeline form values (algorithms + parameters).
 #[derive(Debug, Clone)]
@@ -454,24 +490,37 @@ impl PipelineFormState {
         let is_tgv = self.qsm_algorithm == 3;
         let is_bet = self.masking_algorithm == 0;
 
+        // General settings first
+        rows.push(PipelineRow::Toggle {
+            label: "Combine Phase", field: "combine_phase",
+            help: "Combine multi-echo phase data using MCPC-3D-S before processing",
+        });
+        rows.push(PipelineRow::Param {
+            label: "Obliquity", field: "obliquity_threshold",
+            help: "Resample oblique acquisitions to axial if obliquity exceeds this (degrees, -1 = disabled)",
+        });
+
+        rows.push(PipelineRow::Separator);
+
         // Masking section
         rows.push(PipelineRow::AlgoSelect {
-            label: "Masking",
-            field: "masking_algorithm",
-            options: MASK_ALGO_OPTIONS,
+            label: "Masking", field: "masking_algorithm",
+            options: MASK_ALGO_OPTIONS, help: MASK_ALGO_HELP,
         });
         rows.push(PipelineRow::AlgoSelect {
-            label: "Masking Input",
-            field: "masking_input",
-            options: MASK_INPUT_OPTIONS,
+            label: "Masking Input", field: "masking_input",
+            options: MASK_INPUT_OPTIONS, help: MASK_INPUT_HELP,
         });
-        rows.push(PipelineRow::Param { label: "Mask Erosions", field: "mask_erosions" });
+        rows.push(PipelineRow::Param {
+            label: "Mask Erosions", field: "mask_erosions",
+            help: "Number of mask erosion iterations (space-separated for multiple passes)",
+        });
         if is_bet && self.expanded.contains("masking") {
-            rows.push(PipelineRow::Param { label: "  Frac. Intensity", field: "bet_fractional_intensity" });
-            rows.push(PipelineRow::Param { label: "  Smoothness", field: "bet_smoothness" });
-            rows.push(PipelineRow::Param { label: "  Gradient Thresh", field: "bet_gradient_threshold" });
-            rows.push(PipelineRow::Param { label: "  Iterations", field: "bet_iterations" });
-            rows.push(PipelineRow::Param { label: "  Subdivisions", field: "bet_subdivisions" });
+            rows.push(PipelineRow::Param { label: "  Frac. Intensity", field: "bet_fractional_intensity", help: "BET fractional intensity threshold (0.0-1.0, smaller = larger brain)" });
+            rows.push(PipelineRow::Param { label: "  Smoothness", field: "bet_smoothness", help: "BET surface smoothness factor" });
+            rows.push(PipelineRow::Param { label: "  Gradient Thresh", field: "bet_gradient_threshold", help: "BET gradient threshold for edge detection (-1 to 1)" });
+            rows.push(PipelineRow::Param { label: "  Iterations", field: "bet_iterations", help: "BET surface evolution iterations" });
+            rows.push(PipelineRow::Param { label: "  Subdivisions", field: "bet_subdivisions", help: "BET icosphere subdivision level (higher = finer mesh)" });
         }
 
         rows.push(PipelineRow::Separator);
@@ -479,66 +528,60 @@ impl PipelineFormState {
         // Unwrapping (hidden if TGV)
         if !is_tgv {
             rows.push(PipelineRow::AlgoSelect {
-                label: "Unwrapping",
-                field: "unwrapping_algorithm",
-                options: UNWRAP_OPTIONS,
+                label: "Unwrapping", field: "unwrapping_algorithm",
+                options: UNWRAP_OPTIONS, help: UNWRAP_HELP,
             });
             rows.push(PipelineRow::Separator);
 
             // BG Removal
             rows.push(PipelineRow::AlgoSelect {
-                label: "BG Removal",
-                field: "bf_algorithm",
-                options: BF_OPTIONS,
+                label: "BG Removal", field: "bf_algorithm",
+                options: BF_OPTIONS, help: BF_HELP,
             });
             rows.push(PipelineRow::Separator);
         }
 
         // QSM Inversion
         rows.push(PipelineRow::AlgoSelect {
-            label: "QSM Inversion",
-            field: "qsm_algorithm",
-            options: QSM_ALGO_OPTIONS,
+            label: "QSM Inversion", field: "qsm_algorithm",
+            options: QSM_ALGO_OPTIONS, help: QSM_ALGO_HELP,
         });
 
-        // Algorithm-specific params (always shown when selected)
+        // Algorithm-specific params
         match self.qsm_algorithm {
             0 => { // RTS
-                rows.push(PipelineRow::Param { label: "  Delta", field: "rts_delta" });
-                rows.push(PipelineRow::Param { label: "  Mu", field: "rts_mu" });
-                rows.push(PipelineRow::Param { label: "  Rho", field: "rts_rho" });
-                rows.push(PipelineRow::Param { label: "  Tolerance", field: "rts_tol" });
-                rows.push(PipelineRow::Param { label: "  Max Iter", field: "rts_max_iter" });
-                rows.push(PipelineRow::Param { label: "  LSMR Iter", field: "rts_lsmr_iter" });
+                rows.push(PipelineRow::Param { label: "  Delta", field: "rts_delta", help: "Threshold for ill-conditioned k-space region" });
+                rows.push(PipelineRow::Param { label: "  Mu", field: "rts_mu", help: "Regularization parameter for well-conditioned region" });
+                rows.push(PipelineRow::Param { label: "  Rho", field: "rts_rho", help: "ADMM penalty parameter" });
+                rows.push(PipelineRow::Param { label: "  Tolerance", field: "rts_tol", help: "Convergence tolerance (relative change)" });
+                rows.push(PipelineRow::Param { label: "  Max Iter", field: "rts_max_iter", help: "Maximum ADMM iterations" });
+                rows.push(PipelineRow::Param { label: "  LSMR Iter", field: "rts_lsmr_iter", help: "LSMR iterations for step 1 (well-conditioned solve)" });
             }
             1 => { // TV
-                rows.push(PipelineRow::Param { label: "  Lambda", field: "tv_lambda" });
-                rows.push(PipelineRow::Param { label: "  Rho", field: "tv_rho" });
-                rows.push(PipelineRow::Param { label: "  Tolerance", field: "tv_tol" });
-                rows.push(PipelineRow::Param { label: "  Max Iter", field: "tv_max_iter" });
+                rows.push(PipelineRow::Param { label: "  Lambda", field: "tv_lambda", help: "L1 regularization weight (smaller = smoother)" });
+                rows.push(PipelineRow::Param { label: "  Rho", field: "tv_rho", help: "ADMM penalty parameter (typically 100×lambda)" });
+                rows.push(PipelineRow::Param { label: "  Tolerance", field: "tv_tol", help: "Convergence tolerance" });
+                rows.push(PipelineRow::Param { label: "  Max Iter", field: "tv_max_iter", help: "Maximum ADMM iterations" });
             }
             2 => { // TKD
-                rows.push(PipelineRow::Param { label: "  Threshold", field: "tkd_threshold" });
+                rows.push(PipelineRow::Param { label: "  Threshold", field: "tkd_threshold", help: "Truncation threshold for k-space division (0.1-0.2)" });
             }
             3 => { // TGV
-                rows.push(PipelineRow::Param { label: "  Iterations", field: "tgv_iterations" });
-                rows.push(PipelineRow::Param { label: "  Erosions", field: "tgv_erosions" });
-                rows.push(PipelineRow::Param { label: "  Alpha1", field: "tgv_alpha1" });
-                rows.push(PipelineRow::Param { label: "  Alpha0", field: "tgv_alpha0" });
+                rows.push(PipelineRow::Param { label: "  Iterations", field: "tgv_iterations", help: "Primal-dual iterations" });
+                rows.push(PipelineRow::Param { label: "  Erosions", field: "tgv_erosions", help: "Mask erosions before TGV solve" });
+                rows.push(PipelineRow::Param { label: "  Alpha1", field: "tgv_alpha1", help: "First-order TGV weight (gradient term)" });
+                rows.push(PipelineRow::Param { label: "  Alpha0", field: "tgv_alpha0", help: "Second-order TGV weight (symmetric gradient term)" });
             }
             _ => {}
         }
 
         rows.push(PipelineRow::Separator);
 
-        // General settings
+        // QSM Reference
         rows.push(PipelineRow::AlgoSelect {
-            label: "QSM Reference",
-            field: "qsm_reference",
-            options: QSM_REF_OPTIONS,
+            label: "QSM Reference", field: "qsm_reference",
+            options: QSM_REF_OPTIONS, help: QSM_REF_HELP,
         });
-        rows.push(PipelineRow::Toggle { label: "Combine Phase", field: "combine_phase" });
-        rows.push(PipelineRow::Param { label: "Obliquity Threshold", field: "obliquity_threshold" });
 
         rows
     }

@@ -283,11 +283,20 @@ fn draw_pipeline_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
+    // Split into form area + help text area
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(2)])
+        .split(inner);
+    let form_area = chunks[0];
+    let help_area = chunks[1];
+
     let ps = &app.pipeline_state;
     let rows = ps.visible_rows();
     let focusable = ps.focusable_rows();
 
     let mut lines: Vec<Line> = Vec::new();
+    let mut focused_help: Option<String> = None;
 
     let mut focusable_idx = 0;
     for (i, row) in rows.iter().enumerate() {
@@ -298,20 +307,22 @@ fn draw_pipeline_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         }
 
         let line = match row {
-            PipelineRow::AlgoSelect { label, field, options } => {
+            PipelineRow::AlgoSelect { label, field, options, help } => {
                 let selected = ps.get_select(field);
                 let val = options.get(selected).unwrap_or(&"?");
+                if focused {
+                    focused_help = help.get(selected).map(|s| s.to_string());
+                }
                 let label_style = if focused {
                     Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::White)
                 };
-                let val_style = Style::default().fg(Color::Cyan);
                 if focused {
                     Line::from(vec![
                         Span::styled(format!("  {:22}", format!("{}:", label)), label_style),
                         Span::styled("◀ ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(*val, val_style),
+                        Span::styled(*val, Style::default().fg(Color::Cyan)),
                         Span::styled(" ▶", Style::default().fg(Color::DarkGray)),
                     ])
                 } else {
@@ -321,8 +332,11 @@ fn draw_pipeline_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     ])
                 }
             }
-            PipelineRow::Param { label, field } => {
+            PipelineRow::Param { label, field, help } => {
                 let val = ps.get_param(field);
+                if focused {
+                    focused_help = Some(help.to_string());
+                }
                 let label_style = if focused {
                     Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 } else {
@@ -343,8 +357,11 @@ fn draw_pipeline_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     display_val,
                 ])
             }
-            PipelineRow::Toggle { label, field } => {
+            PipelineRow::Toggle { label, field, help } => {
                 let checked = ps.get_toggle(field);
+                if focused {
+                    focused_help = Some(help.to_string());
+                }
                 let label_style = if focused {
                     Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 } else {
@@ -366,16 +383,25 @@ fn draw_pipeline_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     }
 
     let para = Paragraph::new(lines);
-    f.render_widget(para, inner);
+    f.render_widget(para, form_area);
+
+    // Render help text
+    if let Some(help) = focused_help {
+        let help_para = Paragraph::new(Line::from(Span::styled(
+            format!("  {}", help),
+            Style::default().fg(Color::DarkGray),
+        ))).wrap(ratatui::widgets::Wrap { trim: false });
+        f.render_widget(help_para, help_area);
+    }
 
     // Set cursor if editing a param
     if ps.editing {
         let focusable_idx = ps.focus;
         if let Some(&row_idx) = focusable.get(focusable_idx) {
-            let y = inner.y + row_idx as u16;
-            let label_width = 24; // "  " + 22-char label
-            let x = inner.x + label_width + ps.cursor as u16;
-            if y < inner.y + inner.height {
+            let y = form_area.y + row_idx as u16;
+            let label_width = 24;
+            let x = form_area.x + label_width + ps.cursor as u16;
+            if y < form_area.y + form_area.height {
                 f.set_cursor_position((x, y));
             }
         }
