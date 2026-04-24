@@ -691,6 +691,43 @@ impl PipelineFormState {
         if field == "combine_phase" { self.combine_phase = !self.combine_phase }
     }
 
+    /// Get the field name of the currently focused row.
+    pub fn focused_field_name(&self) -> Option<String> {
+        let rows = self.visible_rows();
+        let focusable = self.focusable_rows();
+        let focus_idx = focusable.get(self.focus).copied()?;
+        match rows.get(focus_idx) {
+            Some(PipelineRow::AlgoSelect { field, .. }) => Some(field.to_string()),
+            Some(PipelineRow::Param { field, .. }) => Some(field.to_string()),
+            Some(PipelineRow::Toggle { field, .. }) => Some(field.to_string()),
+            _ => None,
+        }
+    }
+
+    /// After rows change, restore focus to the row with the given field name.
+    pub fn restore_focus(&mut self, field_name: &Option<String>) {
+        let Some(name) = field_name else { return };
+        let rows = self.visible_rows();
+        let focusable = self.focusable_rows();
+        for (fi, &ri) in focusable.iter().enumerate() {
+            let matches = match rows.get(ri) {
+                Some(PipelineRow::AlgoSelect { field, .. }) => *field == name.as_str(),
+                Some(PipelineRow::Param { field, .. }) => *field == name.as_str(),
+                Some(PipelineRow::Toggle { field, .. }) => *field == name.as_str(),
+                _ => false,
+            };
+            if matches {
+                self.focus = fi;
+                return;
+            }
+        }
+        // Field not found in new layout — clamp focus
+        let max = focusable.len().saturating_sub(1);
+        if self.focus > max {
+            self.focus = max;
+        }
+    }
+
     /// Get focusable row count (excludes separators).
     pub fn focusable_rows(&self) -> Vec<usize> {
         self.visible_rows()
@@ -1094,6 +1131,7 @@ impl App {
             // Interact
             KeyCode::Enter | KeyCode::Char(' ') => {
                 let ps = &mut self.pipeline_state;
+                let focused_field = ps.focused_field_name();
                 let rows = ps.visible_rows();
                 let focusable = ps.focusable_rows();
                 let focus_idx = focusable.get(ps.focus).copied().unwrap_or(0);
@@ -1101,6 +1139,7 @@ impl App {
                     Some(PipelineRow::AlgoSelect { field, options, .. }) => {
                         let cur = ps.get_select(field);
                         ps.set_select(field, (cur + 1) % options.len());
+                        ps.restore_focus(&focused_field);
                     }
                     Some(PipelineRow::Param { field, .. }) => {
                         ps.editing = true;
@@ -1116,6 +1155,7 @@ impl App {
             // Left/Right for selects
             KeyCode::Left | KeyCode::Right => {
                 let ps = &mut self.pipeline_state;
+                let focused_field = ps.focused_field_name();
                 let rows = ps.visible_rows();
                 let focusable = ps.focusable_rows();
                 let focus_idx = focusable.get(ps.focus).copied().unwrap_or(0);
@@ -1125,6 +1165,7 @@ impl App {
                     let delta = if key.code == KeyCode::Left { -1 } else { 1 };
                     let new_val = (cur + delta).rem_euclid(n) as usize;
                     ps.set_select(field, new_val);
+                    ps.restore_focus(&focused_field);
                 }
             }
 
