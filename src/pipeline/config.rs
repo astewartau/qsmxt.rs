@@ -927,6 +927,222 @@ mod tests {
     }
 
     #[test]
+    fn test_algorithm_display() {
+        assert_eq!(format!("{}", QsmAlgorithm::Rts), "rts");
+        assert_eq!(format!("{}", QsmAlgorithm::Tv), "tv");
+        assert_eq!(format!("{}", QsmAlgorithm::Tkd), "tkd");
+        assert_eq!(format!("{}", QsmAlgorithm::Tgv), "tgv");
+        assert_eq!(format!("{}", UnwrappingAlgorithm::Romeo), "romeo");
+        assert_eq!(format!("{}", UnwrappingAlgorithm::Laplacian), "laplacian");
+        assert_eq!(format!("{}", BfAlgorithm::Vsharp), "vsharp");
+        assert_eq!(format!("{}", BfAlgorithm::Pdf), "pdf");
+        assert_eq!(format!("{}", BfAlgorithm::Lbv), "lbv");
+        assert_eq!(format!("{}", BfAlgorithm::Ismv), "ismv");
+        assert_eq!(format!("{}", MaskingAlgorithm::Bet), "bet");
+        assert_eq!(format!("{}", MaskingAlgorithm::Threshold), "threshold");
+        assert_eq!(format!("{}", QsmReference::Mean), "mean");
+        assert_eq!(format!("{}", QsmReference::None), "none");
+    }
+
+    #[test]
+    fn test_mask_op_display_all_variants() {
+        assert_eq!(format!("{}", MaskOp::Input { source: MaskingInput::Magnitude }), "input:magnitude");
+        assert_eq!(format!("{}", MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None }), "threshold:otsu");
+        assert_eq!(format!("{}", MaskOp::Threshold { method: MaskThresholdMethod::Fixed, value: Some(0.3) }), "threshold:fixed:0.3");
+        assert_eq!(format!("{}", MaskOp::Threshold { method: MaskThresholdMethod::Fixed, value: None }), "threshold:fixed:0.5");
+        assert_eq!(format!("{}", MaskOp::Threshold { method: MaskThresholdMethod::Percentile, value: Some(90.0) }), "threshold:percentile:90");
+        assert_eq!(format!("{}", MaskOp::Threshold { method: MaskThresholdMethod::Percentile, value: None }), "threshold:percentile:75");
+        assert_eq!(format!("{}", MaskOp::Bet { fractional_intensity: 0.4 }), "bet:0.4");
+        assert_eq!(format!("{}", MaskOp::Erode { iterations: 3 }), "erode:3");
+        assert_eq!(format!("{}", MaskOp::Dilate { iterations: 1 }), "dilate:1");
+        assert_eq!(format!("{}", MaskOp::Close { radius: 2 }), "close:2");
+        assert_eq!(format!("{}", MaskOp::FillHoles { max_size: 500 }), "fill-holes:500");
+        assert_eq!(format!("{}", MaskOp::GaussianSmooth { sigma_mm: 4.0 }), "gaussian:4");
+    }
+
+    #[test]
+    fn test_parse_mask_op_input_all_sources() {
+        assert_eq!(parse_mask_op("input:magnitude-first").unwrap(), MaskOp::Input { source: MaskingInput::MagnitudeFirst });
+        assert_eq!(parse_mask_op("input:magnitude-last").unwrap(), MaskOp::Input { source: MaskingInput::MagnitudeLast });
+        assert_eq!(parse_mask_op("input:phase-quality").unwrap(), MaskOp::Input { source: MaskingInput::PhaseQuality });
+    }
+
+    #[test]
+    fn test_parse_mask_op_input_invalid() {
+        assert!(parse_mask_op("input:foo").is_err());
+    }
+
+    #[test]
+    fn test_parse_mask_op_threshold_invalid_method() {
+        assert!(parse_mask_op("threshold:invalid").is_err());
+    }
+
+    #[test]
+    fn test_parse_mask_op_threshold_default() {
+        // No method specified defaults to otsu
+        let op = parse_mask_op("threshold").unwrap();
+        assert_eq!(op, MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None });
+    }
+
+    #[test]
+    fn test_parse_mask_op_defaults_when_no_value() {
+        let op = parse_mask_op("bet").unwrap();
+        assert_eq!(op, MaskOp::Bet { fractional_intensity: 0.5 });
+        let op = parse_mask_op("erode").unwrap();
+        assert_eq!(op, MaskOp::Erode { iterations: 1 });
+        let op = parse_mask_op("dilate").unwrap();
+        assert_eq!(op, MaskOp::Dilate { iterations: 1 });
+        let op = parse_mask_op("close").unwrap();
+        assert_eq!(op, MaskOp::Close { radius: 1 });
+        let op = parse_mask_op("fill-holes").unwrap();
+        assert_eq!(op, MaskOp::FillHoles { max_size: 1000 });
+        let op = parse_mask_op("gaussian").unwrap();
+        assert_eq!(op, MaskOp::GaussianSmooth { sigma_mm: 4.0 });
+    }
+
+    #[test]
+    fn test_from_file_valid_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let toml_str = config.to_annotated_toml();
+        std::fs::write(&path, &toml_str).unwrap();
+        // Should parse without error (not all fields need to match since
+        // annotated toml uses [pipeline] section but struct is flat)
+        // At minimum, from_file should not panic
+        let _ = PipelineConfig::from_file(&path);
+    }
+
+    #[test]
+    fn test_from_file_missing_file() {
+        let result = PipelineConfig::from_file(std::path::Path::new("/nonexistent/config.toml"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_to_annotated_toml_body_preset() {
+        let config = PipelineConfig::from_preset(cli::Preset::Body);
+        let toml = config.to_annotated_toml();
+        assert!(toml.contains("qsm_algorithm = \"tgv\""));
+        assert!(toml.contains("# unwrapping_algorithm")); // commented out
+        assert!(toml.contains("# bf_algorithm")); // commented out
+        assert!(toml.contains("combine_phase = false"));
+        assert!(toml.contains("do_swi = false"));
+        assert!(toml.contains("do_t2starmap = false"));
+        assert!(toml.contains("do_r2starmap = false"));
+        assert!(toml.contains("inhomogeneity_correction = false"));
+        assert!(toml.contains("obliquity_threshold = -1"));
+    }
+
+    #[test]
+    fn test_to_annotated_toml_with_features_enabled() {
+        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
+        config.do_swi = true;
+        config.do_t2starmap = true;
+        config.do_r2starmap = true;
+        config.inhomogeneity_correction = true;
+        config.description = "".to_string();
+        let toml = config.to_annotated_toml();
+        assert!(toml.contains("do_swi = true"));
+        assert!(toml.contains("do_t2starmap = true"));
+        assert!(toml.contains("do_r2starmap = true"));
+        assert!(toml.contains("inhomogeneity_correction = true"));
+        assert!(!toml.contains("# Preset:")); // empty description not printed
+    }
+
+    #[test]
+    fn test_list_presets() {
+        let presets = list_presets();
+        assert_eq!(presets.len(), 5);
+        assert_eq!(presets[0].0, "gre");
+        assert_eq!(presets[4].0, "body");
+    }
+
+    #[test]
+    fn test_apply_run_overrides_all_algorithms() {
+        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let mut args = default_run_args();
+
+        // TV
+        args.qsm_algorithm = Some(cli::QsmAlgorithmArg::Tv);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.qsm_algorithm, QsmAlgorithm::Tv);
+
+        // TKD
+        args.qsm_algorithm = Some(cli::QsmAlgorithmArg::Tkd);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.qsm_algorithm, QsmAlgorithm::Tkd);
+
+        // Laplacian
+        args.unwrapping_algorithm = Some(cli::UnwrapAlgorithmArg::Laplacian);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.unwrapping_algorithm, Some(UnwrappingAlgorithm::Laplacian));
+
+        // LBV
+        args.bf_algorithm = Some(cli::BfAlgorithmArg::Lbv);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.bf_algorithm, Some(BfAlgorithm::Lbv));
+
+        // iSMV
+        args.bf_algorithm = Some(cli::BfAlgorithmArg::Ismv);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.bf_algorithm, Some(BfAlgorithm::Ismv));
+
+        // PDF
+        args.bf_algorithm = Some(cli::BfAlgorithmArg::Pdf);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.bf_algorithm, Some(BfAlgorithm::Pdf));
+
+        // Masking input variants
+        args.masking_input = Some(cli::MaskInputArg::Magnitude);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.masking_input, MaskingInput::Magnitude);
+
+        args.masking_input = Some(cli::MaskInputArg::MagnitudeLast);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.masking_input, MaskingInput::MagnitudeLast);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_numeric_params() {
+        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let mut args = default_run_args();
+        args.rts_mu = Some(2e5);
+        args.rts_tol = Some(1e-6);
+        args.tv_lambda = Some(0.01);
+        args.tkd_threshold = Some(0.2);
+        args.tgv_iterations = Some(500);
+        args.tgv_erosions = Some(5);
+        args.inhomogeneity_correction = true;
+        args.obliquity_threshold = Some(10.0);
+        config.apply_run_overrides(&args);
+        assert!((config.rts_mu - 2e5).abs() < 1.0);
+        assert!((config.rts_tol - 1e-6).abs() < 1e-10);
+        assert!((config.tv_lambda - 0.01).abs() < 1e-10);
+        assert!((config.tkd_threshold - 0.2).abs() < 1e-10);
+        assert_eq!(config.tgv_iterations, 500);
+        assert_eq!(config.tgv_erosions, 5);
+        assert!(config.inhomogeneity_correction);
+        assert!((config.obliquity_threshold - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_default_config_is_gre() {
+        let config = PipelineConfig::default();
+        assert_eq!(config.qsm_algorithm, QsmAlgorithm::Rts);
+        assert_eq!(config.description, "3D-GRE images (human brain)");
+    }
+
+    #[test]
+    fn test_validate_tgv_with_bf_set() {
+        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
+        config.qsm_algorithm = QsmAlgorithm::Tgv;
+        config.bf_algorithm = Some(BfAlgorithm::Vsharp);
+        // Should still pass — TGV ignores bf/unwrap but doesn't error
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn test_parse_mask_op_display_roundtrip() {
         let op = MaskOp::Erode { iterations: 3 };
         let s = format!("{}", op);

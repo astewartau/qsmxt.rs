@@ -433,6 +433,220 @@ mod tests {
     }
 
     #[test]
+    fn test_set_current() {
+        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let key = AcquisitionKey {
+            subject: "01".to_string(),
+            session: None,
+            acquisition: None,
+            reconstruction: None,
+            inversion: None,
+            run: None,
+            suffix: "MEGRE".to_string(),
+        };
+        let mut state = PipelineState::new(&config, &key);
+        state.set_current("mask");
+        assert_eq!(state.status, "in_progress");
+        assert_eq!(state.current_step, Some("mask".to_string()));
+    }
+
+    #[test]
+    fn test_mark_completed_with_metadata() {
+        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let key = AcquisitionKey {
+            subject: "01".to_string(),
+            session: None,
+            acquisition: None,
+            reconstruction: None,
+            inversion: None,
+            run: None,
+            suffix: "MEGRE".to_string(),
+        };
+        let mut state = PipelineState::new(&config, &key);
+        let meta = serde_json::json!({"dims": [64, 64, 64]});
+        state.mark_completed_with_metadata("load", vec![], meta.clone());
+        let record = state.completed_steps.get("load").unwrap();
+        assert_eq!(record.metadata, Some(meta));
+    }
+
+    #[test]
+    fn test_step_outputs() {
+        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let key = AcquisitionKey {
+            subject: "01".to_string(),
+            session: None,
+            acquisition: None,
+            reconstruction: None,
+            inversion: None,
+            run: None,
+            suffix: "MEGRE".to_string(),
+        };
+        let mut state = PipelineState::new(&config, &key);
+        assert!(state.step_outputs("mask").is_none());
+        state.mark_completed("mask", vec![PathBuf::from("/tmp/mask.nii")]);
+        let outputs = state.step_outputs("mask").unwrap();
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0], PathBuf::from("/tmp/mask.nii"));
+    }
+
+    #[test]
+    fn test_completed_step_names() {
+        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let key = AcquisitionKey {
+            subject: "01".to_string(),
+            session: None,
+            acquisition: None,
+            reconstruction: None,
+            inversion: None,
+            run: None,
+            suffix: "MEGRE".to_string(),
+        };
+        let mut state = PipelineState::new(&config, &key);
+        state.mark_completed("load", vec![]);
+        state.mark_completed("mask", vec![]);
+        let names = state.completed_step_names();
+        assert!(names.contains("load"));
+        assert!(names.contains("mask"));
+        assert!(!names.contains("unwrap"));
+    }
+
+    #[test]
+    fn test_mark_run_complete() {
+        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let key = AcquisitionKey {
+            subject: "01".to_string(),
+            session: None,
+            acquisition: None,
+            reconstruction: None,
+            inversion: None,
+            run: None,
+            suffix: "MEGRE".to_string(),
+        };
+        let mut state = PipelineState::new(&config, &key);
+        state.mark_run_complete();
+        assert_eq!(state.status, "complete");
+        assert!(state.current_step.is_none());
+    }
+
+    #[test]
+    fn test_state_file_path_with_session() {
+        let key = AcquisitionKey {
+            subject: "01".to_string(),
+            session: Some("pre".to_string()),
+            acquisition: None,
+            reconstruction: None,
+            inversion: None,
+            run: None,
+            suffix: "MEGRE".to_string(),
+        };
+        let path = state_file_path(Path::new("/out"), &key);
+        assert_eq!(path, PathBuf::from("/out/sub-01/ses-pre/anat/.pipeline_state.json"));
+    }
+
+    #[test]
+    fn test_intermediate_path_no_session() {
+        let key = AcquisitionKey {
+            subject: "01".to_string(),
+            session: None,
+            acquisition: None,
+            reconstruction: None,
+            inversion: None,
+            run: None,
+            suffix: "MEGRE".to_string(),
+        };
+        let path = intermediate_path(Path::new("/out"), &key, "unwrapped.nii");
+        assert_eq!(path, PathBuf::from("/out/sub-01/anat/sub-01_unwrapped.nii"));
+    }
+
+    #[test]
+    fn test_intermediate_path_with_session() {
+        let key = AcquisitionKey {
+            subject: "02".to_string(),
+            session: Some("post".to_string()),
+            acquisition: None,
+            reconstruction: None,
+            inversion: None,
+            run: None,
+            suffix: "MEGRE".to_string(),
+        };
+        let path = intermediate_path(Path::new("/out"), &key, "mask.nii");
+        assert_eq!(path, PathBuf::from("/out/sub-02/ses-post/anat/sub-02_ses-post_mask.nii"));
+    }
+
+    #[test]
+    fn test_downstream_steps_load() {
+        let ds = downstream_steps("load");
+        assert!(ds.contains(&"mask"));
+        assert!(ds.contains(&"unwrap"));
+        assert!(ds.contains(&"reference"));
+    }
+
+    #[test]
+    fn test_downstream_steps_unknown() {
+        let ds = downstream_steps("nonexistent");
+        assert!(ds.is_empty());
+    }
+
+    #[test]
+    fn test_downstream_steps_leaf() {
+        assert!(downstream_steps("swi").is_empty());
+        assert!(downstream_steps("reference").is_empty());
+    }
+
+    #[test]
+    fn test_clean_intermediates() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = AcquisitionKey {
+            subject: "01".to_string(),
+            session: None,
+            acquisition: None,
+            reconstruction: None,
+            inversion: None,
+            run: None,
+            suffix: "MEGRE".to_string(),
+        };
+        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let mut state = PipelineState::new(&config, &key);
+
+        // Create a fake intermediate file
+        let intermediate = dir.path().join("unwrapped.nii");
+        std::fs::write(&intermediate, "fake").unwrap();
+        state.mark_completed("unwrap", vec![intermediate.clone()]);
+
+        // Create a fake final output
+        let final_output = dir.path().join("qsm.nii");
+        std::fs::write(&final_output, "fake").unwrap();
+        state.mark_completed("reference", vec![final_output.clone()]);
+
+        clean_intermediates(&state, dir.path(), &key);
+
+        // Intermediate should be removed, final kept
+        assert!(!intermediate.exists());
+        assert!(final_output.exists());
+    }
+
+    #[test]
+    fn test_load_or_create_corrupt_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        std::fs::write(&path, "not valid json").unwrap();
+        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let key = AcquisitionKey {
+            subject: "01".to_string(),
+            session: None,
+            acquisition: None,
+            reconstruction: None,
+            inversion: None,
+            run: None,
+            suffix: "MEGRE".to_string(),
+        };
+        let state = PipelineState::load_or_create(&path, &config, &key, false);
+        // Should create fresh state
+        assert_eq!(state.status, "pending");
+        assert!(state.completed_steps.is_empty());
+    }
+
+    #[test]
     fn test_force_ignores_cache() {
         let config = PipelineConfig::from_preset(cli::Preset::Gre);
         let key = AcquisitionKey {

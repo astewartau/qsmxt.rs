@@ -147,3 +147,111 @@ fn draw_help_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
     f.render_widget(Paragraph::new(Line::from(help)), area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn render_app(app: &App) -> Terminal<TestBackend> {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        terminal
+    }
+
+    #[test]
+    fn test_draw_default_app_no_panic() {
+        let app = App::new();
+        let _ = render_app(&app);
+    }
+
+    #[test]
+    fn test_draw_all_tabs() {
+        let mut app = App::new();
+        for tab in 0..5 {
+            app.active_tab = tab;
+            app.active_field = 0;
+            let _ = render_app(&app);
+        }
+    }
+
+    #[test]
+    fn test_draw_editing_mode() {
+        let mut app = App::new();
+        app.editing = true;
+        app.form.bids_dir = "/some/path".to_string();
+        app.cursor_pos = 5;
+        let _ = render_app(&app);
+    }
+
+    #[test]
+    fn test_draw_with_form_data() {
+        let mut app = App::new();
+        app.form.bids_dir = "/data/bids".to_string();
+        app.form.output_dir = "/data/out".to_string();
+        app.form.preset = 1;
+        let _ = render_app(&app);
+    }
+
+    #[test]
+    fn test_draw_algorithms_tab() {
+        let mut app = App::new();
+        app.active_tab = 2;
+        app.active_field = 0;
+        let _ = render_app(&app);
+        // Move through fields
+        app.active_field = 4;
+        let _ = render_app(&app);
+    }
+
+    #[test]
+    fn test_draw_parameters_tab() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        // Checkbox focused
+        app.active_field = 0;
+        app.form.combine_phase = true;
+        let _ = render_app(&app);
+        // Text field focused
+        app.active_field = 1;
+        app.form.bet_fractional_intensity = "0.5".to_string();
+        let _ = render_app(&app);
+    }
+
+    #[test]
+    fn test_draw_execution_tab_with_flags() {
+        let mut app = App::new();
+        app.active_tab = 4;
+        app.form.do_swi = true;
+        app.form.do_t2starmap = true;
+        app.form.dry_run = true;
+        app.form.debug = true;
+        let _ = render_app(&app);
+    }
+
+    #[test]
+    fn test_draw_non_focused_fields() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = 3; // Last field focused, others not
+        let _ = render_app(&app);
+    }
+
+    #[test]
+    fn test_draw_select_not_focused() {
+        let mut app = App::new();
+        app.active_tab = 2;
+        app.active_field = 1; // field 0 (select) not focused
+        let _ = render_app(&app);
+    }
+
+    #[test]
+    fn test_draw_empty_text_not_editing() {
+        let mut app = App::new();
+        // All fields empty, not editing — shows "(empty)"
+        app.active_tab = 0;
+        app.active_field = 0;
+        let _ = render_app(&app);
+    }
+}

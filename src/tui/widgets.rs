@@ -133,3 +133,102 @@ pub fn render_checkbox(
         value_area,
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn test_frame(width: u16, height: u16) -> Terminal<TestBackend> {
+        let backend = TestBackend::new(width, height);
+        Terminal::new(backend).unwrap()
+    }
+
+    #[test]
+    fn test_render_text_input_empty_no_cursor() {
+        let mut term = test_frame(80, 3);
+        term.draw(|f| {
+            render_text_input(f, f.area(), "Label", "", false, None);
+        }).unwrap();
+    }
+
+    #[test]
+    fn test_render_text_input_with_value() {
+        let mut term = test_frame(80, 3);
+        term.draw(|f| {
+            render_text_input(f, f.area(), "Path", "/data/bids", true, None);
+        }).unwrap();
+    }
+
+    #[test]
+    fn test_render_text_input_with_cursor() {
+        let mut term = test_frame(80, 3);
+        term.draw(|f| {
+            render_text_input(f, f.area(), "Path", "/data", true, Some(3));
+        }).unwrap();
+    }
+
+    #[test]
+    fn test_render_select_focused() {
+        let mut term = test_frame(80, 3);
+        term.draw(|f| {
+            render_select(f, f.area(), "Algorithm", &["rts", "tv", "tkd"], 1, true);
+        }).unwrap();
+    }
+
+    #[test]
+    fn test_render_select_not_focused() {
+        let mut term = test_frame(80, 3);
+        term.draw(|f| {
+            render_select(f, f.area(), "Algorithm", &["rts", "tv"], 0, false);
+        }).unwrap();
+    }
+
+    #[test]
+    fn test_render_select_out_of_range() {
+        let mut term = test_frame(80, 3);
+        term.draw(|f| {
+            render_select(f, f.area(), "X", &["a"], 99, false);
+        }).unwrap();
+    }
+
+    #[test]
+    fn test_render_checkbox_checked() {
+        let mut term = test_frame(80, 3);
+        term.draw(|f| {
+            render_checkbox(f, f.area(), "SWI", true, true);
+        }).unwrap();
+    }
+
+    #[test]
+    fn test_render_checkbox_unchecked() {
+        let mut term = test_frame(80, 3);
+        term.draw(|f| {
+            render_checkbox(f, f.area(), "SWI", false, false);
+        }).unwrap();
+    }
+
+    #[test]
+    fn test_label_style_focused() {
+        let s = label_style(true);
+        assert_eq!(s.fg, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn test_label_style_unfocused() {
+        let s = label_style(false);
+        assert_eq!(s.fg, Some(Color::White));
+    }
+
+    #[test]
+    fn test_value_style_focused() {
+        let s = value_style(true);
+        assert_eq!(s.fg, Some(Color::Cyan));
+    }
+
+    #[test]
+    fn test_value_style_unfocused() {
+        let s = value_style(false);
+        assert_eq!(s.fg, Some(Color::Gray));
+    }
+}

@@ -146,6 +146,64 @@ mod tests {
     }
 
     #[test]
+    fn test_field_ppm_path() {
+        let path = output().field_ppm_path(&key_no_session());
+        assert!(path.to_str().unwrap().ends_with("_field-ppm.nii"));
+    }
+
+    #[test]
+    fn test_local_field_path() {
+        let path = output().local_field_path(&key_no_session());
+        assert!(path.to_str().unwrap().ends_with("_localfield.nii"));
+    }
+
+    #[test]
+    fn test_bg_mask_path() {
+        let path = output().bg_mask_path(&key_no_session());
+        assert!(path.to_str().unwrap().ends_with("_bgmask.nii"));
+    }
+
+    #[test]
+    fn test_chi_raw_path() {
+        let path = output().chi_raw_path(&key_no_session());
+        assert!(path.to_str().unwrap().ends_with("_Chimap-raw.nii"));
+    }
+
+    #[test]
+    fn test_phase_scaled_path() {
+        let path = output().phase_scaled_path(&key_no_session(), 2);
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(name.contains("echo-2"));
+        assert!(name.contains("phase-scaled"));
+    }
+
+    #[test]
+    fn test_mag_path() {
+        let path = output().mag_path(&key_no_session(), 1);
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(name.contains("echo-1"));
+        assert!(name.contains("mag"));
+    }
+
+    #[test]
+    fn test_state_path() {
+        let path = output().state_path(&key_no_session());
+        assert!(path.to_str().unwrap().ends_with(".pipeline_state.json"));
+    }
+
+    #[test]
+    fn test_write_dataset_description() {
+        let dir = tempfile::tempdir().unwrap();
+        let o = DerivativeOutputs::new(dir.path());
+        o.write_dataset_description().unwrap();
+        let desc_path = dir.path().join("dataset_description.json");
+        assert!(desc_path.exists());
+        let content = std::fs::read_to_string(desc_path).unwrap();
+        assert!(content.contains("qsmxt"));
+        assert!(content.contains("BIDSVersion"));
+    }
+
+    #[test]
     fn test_path_with_all_entities() {
         let key = AcquisitionKey {
             subject: "02".to_string(),
