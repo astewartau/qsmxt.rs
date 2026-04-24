@@ -129,7 +129,7 @@ pub fn build_command_string(app: &App) -> String {
     if form.do_r2starmap {
         parts.push("--do-r2starmap".to_string());
     }
-    if form.inhomogeneity_correction {
+    if ps.inhomogeneity_correction {
         parts.push("--inhomogeneity-correction".to_string());
     }
     if form.dry_run {
@@ -230,7 +230,7 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         do_swi: form.do_swi,
         do_t2starmap: form.do_t2starmap,
         do_r2starmap: form.do_r2starmap,
-        inhomogeneity_correction: form.inhomogeneity_correction,
+        inhomogeneity_correction: ps.inhomogeneity_correction,
         obliquity_threshold: parse_optional_f64(&ps.obliquity_threshold),
         mask_ops: if ps.mask_ops.is_empty() { None } else {
             Some(ps.mask_ops.iter().map(|op| format!("{}", op)).collect())
@@ -365,13 +365,13 @@ mod tests {
         app.pipeline_state.unwrapping_algorithm = 1; // laplacian
         app.pipeline_state.bf_algorithm = 3; // ismv
         app.pipeline_state.masking_algorithm = 0; // bet
-        app.pipeline_state.masking_input = 3; // phase-quality
+        app.pipeline_state.masking_input = 1; // magnitude (non-default)
         let cmd = build_command_string(&app);
         assert!(cmd.contains("--qsm-algorithm tkd"));
         assert!(cmd.contains("--unwrapping-algorithm laplacian"));
         assert!(cmd.contains("--bf-algorithm ismv"));
         assert!(cmd.contains("--masking-algorithm bet"));
-        assert!(cmd.contains("--masking-input phase-quality"));
+        assert!(cmd.contains("--masking-input magnitude"));
     }
 
     #[test]
@@ -412,7 +412,7 @@ mod tests {
         app.form.do_swi = true;
         app.form.do_t2starmap = true;
         app.form.do_r2starmap = true;
-        app.form.inhomogeneity_correction = true;
+        app.pipeline_state.inhomogeneity_correction = true;
         app.form.dry_run = true;
         app.form.debug = true;
         app.form.n_procs = "4".to_string();
@@ -545,7 +545,7 @@ mod tests {
         app.form.do_swi = true;
         app.form.do_t2starmap = true;
         app.form.do_r2starmap = true;
-        app.form.inhomogeneity_correction = true;
+        app.pipeline_state.inhomogeneity_correction = true;
         app.form.dry_run = true;
         app.form.debug = true;
         let args = build_run_args(&app).unwrap();

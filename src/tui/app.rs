@@ -332,7 +332,6 @@ pub enum PipelineRow {
         help: &'static str,
     },
     /// Checkbox toggle
-    #[allow(dead_code)]
     Toggle {
         label: &'static str,
         field: &'static str,
@@ -392,6 +391,7 @@ pub struct PipelineFormState {
 
     // Parameters (as Strings for text editing)
     pub phase_combination: usize, // 0 = mcpc3ds, 1 = linear_fit
+    pub inhomogeneity_correction: bool,
     pub mask_erosions: String,
     pub obliquity_threshold: String,
 
@@ -447,9 +447,10 @@ impl Default for PipelineFormState {
             unwrapping_algorithm: 0, // romeo
             bf_algorithm: 0, // vsharp
             masking_algorithm: 1, // threshold
-            masking_input: 0, // magnitude-first
+            masking_input: 3, // phase-quality
             qsm_reference: 0, // mean
             phase_combination: 0, // mcpc3ds
+            inhomogeneity_correction: false,
             mask_erosions: "2".to_string(),
             obliquity_threshold: "-1".to_string(),
             rts_delta: format!("{}", rts.delta),
@@ -474,7 +475,7 @@ impl Default for PipelineFormState {
             bet_subdivisions: format!("{}", bet.subdivisions),
             mask_ops: vec![
                 crate::pipeline::config::MaskOp::Input {
-                    source: crate::pipeline::config::MaskingInput::MagnitudeFirst,
+                    source: crate::pipeline::config::MaskingInput::PhaseQuality,
                 },
                 crate::pipeline::config::MaskOp::Threshold {
                     method: crate::pipeline::config::MaskThresholdMethod::Otsu,
@@ -528,6 +529,14 @@ impl PipelineFormState {
             label: "Masking Input", field: "masking_input",
             options: MASK_INPUT_OPTIONS, help: MASK_INPUT_HELP,
         });
+        // Inhomogeneity correction (only relevant for magnitude-based masking input)
+        let is_magnitude_input = self.masking_input != 3; // not phase-quality
+        if is_magnitude_input {
+            rows.push(PipelineRow::Toggle {
+                label: "Inhomog. Correction", field: "inhomogeneity_correction",
+                help: "Apply B1 field correction to magnitude before masking (improves mask quality for non-uniform data)",
+            });
+        }
         rows.push(PipelineRow::Param {
             label: "Mask Erosions", field: "mask_erosions",
             help: "Number of mask erosion iterations (space-separated for multiple passes)",
@@ -698,28 +707,16 @@ impl PipelineFormState {
                 } else {
                     // Threshold selected
                     self.expanded.remove("masking");
-                    self.mask_ops = vec![
-                        crate::pipeline::config::MaskOp::Input {
-                            source: match self.masking_input {
-                                1 => crate::pipeline::config::MaskingInput::Magnitude,
-                                2 => crate::pipeline::config::MaskingInput::MagnitudeLast,
-                                3 => crate::pipeline::config::MaskingInput::PhaseQuality,
-                                _ => crate::pipeline::config::MaskingInput::MagnitudeFirst,
-                            },
-                        },
-                        crate::pipeline::config::MaskOp::Threshold {
-                            method: crate::pipeline::config::MaskThresholdMethod::Otsu,
-                            value: None,
-                        },
-                        crate::pipeline::config::MaskOp::Dilate { iterations: 2 },
-                        crate::pipeline::config::MaskOp::FillHoles { max_size: 0 },
-                        crate::pipeline::config::MaskOp::Erode {
-                            iterations: self.mask_erosions.trim().parse().unwrap_or(2),
-                        },
-                    ];
+                    self.mask_ops = self.default_mask_ops_for_current_masking();
                 }
             }
-            "masking_input" => self.masking_input = val,
+            "masking_input" => {
+                self.masking_input = val;
+                // Rebuild mask_ops with new input source
+                if self.masking_algorithm != 0 {
+                    self.mask_ops = self.default_mask_ops_for_current_masking();
+                }
+            }
             "qsm_reference" => self.qsm_reference = val,
             "phase_combination" => self.phase_combination = val,
             _ => {}
@@ -727,18 +724,28 @@ impl PipelineFormState {
     }
 
     /// Get a toggle value by field name.
-    #[allow(dead_code)]
-    pub fn get_toggle(&self, _field: &str) -> bool {
-        false
+    pub fn get_toggle(&self, field: &str) -> bool {
+        match field {
+            "inhomogeneity_correction" => self.inhomogeneity_correction,
+            _ => false,
+        }
     }
 
     /// Toggle a boolean by field name.
-    #[allow(dead_code)]
-    pub fn toggle(&mut self, _field: &str) {
+    pub fn toggle(&mut self, field: &str) {
+        if field == "inhomogeneity_correction" {
+            self.inhomogeneity_correction = !self.inhomogeneity_correction;
+        }
     }
 
-    /// Return the default mask_ops for the current masking algorithm selection.
+    /// Return the default mask_ops for the current masking algorithm and input selections.
     pub fn default_mask_ops_for_current_masking(&self) -> Vec<crate::pipeline::config::MaskOp> {
+        let input_source = match self.masking_input {
+            1 => crate::pipeline::config::MaskingInput::Magnitude,
+            2 => crate::pipeline::config::MaskingInput::MagnitudeLast,
+            3 => crate::pipeline::config::MaskingInput::PhaseQuality,
+            _ => crate::pipeline::config::MaskingInput::MagnitudeFirst,
+        };
         if self.masking_algorithm == 0 {
             // BET
             vec![
@@ -752,9 +759,7 @@ impl PipelineFormState {
         } else {
             // Threshold
             vec![
-                crate::pipeline::config::MaskOp::Input {
-                    source: crate::pipeline::config::MaskingInput::MagnitudeFirst,
-                },
+                crate::pipeline::config::MaskOp::Input { source: input_source },
                 crate::pipeline::config::MaskOp::Threshold {
                     method: crate::pipeline::config::MaskThresholdMethod::Otsu,
                     value: None,
@@ -839,7 +844,6 @@ pub struct RunForm {
     pub do_swi: bool,
     pub do_t2starmap: bool,
     pub do_r2starmap: bool,
-    pub inhomogeneity_correction: bool,
     pub dry_run: bool,
     pub debug: bool,
     pub n_procs: String,
@@ -893,11 +897,6 @@ impl App {
                     label: "Compute R2* Map",
                     kind: FieldKind::Checkbox,
                     help: "Compute R2* decay rate map (requires 3+ echoes with magnitude)",
-                },
-                FieldDef {
-                    label: "Inhomogeneity Correction",
-                    kind: FieldKind::Checkbox,
-                    help: "Apply B1 field correction to magnitude before masking",
                 },
                 FieldDef {
                     label: "Dry Run",
@@ -1321,7 +1320,7 @@ impl App {
             (0, 0) => &self.form.bids_dir,
             (0, 1) => &self.form.output_dir,
             (0, 3) => &self.form.config_file,
-            (3, 6) => &self.form.n_procs,
+            (3, 5) => &self.form.n_procs,
             _ => "",
         }
     }
@@ -1353,9 +1352,8 @@ impl App {
             (3, 0) => self.form.do_swi,
             (3, 1) => self.form.do_t2starmap,
             (3, 2) => self.form.do_r2starmap,
-            (3, 3) => self.form.inhomogeneity_correction,
-            (3, 4) => self.form.dry_run,
-            (3, 5) => self.form.debug,
+            (3, 3) => self.form.dry_run,
+            (3, 4) => self.form.debug,
             _ => false,
         }
     }
@@ -1365,9 +1363,8 @@ impl App {
             (3, 0) => self.form.do_swi = !self.form.do_swi,
             (3, 1) => self.form.do_t2starmap = !self.form.do_t2starmap,
             (3, 2) => self.form.do_r2starmap = !self.form.do_r2starmap,
-            (3, 3) => self.form.inhomogeneity_correction = !self.form.inhomogeneity_correction,
-            (3, 4) => self.form.dry_run = !self.form.dry_run,
-            (3, 5) => self.form.debug = !self.form.debug,
+            (3, 3) => self.form.dry_run = !self.form.dry_run,
+            (3, 4) => self.form.debug = !self.form.debug,
             _ => {}
         }
     }
@@ -1378,7 +1375,7 @@ impl App {
             (0, 0) => &self.form.bids_dir,
             (0, 1) => &self.form.output_dir,
             (0, 3) => &self.form.config_file,
-            (3, 6) => &self.form.n_procs,
+            (3, 5) => &self.form.n_procs,
             _ => "",
         }
     }
@@ -1395,9 +1392,8 @@ impl App {
             (3, 0) => self.form.do_swi,
             (3, 1) => self.form.do_t2starmap,
             (3, 2) => self.form.do_r2starmap,
-            (3, 3) => self.form.inhomogeneity_correction,
-            (3, 4) => self.form.dry_run,
-            (3, 5) => self.form.debug,
+            (3, 3) => self.form.dry_run,
+            (3, 4) => self.form.debug,
             _ => false,
         }
     }
@@ -1435,7 +1431,7 @@ mod tests {
         app.active_tab = 2;
         assert_eq!(app.field_count(), 0); // Tab 2: Pipeline (custom rendering)
         app.active_tab = 3;
-        assert_eq!(app.field_count(), 7); // Tab 3: Execution
+        assert_eq!(app.field_count(), 6); // Tab 3: Execution
     }
 
     // --- Navigation ---
@@ -1680,15 +1676,14 @@ mod tests {
         let mut app = App::new();
         app.active_tab = 3;
 
-        // Toggle each checkbox
-        for field in 0..6 {
+        // Toggle each checkbox (5 checkboxes now, inhomog moved to Pipeline)
+        for field in 0..5 {
             app.active_field = field;
             app.handle_key(key(KeyCode::Enter));
         }
         assert!(app.form.do_swi);
         assert!(app.form.do_t2starmap);
         assert!(app.form.do_r2starmap);
-        assert!(app.form.inhomogeneity_correction);
         assert!(app.form.dry_run);
         assert!(app.form.debug);
     }
@@ -1748,7 +1743,7 @@ mod tests {
         let mut app = App::new();
         app.form.n_procs = "8".to_string();
         app.active_tab = 3;
-        app.active_field = 6;
+        app.active_field = 5;
         assert_eq!(app.text_value(), "8");
     }
 
