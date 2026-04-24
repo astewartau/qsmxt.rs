@@ -124,7 +124,12 @@ pub fn build_command_string(app: &App) -> String {
     push_if_changed(&mut parts, "--medi-percentage", &ps.medi_percentage, &defaults.medi_percentage);
     push_if_changed(&mut parts, "--medi-smv-radius", &ps.medi_smv_radius, &defaults.medi_smv_radius);
 
-    // SHARP
+    // BG removal params
+    push_if_changed(&mut parts, "--vsharp-threshold", &ps.vsharp_threshold, &defaults.vsharp_threshold);
+    push_if_changed(&mut parts, "--pdf-tol", &ps.pdf_tol, &defaults.pdf_tol);
+    push_if_changed(&mut parts, "--lbv-tol", &ps.lbv_tol, &defaults.lbv_tol);
+    push_if_changed(&mut parts, "--ismv-tol", &ps.ismv_tol, &defaults.ismv_tol);
+    push_if_changed(&mut parts, "--ismv-max-iter", &ps.ismv_max_iter, &defaults.ismv_max_iter);
     push_if_changed(&mut parts, "--sharp-threshold", &ps.sharp_threshold, &defaults.sharp_threshold);
 
     // TGV params
@@ -265,6 +270,11 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         medi_tol: parse_optional_f64(&ps.medi_tol),
         medi_percentage: parse_optional_f64(&ps.medi_percentage),
         medi_smv_radius: parse_optional_f64(&ps.medi_smv_radius),
+        vsharp_threshold: parse_optional_f64(&ps.vsharp_threshold),
+        pdf_tol: parse_optional_f64(&ps.pdf_tol),
+        lbv_tol: parse_optional_f64(&ps.lbv_tol),
+        ismv_tol: parse_optional_f64(&ps.ismv_tol),
+        ismv_max_iter: parse_optional_usize(&ps.ismv_max_iter),
         sharp_threshold: parse_optional_f64(&ps.sharp_threshold),
         n_procs: parse_optional_usize(&form.n_procs),
         do_swi: form.do_swi,

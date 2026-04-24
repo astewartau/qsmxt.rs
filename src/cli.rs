@@ -265,6 +265,26 @@ pub struct RunArgs {
     #[arg(long)]
     pub medi_smv_radius: Option<f64>,
 
+    /// V-SHARP deconvolution threshold
+    #[arg(long)]
+    pub vsharp_threshold: Option<f64>,
+
+    /// PDF tolerance
+    #[arg(long)]
+    pub pdf_tol: Option<f64>,
+
+    /// LBV tolerance
+    #[arg(long)]
+    pub lbv_tol: Option<f64>,
+
+    /// iSMV tolerance
+    #[arg(long)]
+    pub ismv_tol: Option<f64>,
+
+    /// iSMV max iterations
+    #[arg(long)]
+    pub ismv_max_iter: Option<usize>,
+
     /// SHARP threshold
     #[arg(long)]
     pub sharp_threshold: Option<f64>,

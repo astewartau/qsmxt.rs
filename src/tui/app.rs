@@ -441,6 +441,19 @@ pub struct PipelineFormState {
     pub medi_percentage: String,
     pub medi_smv_radius: String,
 
+    // V-SHARP
+    pub vsharp_threshold: String,
+
+    // PDF
+    pub pdf_tol: String,
+
+    // LBV
+    pub lbv_tol: String,
+
+    // iSMV
+    pub ismv_tol: String,
+    pub ismv_max_iter: String,
+
     // SHARP
     pub sharp_threshold: String,
 
@@ -507,6 +520,11 @@ impl Default for PipelineFormState {
             medi_tol: format!("{}", qsm_core::inversion::MediParams::default().tol),
             medi_percentage: format!("{}", qsm_core::inversion::MediParams::default().percentage),
             medi_smv_radius: format!("{}", qsm_core::inversion::MediParams::default().smv_radius),
+            vsharp_threshold: format!("{}", qsm_core::bgremove::VsharpParams::default().threshold),
+            pdf_tol: format!("{}", qsm_core::bgremove::PdfParams::default().tol),
+            lbv_tol: format!("{}", qsm_core::bgremove::LbvParams::default().tol),
+            ismv_tol: format!("{}", qsm_core::bgremove::IsmvParams::default().tol),
+            ismv_max_iter: format!("{}", qsm_core::bgremove::IsmvParams::default().max_iter),
             sharp_threshold: format!("{}", qsm_core::bgremove::SharpParams::default().threshold),
             bet_fractional_intensity: format!("{}", bet.fractional_intensity),
             bet_smoothness: format!("{}", bet.smoothness),
@@ -604,8 +622,24 @@ impl PipelineFormState {
                 label: "BG Removal", field: "bf_algorithm",
                 options: BF_OPTIONS, help: BF_HELP,
             });
-            if self.bf_algorithm == 4 { // SHARP
-                rows.push(PipelineRow::Param { label: "  Threshold", field: "sharp_threshold", help: "Deconvolution threshold for SHARP" });
+            match self.bf_algorithm {
+                0 => { // V-SHARP
+                    rows.push(PipelineRow::Param { label: "  Threshold", field: "vsharp_threshold", help: "Deconvolution threshold" });
+                }
+                1 => { // PDF
+                    rows.push(PipelineRow::Param { label: "  Tolerance", field: "pdf_tol", help: "Convergence tolerance" });
+                }
+                2 => { // LBV
+                    rows.push(PipelineRow::Param { label: "  Tolerance", field: "lbv_tol", help: "Convergence tolerance" });
+                }
+                3 => { // iSMV
+                    rows.push(PipelineRow::Param { label: "  Tolerance", field: "ismv_tol", help: "Convergence tolerance" });
+                    rows.push(PipelineRow::Param { label: "  Max Iter", field: "ismv_max_iter", help: "Maximum iterations" });
+                }
+                4 => { // SHARP
+                    rows.push(PipelineRow::Param { label: "  Threshold", field: "sharp_threshold", help: "Deconvolution threshold" });
+                }
+                _ => {}
             }
             rows.push(PipelineRow::Separator);
         }
@@ -707,6 +741,11 @@ impl PipelineFormState {
             "medi_tol" => &self.medi_tol,
             "medi_percentage" => &self.medi_percentage,
             "medi_smv_radius" => &self.medi_smv_radius,
+            "vsharp_threshold" => &self.vsharp_threshold,
+            "pdf_tol" => &self.pdf_tol,
+            "lbv_tol" => &self.lbv_tol,
+            "ismv_tol" => &self.ismv_tol,
+            "ismv_max_iter" => &self.ismv_max_iter,
             "sharp_threshold" => &self.sharp_threshold,
             "bet_fractional_intensity" => &self.bet_fractional_intensity,
             "bet_smoothness" => &self.bet_smoothness,
@@ -750,6 +789,11 @@ impl PipelineFormState {
             "medi_tol" => Some(&mut self.medi_tol),
             "medi_percentage" => Some(&mut self.medi_percentage),
             "medi_smv_radius" => Some(&mut self.medi_smv_radius),
+            "vsharp_threshold" => Some(&mut self.vsharp_threshold),
+            "pdf_tol" => Some(&mut self.pdf_tol),
+            "lbv_tol" => Some(&mut self.lbv_tol),
+            "ismv_tol" => Some(&mut self.ismv_tol),
+            "ismv_max_iter" => Some(&mut self.ismv_max_iter),
             "sharp_threshold" => Some(&mut self.sharp_threshold),
             "bet_fractional_intensity" => Some(&mut self.bet_fractional_intensity),
             "bet_smoothness" => Some(&mut self.bet_smoothness),

@@ -363,6 +363,24 @@ pub struct PipelineConfig {
     #[serde(default = "default_medi_smv_radius")]
     pub medi_smv_radius: f64,
 
+    // V-SHARP parameters
+    #[serde(default = "default_vsharp_threshold")]
+    pub vsharp_threshold: f64,
+
+    // PDF parameters
+    #[serde(default = "default_pdf_tol")]
+    pub pdf_tol: f64,
+
+    // LBV parameters
+    #[serde(default = "default_lbv_tol")]
+    pub lbv_tol: f64,
+
+    // iSMV parameters
+    #[serde(default = "default_ismv_tol")]
+    pub ismv_tol: f64,
+    #[serde(default = "default_ismv_max_iter")]
+    pub ismv_max_iter: usize,
+
     // SHARP parameters
     #[serde(default = "default_sharp_threshold")]
     pub sharp_threshold: f64,
@@ -414,6 +432,11 @@ fn default_medi_cg_tol() -> f64 { qsm_core::inversion::MediParams::default().cg_
 fn default_medi_tol() -> f64 { qsm_core::inversion::MediParams::default().tol }
 fn default_medi_percentage() -> f64 { qsm_core::inversion::MediParams::default().percentage }
 fn default_medi_smv_radius() -> f64 { qsm_core::inversion::MediParams::default().smv_radius }
+fn default_vsharp_threshold() -> f64 { qsm_core::bgremove::VsharpParams::default().threshold }
+fn default_pdf_tol() -> f64 { qsm_core::bgremove::PdfParams::default().tol }
+fn default_lbv_tol() -> f64 { qsm_core::bgremove::LbvParams::default().tol }
+fn default_ismv_tol() -> f64 { qsm_core::bgremove::IsmvParams::default().tol }
+fn default_ismv_max_iter() -> usize { qsm_core::bgremove::IsmvParams::default().max_iter }
 fn default_sharp_threshold() -> f64 { qsm_core::bgremove::SharpParams::default().threshold }
 fn default_tgv_iterations() -> usize { qsm_core::inversion::TgvParams::default().iterations }
 fn default_mask_ops() -> Vec<MaskOp> {
@@ -488,6 +511,11 @@ impl PipelineConfig {
                 medi_tol: default_medi_tol(),
                 medi_percentage: default_medi_percentage(),
                 medi_smv_radius: default_medi_smv_radius(),
+                vsharp_threshold: default_vsharp_threshold(),
+                pdf_tol: default_pdf_tol(),
+                lbv_tol: default_lbv_tol(),
+                ismv_tol: default_ismv_tol(),
+                ismv_max_iter: default_ismv_max_iter(),
                 sharp_threshold: default_sharp_threshold(),
                 tgv_iterations: default_tgv_iterations(),
                 tgv_alphas: default_tgv_alphas(),
@@ -695,6 +723,21 @@ impl PipelineConfig {
         if let Some(v) = args.medi_smv_radius {
             self.medi_smv_radius = v;
         }
+        if let Some(v) = args.vsharp_threshold {
+            self.vsharp_threshold = v;
+        }
+        if let Some(v) = args.pdf_tol {
+            self.pdf_tol = v;
+        }
+        if let Some(v) = args.lbv_tol {
+            self.lbv_tol = v;
+        }
+        if let Some(v) = args.ismv_tol {
+            self.ismv_tol = v;
+        }
+        if let Some(v) = args.ismv_max_iter {
+            self.ismv_max_iter = v;
+        }
         if let Some(v) = args.sharp_threshold {
             self.sharp_threshold = v;
         }
@@ -889,6 +932,11 @@ mod tests {
             medi_tol: None,
             medi_percentage: None,
             medi_smv_radius: None,
+            vsharp_threshold: None,
+            pdf_tol: None,
+            lbv_tol: None,
+            ismv_tol: None,
+            ismv_max_iter: None,
             sharp_threshold: None,
             tgv_iterations: None,
             tgv_erosions: None,

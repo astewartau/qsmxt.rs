@@ -473,41 +473,41 @@ pub fn run_pipeline_cached(
                     let mut radii = Vec::new();
                     let mut r = 18.0 * min_vox;
                     while r >= 2.0 * max_vox { radii.push(r); r -= 2.0 * max_vox; }
-                    log::info!("Background removal (V-SHARP, {} radii, threshold=0.05)", radii.len());
+                    log::info!("Background removal (V-SHARP, {} radii, threshold={})", radii.len(), config.vsharp_threshold);
                     let (prog, _) = iter_progress_bar("V-SHARP");
                     qsm_core::bgremove::vsharp_with_progress(
                         &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
-                        &radii, 0.05, prog,
+                        &radii, config.vsharp_threshold, prog,
                     )
                 }
                 Some(BfAlgorithm::Pdf) => {
-                    // Cap at 100 iterations (sufficient for convergence, validated in QSM.rs CI)
-                    let max_iter = 100;
-                    log::info!("Background removal (PDF, tol=1e-5, max_iter={}, B0=[{:.2},{:.2},{:.2}])",
-                        max_iter, bdir.0, bdir.1, bdir.2);
+                    let max_iter = ((nx * ny * nz) as f64).sqrt().ceil() as usize;
+                    log::info!("Background removal (PDF, tol={:.0e}, max_iter={}, B0=[{:.2},{:.2},{:.2}])",
+                        config.pdf_tol, max_iter, bdir.0, bdir.1, bdir.2);
                     let (prog, _) = iter_progress_bar("PDF");
                     let lf = qsm_core::bgremove::pdf_with_progress(
                         &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
-                        bdir, 1e-5, max_iter, prog,
+                        bdir, config.pdf_tol, max_iter, prog,
                     );
                     (lf, mask.clone())
                 }
                 Some(BfAlgorithm::Lbv) => {
                     let max_iter = (3 * nx.max(ny).max(nz)).max(500);
-                    log::info!("Background removal (LBV, tol=1e-6, max_iter={})", max_iter);
+                    log::info!("Background removal (LBV, tol={:.0e}, max_iter={})", config.lbv_tol, max_iter);
                     let (prog, _) = iter_progress_bar("LBV");
                     qsm_core::bgremove::lbv_with_progress(
                         &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
-                        1e-6, max_iter, prog,
+                        config.lbv_tol, max_iter, prog,
                     )
                 }
                 Some(BfAlgorithm::Ismv) => {
                     let radius = 2.0 * vsx.max(vsy).max(vsz);
-                    log::info!("Background removal (iSMV, radius={:.1}, tol=1e-3, max_iter=500)", radius);
+                    log::info!("Background removal (iSMV, radius={:.1}, tol={:.0e}, max_iter={})",
+                        radius, config.ismv_tol, config.ismv_max_iter);
                     let (prog, _) = iter_progress_bar("iSMV");
                     qsm_core::bgremove::ismv_with_progress(
                         &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
-                        radius, 1e-3, 500, prog,
+                        radius, config.ismv_tol, config.ismv_max_iter, prog,
                     )
                 }
                 Some(BfAlgorithm::Sharp) => {
