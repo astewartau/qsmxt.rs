@@ -15,11 +15,12 @@ pub fn execute(args: InvertArgs) -> crate::Result<()> {
     let chi: Vec<f64> = match args.algorithm {
         QsmAlgorithmArg::Rts => qsm_core::inversion::rts(
             &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
-            bdir, args.rts_delta, args.rts_mu, 10.0, args.rts_tol, 20, 4,
+            bdir, args.rts_delta, args.rts_mu, args.rts_rho,
+            args.rts_tol, args.rts_max_iter, args.rts_lsmr_iter,
         ),
         QsmAlgorithmArg::Tv => qsm_core::inversion::tv_admm(
             &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
-            bdir, args.tv_lambda, 0.1, 1e-3, 250,
+            bdir, args.tv_lambda, args.tv_rho, args.tv_tol, args.tv_max_iter,
         ),
         QsmAlgorithmArg::Tkd => qsm_core::inversion::tkd(
             &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,

@@ -294,10 +294,22 @@ pub struct PipelineConfig {
     pub rts_mu: f64,
     #[serde(default = "default_rts_tol")]
     pub rts_tol: f64,
+    #[serde(default = "default_rts_rho")]
+    pub rts_rho: f64,
+    #[serde(default = "default_rts_max_iter")]
+    pub rts_max_iter: usize,
+    #[serde(default = "default_rts_lsmr_iter")]
+    pub rts_lsmr_iter: usize,
 
     // TV parameters
     #[serde(default = "default_tv_lambda")]
     pub tv_lambda: f64,
+    #[serde(default = "default_tv_rho")]
+    pub tv_rho: f64,
+    #[serde(default = "default_tv_tol")]
+    pub tv_tol: f64,
+    #[serde(default = "default_tv_max_iter")]
+    pub tv_max_iter: usize,
 
     // TKD parameters
     #[serde(default = "default_tkd_threshold")]
@@ -320,14 +332,20 @@ fn default_bf() -> Option<BfAlgorithm> { Some(BfAlgorithm::Vsharp) }
 fn default_masking() -> MaskingAlgorithm { MaskingAlgorithm::Threshold }
 fn default_masking_input() -> MaskingInput { MaskingInput::PhaseQuality }
 fn default_reference() -> QsmReference { QsmReference::Mean }
-fn default_bet_fi() -> f64 { 0.5 }
+fn default_bet_fi() -> f64 { qsm_core::bet::BetParams::default().fractional_intensity }
 fn default_erosions() -> Vec<usize> { vec![2] }
-fn default_rts_delta() -> f64 { 0.15 }
-fn default_rts_mu() -> f64 { 1e5 }
-fn default_rts_tol() -> f64 { 1e-4 }
-fn default_tv_lambda() -> f64 { 1e-3 }
-fn default_tkd_threshold() -> f64 { 0.15 }
-fn default_tgv_iterations() -> usize { 1000 }
+fn default_rts_delta() -> f64 { qsm_core::inversion::RtsParams::default().delta }
+fn default_rts_mu() -> f64 { qsm_core::inversion::RtsParams::default().mu }
+fn default_rts_tol() -> f64 { qsm_core::inversion::RtsParams::default().tol }
+fn default_rts_rho() -> f64 { qsm_core::inversion::RtsParams::default().rho }
+fn default_rts_max_iter() -> usize { qsm_core::inversion::RtsParams::default().max_iter }
+fn default_rts_lsmr_iter() -> usize { qsm_core::inversion::RtsParams::default().lsmr_iter }
+fn default_tv_lambda() -> f64 { qsm_core::inversion::TvParams::default().lambda }
+fn default_tv_rho() -> f64 { qsm_core::inversion::TvParams::default().rho }
+fn default_tv_tol() -> f64 { qsm_core::inversion::TvParams::default().tol }
+fn default_tv_max_iter() -> usize { qsm_core::inversion::TvParams::default().max_iter }
+fn default_tkd_threshold() -> f64 { qsm_core::inversion::TkdParams::default().threshold }
+fn default_tgv_iterations() -> usize { qsm_core::inversion::TgvParams::default().iterations }
 fn default_mask_ops() -> Vec<MaskOp> {
     vec![
         MaskOp::Input { source: MaskingInput::PhaseQuality },
@@ -338,8 +356,11 @@ fn default_mask_ops() -> Vec<MaskOp> {
     ]
 }
 fn default_obliquity_threshold() -> f64 { -1.0 }
-fn default_tgv_alphas() -> [f64; 2] { [0.0015, 0.0005] }
-fn default_tgv_erosions() -> usize { 3 }
+fn default_tgv_alphas() -> [f64; 2] {
+    let p = qsm_core::inversion::TgvParams::default();
+    [p.alpha1 as f64, p.alpha0 as f64]
+}
+fn default_tgv_erosions() -> usize { qsm_core::inversion::TgvParams::default().erosions }
 
 impl Default for PipelineConfig {
     fn default() -> Self {
@@ -367,16 +388,22 @@ impl PipelineConfig {
                 masking_input: MaskingInput::PhaseQuality,
                 combine_phase: true,
                 qsm_reference: QsmReference::Mean,
-                bet_fractional_intensity: 0.5,
+                bet_fractional_intensity: default_bet_fi(),
                 mask_erosions: vec![2],
-                rts_delta: 0.15,
-                rts_mu: 1e5,
-                rts_tol: 1e-4,
-                tv_lambda: 1e-3,
-                tkd_threshold: 0.15,
-                tgv_iterations: 1000,
-                tgv_alphas: [0.0015, 0.0005],
-                tgv_erosions: 3,
+                rts_delta: default_rts_delta(),
+                rts_mu: default_rts_mu(),
+                rts_tol: default_rts_tol(),
+                rts_rho: default_rts_rho(),
+                rts_max_iter: default_rts_max_iter(),
+                rts_lsmr_iter: default_rts_lsmr_iter(),
+                tv_lambda: default_tv_lambda(),
+                tv_rho: default_tv_rho(),
+                tv_tol: default_tv_tol(),
+                tv_max_iter: default_tv_max_iter(),
+                tkd_threshold: default_tkd_threshold(),
+                tgv_iterations: default_tgv_iterations(),
+                tgv_alphas: default_tgv_alphas(),
+                tgv_erosions: default_tgv_erosions(),
             },
             cli::Preset::Epi => Self {
                 description: "3D-EPI images (human brain)".to_string(),
@@ -489,8 +516,26 @@ impl PipelineConfig {
         if let Some(v) = args.rts_tol {
             self.rts_tol = v;
         }
+        if let Some(v) = args.rts_rho {
+            self.rts_rho = v;
+        }
+        if let Some(v) = args.rts_max_iter {
+            self.rts_max_iter = v;
+        }
+        if let Some(v) = args.rts_lsmr_iter {
+            self.rts_lsmr_iter = v;
+        }
         if let Some(v) = args.tv_lambda {
             self.tv_lambda = v;
+        }
+        if let Some(v) = args.tv_rho {
+            self.tv_rho = v;
+        }
+        if let Some(v) = args.tv_tol {
+            self.tv_tol = v;
+        }
+        if let Some(v) = args.tv_max_iter {
+            self.tv_max_iter = v;
         }
         if let Some(v) = args.tkd_threshold {
             self.tkd_threshold = v;
@@ -658,7 +703,13 @@ mod tests {
             rts_delta: None,
             rts_mu: None,
             rts_tol: None,
+            rts_rho: None,
+            rts_max_iter: None,
+            rts_lsmr_iter: None,
             tv_lambda: None,
+            tv_rho: None,
+            tv_tol: None,
+            tv_max_iter: None,
             tkd_threshold: None,
             tgv_iterations: None,
             tgv_erosions: None,

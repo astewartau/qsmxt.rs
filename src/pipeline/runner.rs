@@ -535,22 +535,24 @@ pub fn run_pipeline_cached(
 
             let chi = match config.qsm_algorithm {
                 QsmAlgorithm::Rts => {
-                    log::info!("Dipole inversion (RTS, delta={}, mu={:.0e}, tol={:.0e}, max_iter=20)",
-                        config.rts_delta, config.rts_mu, config.rts_tol);
+                    log::info!("Dipole inversion (RTS, delta={}, mu={:.0e}, tol={:.0e}, max_iter={})",
+                        config.rts_delta, config.rts_mu, config.rts_tol, config.rts_max_iter);
                     let (prog, _) = iter_progress_bar("RTS");
                     qsm_core::inversion::rts_with_progress(
                         &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
-                        bdir, config.rts_delta, config.rts_mu, 10.0, config.rts_tol, 20, 4,
+                        bdir, config.rts_delta, config.rts_mu, config.rts_rho,
+                        config.rts_tol, config.rts_max_iter, config.rts_lsmr_iter,
                         prog,
                     )
                 }
                 QsmAlgorithm::Tv => {
-                    log::info!("Dipole inversion (TV-ADMM, lambda={:.0e}, max_iter=250)", config.tv_lambda);
+                    log::info!("Dipole inversion (TV-ADMM, lambda={:.0e}, max_iter={})",
+                        config.tv_lambda, config.tv_max_iter);
                     let (prog, _) = iter_progress_bar("TV");
                     qsm_core::inversion::tv_admm_with_progress(
                         &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
-                        bdir, config.tv_lambda, 0.1, 1e-3, 250,
-                        prog,
+                        bdir, config.tv_lambda, config.tv_rho, config.tv_tol,
+                        config.tv_max_iter, prog,
                     )
                 }
                 QsmAlgorithm::Tkd => {

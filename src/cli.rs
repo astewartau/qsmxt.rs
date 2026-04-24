@@ -145,6 +145,18 @@ pub struct RunArgs {
     #[arg(long)]
     pub rts_tol: Option<f64>,
 
+    /// RTS rho (ADMM penalty)
+    #[arg(long)]
+    pub rts_rho: Option<f64>,
+
+    /// RTS max iterations
+    #[arg(long)]
+    pub rts_max_iter: Option<usize>,
+
+    /// RTS LSMR iterations
+    #[arg(long)]
+    pub rts_lsmr_iter: Option<usize>,
+
     /// TGV iterations
     #[arg(long)]
     pub tgv_iterations: Option<usize>,
@@ -156,6 +168,18 @@ pub struct RunArgs {
     /// TV lambda parameter
     #[arg(long)]
     pub tv_lambda: Option<f64>,
+
+    /// TV rho (ADMM penalty)
+    #[arg(long)]
+    pub tv_rho: Option<f64>,
+
+    /// TV tolerance
+    #[arg(long)]
+    pub tv_tol: Option<f64>,
+
+    /// TV max iterations
+    #[arg(long)]
+    pub tv_max_iter: Option<usize>,
 
     /// TKD threshold
     #[arg(long)]
@@ -416,12 +440,24 @@ pub struct InvertArgs {
     pub rts_delta: f64,
     #[arg(long, default_value_t = 1e5)]
     pub rts_mu: f64,
-    #[arg(long, default_value_t = 1e-4)]
+    #[arg(long, default_value_t = 0.01)]
     pub rts_tol: f64,
+    #[arg(long, default_value_t = 10.0)]
+    pub rts_rho: f64,
+    #[arg(long, default_value_t = 20)]
+    pub rts_max_iter: usize,
+    #[arg(long, default_value_t = 4)]
+    pub rts_lsmr_iter: usize,
 
     // TV parameters
-    #[arg(long, default_value_t = 1e-3)]
+    #[arg(long, default_value_t = 0.0002)]
     pub tv_lambda: f64,
+    #[arg(long, default_value_t = 0.02)]
+    pub tv_rho: f64,
+    #[arg(long, default_value_t = 0.001)]
+    pub tv_tol: f64,
+    #[arg(long, default_value_t = 250)]
+    pub tv_max_iter: usize,
 
     // TKD parameters
     #[arg(long, default_value_t = 0.15)]
