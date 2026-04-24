@@ -71,9 +71,10 @@ pub fn build_command_string(app: &App) -> String {
         parts.push(format!("--qsm-reference {}", QSM_REF_OPTIONS[ps.qsm_reference]));
     }
 
-    // Boolean toggles (only if changed from default)
-    if ps.combine_phase != defaults.combine_phase {
-        parts.push(format!("--combine-phase {}", ps.combine_phase));
+    // Phase combination (only if changed from default)
+    if ps.phase_combination != defaults.phase_combination {
+        let val = if ps.phase_combination == 0 { "true" } else { "false" };
+        parts.push(format!("--combine-phase {}", val));
     }
 
     // Parameters (only if changed from default)
@@ -198,7 +199,7 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         bf_algorithm: Some(bf_options[ps.bf_algorithm]),
         masking_algorithm: Some(mask_algo_options[ps.masking_algorithm]),
         masking_input: Some(mask_input_options[ps.masking_input]),
-        combine_phase: if ps.combine_phase { Some(true) } else { None },
+        combine_phase: Some(ps.phase_combination == 0), // 0=mcpc3ds (true), 1=linear_fit (false)
         bet_fractional_intensity: parse_optional_f64(&ps.bet_fractional_intensity),
         bet_smoothness: parse_optional_f64(&ps.bet_smoothness),
         bet_gradient_threshold: parse_optional_f64(&ps.bet_gradient_threshold),
@@ -398,11 +399,11 @@ mod tests {
     }
 
     #[test]
-    fn test_command_string_combine_phase() {
+    fn test_command_string_phase_combination() {
         let mut app = default_app();
-        app.pipeline_state.combine_phase = true;
+        app.pipeline_state.phase_combination = 1; // linear-fit (non-default)
         let cmd = build_command_string(&app);
-        assert!(cmd.contains("--combine-phase true"));
+        assert!(cmd.contains("--combine-phase false"));
     }
 
     #[test]
@@ -547,7 +548,6 @@ mod tests {
         app.form.inhomogeneity_correction = true;
         app.form.dry_run = true;
         app.form.debug = true;
-        app.pipeline_state.combine_phase = true;
         let args = build_run_args(&app).unwrap();
         assert!(args.do_swi);
         assert!(args.do_t2starmap);
@@ -555,17 +555,17 @@ mod tests {
         assert!(args.inhomogeneity_correction);
         assert!(args.dry);
         assert!(args.debug);
-        assert_eq!(args.combine_phase, Some(true));
+        assert_eq!(args.combine_phase, Some(true)); // default mcpc3ds
     }
 
     #[test]
-    fn test_build_run_args_combine_phase_false() {
+    fn test_build_run_args_phase_combination_linear_fit() {
         let mut app = default_app();
         app.form.bids_dir = "/b".to_string();
         app.form.output_dir = "/o".to_string();
-        app.pipeline_state.combine_phase = false;
+        app.pipeline_state.phase_combination = 1; // linear_fit
         let args = build_run_args(&app).unwrap();
-        assert_eq!(args.combine_phase, None);
+        assert_eq!(args.combine_phase, Some(false));
     }
 
     #[test]

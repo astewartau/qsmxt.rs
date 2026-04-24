@@ -332,6 +332,7 @@ pub enum PipelineRow {
         help: &'static str,
     },
     /// Checkbox toggle
+    #[allow(dead_code)]
     Toggle {
         label: &'static str,
         field: &'static str,
@@ -369,6 +370,10 @@ const MASK_INPUT_HELP: &[&str] = &[
     "Last echo magnitude image",
     "ROMEO phase quality map (spatial phase coherence)",
 ];
+const PHASE_COMBO_HELP: &[&str] = &[
+    "MCPC-3D-S: combine wrapped phase directly via phase offset estimation",
+    "Linear fit: unwrap each echo, then magnitude-weighted linear fit of field vs TE",
+];
 const QSM_REF_HELP: &[&str] = &[
     "Subtract mean susceptibility within mask (recommended)",
     "No referencing (raw susceptibility values)",
@@ -386,7 +391,7 @@ pub struct PipelineFormState {
     pub qsm_reference: usize,
 
     // Parameters (as Strings for text editing)
-    pub combine_phase: bool,
+    pub phase_combination: usize, // 0 = mcpc3ds, 1 = linear_fit
     pub mask_erosions: String,
     pub obliquity_threshold: String,
 
@@ -444,7 +449,7 @@ impl Default for PipelineFormState {
             masking_algorithm: 1, // threshold
             masking_input: 0, // magnitude-first
             qsm_reference: 0, // mean
-            combine_phase: false,
+            phase_combination: 0, // mcpc3ds
             mask_erosions: "2".to_string(),
             obliquity_threshold: "-1".to_string(),
             rts_delta: format!("{}", rts.delta),
@@ -492,6 +497,7 @@ pub const UNWRAP_OPTIONS: &[&str] = &["romeo", "laplacian"];
 pub const BF_OPTIONS: &[&str] = &["vsharp", "pdf", "lbv", "ismv"];
 pub const MASK_ALGO_OPTIONS: &[&str] = &["bet", "threshold"];
 pub const MASK_INPUT_OPTIONS: &[&str] = &["magnitude-first", "magnitude", "magnitude-last", "phase-quality"];
+pub const PHASE_COMBO_OPTIONS: &[&str] = &["mcpc3ds", "linear-fit"];
 pub const QSM_REF_OPTIONS: &[&str] = &["mean", "none"];
 
 impl PipelineFormState {
@@ -502,9 +508,9 @@ impl PipelineFormState {
         let is_bet = self.masking_algorithm == 0;
 
         // General settings first
-        rows.push(PipelineRow::Toggle {
-            label: "Combine Phase", field: "combine_phase",
-            help: "Combine multi-echo phase data using MCPC-3D-S before processing",
+        rows.push(PipelineRow::AlgoSelect {
+            label: "Phase Combination", field: "phase_combination",
+            options: PHASE_COMBO_OPTIONS, help: PHASE_COMBO_HELP,
         });
         rows.push(PipelineRow::Param {
             label: "Obliquity", field: "obliquity_threshold",
@@ -664,6 +670,7 @@ impl PipelineFormState {
             "masking_algorithm" => self.masking_algorithm,
             "masking_input" => self.masking_input,
             "qsm_reference" => self.qsm_reference,
+            "phase_combination" => self.phase_combination,
             _ => 0,
         }
     }
@@ -714,21 +721,20 @@ impl PipelineFormState {
             }
             "masking_input" => self.masking_input = val,
             "qsm_reference" => self.qsm_reference = val,
+            "phase_combination" => self.phase_combination = val,
             _ => {}
         }
     }
 
     /// Get a toggle value by field name.
-    pub fn get_toggle(&self, field: &str) -> bool {
-        match field {
-            "combine_phase" => self.combine_phase,
-            _ => false,
-        }
+    #[allow(dead_code)]
+    pub fn get_toggle(&self, _field: &str) -> bool {
+        false
     }
 
     /// Toggle a boolean by field name.
-    pub fn toggle(&mut self, field: &str) {
-        if field == "combine_phase" { self.combine_phase = !self.combine_phase }
+    #[allow(dead_code)]
+    pub fn toggle(&mut self, _field: &str) {
     }
 
     /// Return the default mask_ops for the current masking algorithm selection.
@@ -1688,11 +1694,11 @@ mod tests {
     }
 
     #[test]
-    fn test_pipeline_combine_phase() {
+    fn test_pipeline_phase_combination() {
         let mut app = App::new();
-        assert!(!app.pipeline_state.combine_phase);
-        app.pipeline_state.toggle("combine_phase");
-        assert!(app.pipeline_state.combine_phase);
+        assert_eq!(app.pipeline_state.phase_combination, 0); // mcpc3ds
+        app.pipeline_state.set_select("phase_combination", 1);
+        assert_eq!(app.pipeline_state.phase_combination, 1); // linear_fit
     }
 
     // --- F5 triggers run ---
@@ -1819,7 +1825,7 @@ mod tests {
         let ps = super::PipelineFormState::default();
         assert_eq!(ps.qsm_algorithm, 0);
         assert_eq!(ps.masking_algorithm, 1); // threshold
-        assert!(!ps.combine_phase);
+        assert_eq!(ps.phase_combination, 0); // mcpc3ds
         assert!(!ps.mask_ops.is_empty()); // default threshold pipeline
     }
 
@@ -1861,12 +1867,7 @@ mod tests {
         }
         assert_eq!(ps.get_param("rts_delta"), "0.25");
 
-        // Test toggle
-        assert!(!ps.combine_phase);
-        ps.toggle("combine_phase");
-        assert!(ps.combine_phase);
-
-        // Test select
+        // Test select (phase_combination)
         ps.set_select("qsm_algorithm", 2);
         assert_eq!(ps.get_select("qsm_algorithm"), 2);
     }
