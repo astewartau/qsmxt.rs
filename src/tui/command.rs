@@ -110,8 +110,9 @@ pub fn build_command_string(app: &App) -> String {
     push_if_changed(&mut parts, "--tgv-alpha1", &ps.tgv_alpha1, &defaults.tgv_alpha1);
     push_if_changed(&mut parts, "--tgv-alpha0", &ps.tgv_alpha0, &defaults.tgv_alpha0);
 
-    // Mask ops (only if changed from default)
-    if ps.mask_ops != defaults.mask_ops {
+    // Mask ops (only if changed from the default for the selected masking algorithm)
+    let default_ops = ps.default_mask_ops_for_current_masking();
+    if ps.mask_ops != default_ops {
         for op in &ps.mask_ops {
             parts.push(format!("--mask-op {}", op));
         }

@@ -731,6 +731,35 @@ impl PipelineFormState {
         if field == "combine_phase" { self.combine_phase = !self.combine_phase }
     }
 
+    /// Return the default mask_ops for the current masking algorithm selection.
+    pub fn default_mask_ops_for_current_masking(&self) -> Vec<crate::pipeline::config::MaskOp> {
+        if self.masking_algorithm == 0 {
+            // BET
+            vec![
+                crate::pipeline::config::MaskOp::Bet {
+                    fractional_intensity: qsm_core::bet::BetParams::default().fractional_intensity,
+                },
+                crate::pipeline::config::MaskOp::Erode {
+                    iterations: 2,
+                },
+            ]
+        } else {
+            // Threshold
+            vec![
+                crate::pipeline::config::MaskOp::Input {
+                    source: crate::pipeline::config::MaskingInput::MagnitudeFirst,
+                },
+                crate::pipeline::config::MaskOp::Threshold {
+                    method: crate::pipeline::config::MaskThresholdMethod::Otsu,
+                    value: None,
+                },
+                crate::pipeline::config::MaskOp::Dilate { iterations: 2 },
+                crate::pipeline::config::MaskOp::FillHoles { max_size: 0 },
+                crate::pipeline::config::MaskOp::Erode { iterations: 2 },
+            ]
+        }
+    }
+
     /// Get the field name of the currently focused row.
     pub fn focused_field_name(&self) -> Option<String> {
         let rows = self.visible_rows();
