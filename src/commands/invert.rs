@@ -26,6 +26,32 @@ pub fn execute(args: InvertArgs) -> crate::Result<()> {
             &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
             bdir, args.tkd_threshold,
         ),
+        QsmAlgorithmArg::Tikhonov => {
+            let p = qsm_core::inversion::TikhonovParams::default();
+            qsm_core::inversion::tikhonov(
+                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
+                bdir, p.lambda, p.reg,
+            )
+        }
+        QsmAlgorithmArg::Nltv => {
+            let p = qsm_core::inversion::NltvParams::default();
+            qsm_core::inversion::nltv(
+                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
+                bdir, p.lambda, p.mu, p.tol, p.max_iter, p.newton_iter,
+            )
+        }
+        QsmAlgorithmArg::Medi => {
+            let p = qsm_core::inversion::MediParams::default();
+            let n_std = vec![1.0f64; field_nifti.data.len()];
+            let magnitude = vec![1.0f64; field_nifti.data.len()];
+            qsm_core::inversion::medi_l1(
+                &field_nifti.data, &n_std, &magnitude, &mask,
+                nx, ny, nz, vsx, vsy, vsz,
+                p.lambda, bdir, p.merit, p.smv, p.smv_radius,
+                p.data_weighting, p.percentage, p.cg_tol, p.cg_max_iter,
+                p.max_iter, p.tol,
+            )
+        }
         QsmAlgorithmArg::Tgv => {
             let fs = args.field_strength.ok_or_else(|| {
                 QsmxtError::Config("--field-strength required for TGV".to_string())

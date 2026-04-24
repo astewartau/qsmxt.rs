@@ -130,6 +130,9 @@ pub enum QsmAlgorithm {
     Tv,
     Tkd,
     Tgv,
+    Tikhonov,
+    Nltv,
+    Medi,
 }
 
 impl fmt::Display for QsmAlgorithm {
@@ -139,6 +142,9 @@ impl fmt::Display for QsmAlgorithm {
             Self::Tv => write!(f, "tv"),
             Self::Tkd => write!(f, "tkd"),
             Self::Tgv => write!(f, "tgv"),
+            Self::Tikhonov => write!(f, "tikhonov"),
+            Self::Nltv => write!(f, "nltv"),
+            Self::Medi => write!(f, "medi"),
         }
     }
 }
@@ -166,6 +172,7 @@ pub enum BfAlgorithm {
     Pdf,
     Lbv,
     Ismv,
+    Sharp,
 }
 
 impl fmt::Display for BfAlgorithm {
@@ -175,6 +182,7 @@ impl fmt::Display for BfAlgorithm {
             Self::Pdf => write!(f, "pdf"),
             Self::Lbv => write!(f, "lbv"),
             Self::Ismv => write!(f, "ismv"),
+            Self::Sharp => write!(f, "sharp"),
         }
     }
 }
@@ -484,6 +492,9 @@ impl PipelineConfig {
                 cli::QsmAlgorithmArg::Tv => QsmAlgorithm::Tv,
                 cli::QsmAlgorithmArg::Tkd => QsmAlgorithm::Tkd,
                 cli::QsmAlgorithmArg::Tgv => QsmAlgorithm::Tgv,
+                cli::QsmAlgorithmArg::Tikhonov => QsmAlgorithm::Tikhonov,
+                cli::QsmAlgorithmArg::Nltv => QsmAlgorithm::Nltv,
+                cli::QsmAlgorithmArg::Medi => QsmAlgorithm::Medi,
             };
         }
         if let Some(a) = args.unwrapping_algorithm {
@@ -498,6 +509,7 @@ impl PipelineConfig {
                 cli::BfAlgorithmArg::Pdf => BfAlgorithm::Pdf,
                 cli::BfAlgorithmArg::Lbv => BfAlgorithm::Lbv,
                 cli::BfAlgorithmArg::Ismv => BfAlgorithm::Ismv,
+                cli::BfAlgorithmArg::Sharp => BfAlgorithm::Sharp,
             });
         }
         if let Some(a) = args.masking_algorithm {

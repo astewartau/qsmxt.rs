@@ -696,6 +696,9 @@ pub enum QsmAlgorithmArg {
     Tv,
     Tkd,
     Tgv,
+    Tikhonov,
+    Nltv,
+    Medi,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
@@ -710,6 +713,7 @@ pub enum BfAlgorithmArg {
     Pdf,
     Lbv,
     Ismv,
+    Sharp,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]

@@ -348,6 +348,9 @@ const QSM_ALGO_HELP: &[&str] = &[
     "Total Variation ADMM (TV) — https://doi.org/10.1002/mrm.25029",
     "Truncated K-space Division (TKD) — https://doi.org/10.1002/mrm.22135",
     "Total Generalized Variation (TGV, single-step) — https://doi.org/10.1016/j.neuroimage.2015.02.041",
+    "Tikhonov L2 regularization (closed-form) — https://doi.org/10.1002/jmri.24365",
+    "Nonlinear Total Variation (NLTV) — https://doi.org/10.1016/j.neuroimage.2017.11.018",
+    "Morphology Enabled Dipole Inversion (MEDI) — https://doi.org/10.1002/mrm.22816",
 ];
 const UNWRAP_HELP: &[&str] = &[
     "ROMEO region-growing unwrapping — https://doi.org/10.1002/mrm.28563",
@@ -358,6 +361,7 @@ const BF_HELP: &[&str] = &[
     "Projection onto Dipole Fields (PDF) — https://doi.org/10.1002/nbm.1670",
     "Laplacian Boundary Value (LBV) — https://doi.org/10.1002/nbm.3064",
     "Iterative Spherical Mean Value (iSMV) — https://doi.org/10.1002/mrm.24998",
+    "SHARP (Sophisticated Harmonic Artifact Reduction) — https://doi.org/10.1016/j.neuroimage.2010.10.070",
 ];
 const MASK_ALGO_HELP: &[&str] = &[
     "Brain Extraction Tool (BET) — Smith 2002, https://doi.org/10.1002/hbm.10062",
@@ -493,9 +497,9 @@ impl Default for PipelineFormState {
     }
 }
 
-pub const QSM_ALGO_OPTIONS: &[&str] = &["rts", "tv", "tkd", "tgv"];
+pub const QSM_ALGO_OPTIONS: &[&str] = &["rts", "tv", "tkd", "tgv", "tikhonov", "nltv", "medi"];
 pub const UNWRAP_OPTIONS: &[&str] = &["romeo", "laplacian"];
-pub const BF_OPTIONS: &[&str] = &["vsharp", "pdf", "lbv", "ismv"];
+pub const BF_OPTIONS: &[&str] = &["vsharp", "pdf", "lbv", "ismv", "sharp"];
 pub const MASK_ALGO_OPTIONS: &[&str] = &["bet", "threshold"];
 pub const MASK_INPUT_OPTIONS: &[&str] = &["magnitude-first", "magnitude", "magnitude-last", "phase-quality"];
 pub const PHASE_COMBO_OPTIONS: &[&str] = &["mcpc3ds", "linear-fit"];

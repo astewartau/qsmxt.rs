@@ -24,6 +24,9 @@ pub fn execute(args: BgremoveArgs) -> crate::Result<()> {
         BfAlgorithmArg::Ismv => {
             qsm_core::bgremove::ismv_default(&field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz)
         }
+        BfAlgorithmArg::Sharp => {
+            qsm_core::bgremove::sharp_default(&field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz)
+        }
     };
 
     save_nifti(&args.output, &local_field, &field_nifti)?;

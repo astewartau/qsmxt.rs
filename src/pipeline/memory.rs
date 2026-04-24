@@ -103,6 +103,8 @@ fn estimate_standard_pipeline(n: usize, n_echoes: usize, config: &PipelineConfig
         Some(BfAlgorithm::Lbv) => 26 * n,
         // iSMV: kernel + kernel_fft + masks + field copies + per-iteration FFT
         Some(BfAlgorithm::Ismv) => 96 * n,
+        // SHARP: similar to V-SHARP but single radius
+        Some(BfAlgorithm::Sharp) => 60 * n,
         None => 0,
     };
 
@@ -112,10 +114,16 @@ fn estimate_standard_pipeline(n: usize, n_echoes: usize, config: &PipelineConfig
     let inv_temp = match config.qsm_algorithm {
         // TKD: dipole kernel + inverse + complex field + output
         QsmAlgorithm::Tkd => 40 * n,
+        // Tikhonov: similar to TKD (closed-form k-space solution)
+        QsmAlgorithm::Tikhonov => 40 * n,
         // TV-ADMM: kernels + 9 ADMM buffers + FFT workspace + inv_a
         QsmAlgorithm::Tv => 120 * n,
+        // NLTV: similar to TV + reweighting buffers
+        QsmAlgorithm::Nltv => 140 * n,
         // RTS: TV buffers + field_fft + residual (LSMR step)
         QsmAlgorithm::Rts => 160 * n,
+        // MEDI: magnitude + edge weights + CG buffers
+        QsmAlgorithm::Medi => 180 * n,
         QsmAlgorithm::Tgv => unreachable!("TGV handled separately"),
     };
 

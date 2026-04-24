@@ -173,6 +173,9 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         QsmAlgorithmArg::Tv,
         QsmAlgorithmArg::Tkd,
         QsmAlgorithmArg::Tgv,
+        QsmAlgorithmArg::Tikhonov,
+        QsmAlgorithmArg::Nltv,
+        QsmAlgorithmArg::Medi,
     ];
     let unwrap_options = [UnwrapAlgorithmArg::Romeo, UnwrapAlgorithmArg::Laplacian];
     let bf_options = [
@@ -180,6 +183,7 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         BfAlgorithmArg::Pdf,
         BfAlgorithmArg::Lbv,
         BfAlgorithmArg::Ismv,
+        BfAlgorithmArg::Sharp,
     ];
     let mask_algo_options = [MaskAlgorithmArg::Bet, MaskAlgorithmArg::Threshold];
     let mask_input_options = [MaskInputArg::MagnitudeFirst, MaskInputArg::Magnitude, MaskInputArg::MagnitudeLast, MaskInputArg::PhaseQuality];

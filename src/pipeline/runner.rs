@@ -510,6 +510,14 @@ pub fn run_pipeline_cached(
                         radius, 1e-3, 500, prog,
                     )
                 }
+                Some(BfAlgorithm::Sharp) => {
+                    let radius = 18.0 * vsx.min(vsy).min(vsz);
+                    log::info!("Background removal (SHARP, radius={:.1}, threshold=0.05)", radius);
+                    qsm_core::bgremove::sharp(
+                        &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
+                        radius, 0.05,
+                    )
+                }
                 None => {
                     return Err(QsmxtError::Config("bf_algorithm must be set for non-TGV pipeline".to_string()));
                 }
@@ -560,6 +568,43 @@ pub fn run_pipeline_cached(
                     qsm_core::inversion::tkd(
                         &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
                         bdir, config.tkd_threshold,
+                    )
+                }
+                QsmAlgorithm::Tikhonov => {
+                    log::info!("Dipole inversion (Tikhonov, lambda={:.0e})", config.tkd_threshold);
+                    let p = qsm_core::inversion::TikhonovParams::default();
+                    qsm_core::inversion::tikhonov(
+                        &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
+                        bdir, p.lambda, p.reg,
+                    )
+                }
+                QsmAlgorithm::Nltv => {
+                    let p = qsm_core::inversion::NltvParams::default();
+                    log::info!("Dipole inversion (NLTV, lambda={:.0e}, max_iter={})", p.lambda, p.max_iter);
+                    let (prog, _) = iter_progress_bar("NLTV");
+                    qsm_core::inversion::nltv_with_progress(
+                        &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
+                        bdir, p.lambda, p.mu, p.tol, p.max_iter, p.newton_iter,
+                        prog,
+                    )
+                }
+                QsmAlgorithm::Medi => {
+                    let p = qsm_core::inversion::MediParams::default();
+                    log::info!("Dipole inversion (MEDI, lambda={:.0e}, max_iter={})", p.lambda, p.max_iter);
+                    // MEDI needs magnitude data
+                    let mag_path = output.mag_path(&qsm_run.key, 1);
+                    let magnitude = if mag_path.exists() {
+                        load_volume(&mag_path)?
+                    } else {
+                        vec![1.0f64; nx * ny * nz]
+                    };
+                    let n_std = vec![1.0f64; nx * ny * nz];
+                    qsm_core::inversion::medi_l1(
+                        &local_field, &n_std, &magnitude, &eroded_mask,
+                        nx, ny, nz, vsx, vsy, vsz,
+                        p.lambda, bdir, p.merit, p.smv, p.smv_radius,
+                        p.data_weighting, p.percentage, p.cg_tol, p.cg_max_iter,
+                        p.max_iter, p.tol,
                     )
                 }
                 QsmAlgorithm::Tgv => unreachable!("TGV handled separately"),
