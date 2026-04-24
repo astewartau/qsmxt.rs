@@ -687,10 +687,10 @@ fn create_mask(
                 nx, ny, nz,
                 vsx, vsy, vsz,
                 config.bet_fractional_intensity,
-                1.0,  // smoothness
-                0.0,  // gradient_threshold
-                1000, // iterations
-                4,    // subdivisions
+                config.bet_smoothness,
+                config.bet_gradient_threshold,
+                config.bet_iterations,
+                config.bet_subdivisions,
             ))
         }
         MaskingAlgorithm::Threshold => {

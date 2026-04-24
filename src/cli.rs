@@ -129,6 +129,34 @@ pub struct RunArgs {
     #[arg(long)]
     pub bet_fractional_intensity: Option<f64>,
 
+    /// BET surface smoothness factor
+    #[arg(long)]
+    pub bet_smoothness: Option<f64>,
+
+    /// BET gradient threshold (-1 to 1)
+    #[arg(long)]
+    pub bet_gradient_threshold: Option<f64>,
+
+    /// BET surface evolution iterations
+    #[arg(long)]
+    pub bet_iterations: Option<usize>,
+
+    /// BET icosphere subdivision level
+    #[arg(long)]
+    pub bet_subdivisions: Option<usize>,
+
+    /// QSM reference method (mean or none)
+    #[arg(long, value_enum)]
+    pub qsm_reference: Option<QsmReferenceArg>,
+
+    /// TGV alpha1 (first-order weight)
+    #[arg(long)]
+    pub tgv_alpha1: Option<f64>,
+
+    /// TGV alpha0 (second-order weight)
+    #[arg(long)]
+    pub tgv_alpha0: Option<f64>,
+
     /// Mask erosion iterations
     #[arg(long, num_args = 1..)]
     pub mask_erosions: Option<Vec<usize>>,
@@ -696,6 +724,12 @@ pub enum MaskInputArg {
     Magnitude,
     MagnitudeLast,
     PhaseQuality,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
+pub enum QsmReferenceArg {
+    Mean,
+    None,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]

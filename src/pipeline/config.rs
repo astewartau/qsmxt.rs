@@ -284,6 +284,14 @@ pub struct PipelineConfig {
     // Masking parameters
     #[serde(default = "default_bet_fi")]
     pub bet_fractional_intensity: f64,
+    #[serde(default = "default_bet_smoothness")]
+    pub bet_smoothness: f64,
+    #[serde(default = "default_bet_gradient")]
+    pub bet_gradient_threshold: f64,
+    #[serde(default = "default_bet_iterations")]
+    pub bet_iterations: usize,
+    #[serde(default = "default_bet_subdivisions")]
+    pub bet_subdivisions: usize,
     #[serde(default = "default_erosions")]
     pub mask_erosions: Vec<usize>,
 
@@ -333,6 +341,10 @@ fn default_masking() -> MaskingAlgorithm { MaskingAlgorithm::Threshold }
 fn default_masking_input() -> MaskingInput { MaskingInput::PhaseQuality }
 fn default_reference() -> QsmReference { QsmReference::Mean }
 fn default_bet_fi() -> f64 { qsm_core::bet::BetParams::default().fractional_intensity }
+fn default_bet_smoothness() -> f64 { qsm_core::bet::BetParams::default().smoothness }
+fn default_bet_gradient() -> f64 { qsm_core::bet::BetParams::default().gradient_threshold }
+fn default_bet_iterations() -> usize { qsm_core::bet::BetParams::default().iterations }
+fn default_bet_subdivisions() -> usize { qsm_core::bet::BetParams::default().subdivisions }
 fn default_erosions() -> Vec<usize> { vec![2] }
 fn default_rts_delta() -> f64 { qsm_core::inversion::RtsParams::default().delta }
 fn default_rts_mu() -> f64 { qsm_core::inversion::RtsParams::default().mu }
@@ -389,6 +401,10 @@ impl PipelineConfig {
                 combine_phase: true,
                 qsm_reference: QsmReference::Mean,
                 bet_fractional_intensity: default_bet_fi(),
+                bet_smoothness: default_bet_smoothness(),
+                bet_gradient_threshold: default_bet_gradient(),
+                bet_iterations: default_bet_iterations(),
+                bet_subdivisions: default_bet_subdivisions(),
                 mask_erosions: vec![2],
                 rts_delta: default_rts_delta(),
                 rts_mu: default_rts_mu(),
@@ -503,6 +519,30 @@ impl PipelineConfig {
         }
         if let Some(v) = args.bet_fractional_intensity {
             self.bet_fractional_intensity = v;
+        }
+        if let Some(v) = args.bet_smoothness {
+            self.bet_smoothness = v;
+        }
+        if let Some(v) = args.bet_gradient_threshold {
+            self.bet_gradient_threshold = v;
+        }
+        if let Some(v) = args.bet_iterations {
+            self.bet_iterations = v;
+        }
+        if let Some(v) = args.bet_subdivisions {
+            self.bet_subdivisions = v;
+        }
+        if let Some(a) = args.qsm_reference {
+            self.qsm_reference = match a {
+                cli::QsmReferenceArg::Mean => QsmReference::Mean,
+                cli::QsmReferenceArg::None => QsmReference::None,
+            };
+        }
+        if let Some(v) = args.tgv_alpha1 {
+            self.tgv_alphas[0] = v;
+        }
+        if let Some(v) = args.tgv_alpha0 {
+            self.tgv_alphas[1] = v;
         }
         if let Some(ref v) = args.mask_erosions {
             self.mask_erosions = v.clone();
@@ -699,6 +739,13 @@ mod tests {
             masking_input: None,
             combine_phase: None,
             bet_fractional_intensity: None,
+            bet_smoothness: None,
+            bet_gradient_threshold: None,
+            bet_iterations: None,
+            bet_subdivisions: None,
+            qsm_reference: None,
+            tgv_alpha1: None,
+            tgv_alpha0: None,
             mask_erosions: None,
             rts_delta: None,
             rts_mu: None,
