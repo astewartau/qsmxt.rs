@@ -1413,6 +1413,11 @@ impl App {
             KeyCode::Left => self.adjust_select(-1),
             KeyCode::Right => self.adjust_select(1),
 
+            // Reset focused field to default
+            KeyCode::Char('r') => self.reset_current_field(),
+            // Reset all fields on current tab to defaults
+            KeyCode::Char('R') => self.reset_current_tab(),
+
             // Run
             KeyCode::F(5) => self.should_run = true,
 
@@ -1459,6 +1464,10 @@ impl App {
                 KeyCode::Enter | KeyCode::Char(' ') => self.interact_io_field(),
                 KeyCode::Left => self.adjust_io_select(-1),
                 KeyCode::Right => self.adjust_io_select(1),
+                // Reset focused IO field
+                KeyCode::Char('r') => self.reset_current_field(),
+                // Reset all IO fields
+                KeyCode::Char('R') => self.reset_current_tab(),
                 KeyCode::F(5) => self.should_run = true,
                 _ => {}
             }
@@ -1504,6 +1513,91 @@ impl App {
         if self.active_field == 2 {
             let n = 6isize; // preset options count
             self.form.preset = (self.form.preset as isize + delta).rem_euclid(n) as usize;
+        }
+    }
+
+    /// Reset the focused field on a generic form tab to its default.
+    fn reset_current_field(&mut self) {
+        let defaults = RunForm::default();
+        match (self.active_tab, self.active_field) {
+            // Tab 0 (Input) IO fields
+            (0, 0) => self.form.bids_dir = defaults.bids_dir.clone(),
+            (0, 1) => self.form.output_dir = defaults.output_dir.clone(),
+            (0, 2) => self.form.preset = defaults.preset,
+            (0, 3) => self.form.config_file = defaults.config_file.clone(),
+            // Tab 2 (Supplementary)
+            (2, 0) => self.form.do_swi = defaults.do_swi,
+            (2, 1) => self.form.swi_scaling = defaults.swi_scaling,
+            (2, 2) => self.form.swi_strength = defaults.swi_strength.clone(),
+            (2, 3) => self.form.swi_hp_sigma_x = defaults.swi_hp_sigma_x.clone(),
+            (2, 4) => self.form.swi_hp_sigma_y = defaults.swi_hp_sigma_y.clone(),
+            (2, 5) => self.form.swi_hp_sigma_z = defaults.swi_hp_sigma_z.clone(),
+            (2, 6) => self.form.swi_mip_window = defaults.swi_mip_window.clone(),
+            (2, 7) => self.form.do_t2starmap = defaults.do_t2starmap,
+            (2, 8) => self.form.do_r2starmap = defaults.do_r2starmap,
+            // Tab 3 (Execution)
+            (3, 0) => self.form.dry_run = defaults.dry_run,
+            (3, 1) => self.form.debug = defaults.debug,
+            (3, 2) => self.form.n_procs = defaults.n_procs.clone(),
+            _ => {}
+        }
+    }
+
+    /// Reset all fields on the current generic form tab to defaults.
+    fn reset_current_tab(&mut self) {
+        let defaults = RunForm::default();
+        match self.active_tab {
+            0 => {
+                self.form.bids_dir = defaults.bids_dir.clone();
+                self.form.output_dir = defaults.output_dir.clone();
+                self.form.preset = defaults.preset;
+                self.form.config_file = defaults.config_file.clone();
+            }
+            2 => {
+                self.form.do_swi = defaults.do_swi;
+                self.form.swi_scaling = defaults.swi_scaling;
+                self.form.swi_strength = defaults.swi_strength.clone();
+                self.form.swi_hp_sigma_x = defaults.swi_hp_sigma_x.clone();
+                self.form.swi_hp_sigma_y = defaults.swi_hp_sigma_y.clone();
+                self.form.swi_hp_sigma_z = defaults.swi_hp_sigma_z.clone();
+                self.form.swi_mip_window = defaults.swi_mip_window.clone();
+                self.form.do_t2starmap = defaults.do_t2starmap;
+                self.form.do_r2starmap = defaults.do_r2starmap;
+            }
+            3 => {
+                self.form.dry_run = defaults.dry_run;
+                self.form.debug = defaults.debug;
+                self.form.n_procs = defaults.n_procs.clone();
+            }
+            _ => {}
+        }
+    }
+
+    /// Reset the focused pipeline field to its default.
+    fn reset_pipeline_field(&mut self) {
+        let ps = &mut self.pipeline_state;
+        let defaults = PipelineFormState::default();
+        let rows = ps.visible_rows();
+        let focusable = ps.focusable_rows();
+        let focus_idx = focusable.get(ps.focus).copied().unwrap_or(0);
+
+        match rows.get(focus_idx) {
+            Some(PipelineRow::AlgoSelect { field, .. }) => {
+                ps.set_select(field, defaults.get_select(field));
+            }
+            Some(PipelineRow::Param { field, .. }) => {
+                let default_val = defaults.get_param(field).to_string();
+                if let Some(s) = ps.get_param_mut(field) {
+                    *s = default_val;
+                }
+            }
+            Some(PipelineRow::Toggle { field, .. }) => {
+                let default_val = defaults.get_toggle(field);
+                if ps.get_toggle(field) != default_val {
+                    ps.toggle(field);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1922,6 +2016,13 @@ impl App {
                         _ => {}
                     }
                 }
+            }
+
+            // Reset focused field to default
+            KeyCode::Char('r') => self.reset_pipeline_field(),
+            // Reset all pipeline settings to defaults
+            KeyCode::Char('R') => {
+                self.pipeline_state = PipelineFormState::default();
             }
 
             KeyCode::F(5) => self.should_run = true,

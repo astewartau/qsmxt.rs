@@ -970,7 +970,7 @@ fn draw_help_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         ]
     } else {
         vec![
-            Span::styled(" 1-5", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" 1-4", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::styled(":Tabs  ", Style::default().fg(Color::DarkGray)),
             Span::styled("\u{2191}\u{2193}", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::styled(":Navigate  ", Style::default().fg(Color::DarkGray)),
@@ -978,6 +978,10 @@ fn draw_help_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             Span::styled(":Change  ", Style::default().fg(Color::DarkGray)),
             Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::styled(":Edit  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("r", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(":Reset  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("R", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(":Reset All  ", Style::default().fg(Color::DarkGray)),
             Span::styled("F5", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::styled(":Run  ", Style::default().fg(Color::DarkGray)),
             Span::styled("q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
