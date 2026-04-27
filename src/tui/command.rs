@@ -185,7 +185,13 @@ pub fn build_command_string(app: &App) -> String {
         }
         let form_defaults = super::app::RunForm::default();
         push_if_changed(&mut parts, "--swi-strength", &form.swi_strength, &form_defaults.swi_strength);
-        push_if_changed(&mut parts, "--swi-hp-sigma", &form.swi_hp_sigma, &form_defaults.swi_hp_sigma);
+        // HP sigma: emit if any component differs from default
+        if form.swi_hp_sigma_x != form_defaults.swi_hp_sigma_x
+            || form.swi_hp_sigma_y != form_defaults.swi_hp_sigma_y
+            || form.swi_hp_sigma_z != form_defaults.swi_hp_sigma_z {
+            parts.push(format!("--swi-hp-sigma {} {} {}",
+                form.swi_hp_sigma_x.trim(), form.swi_hp_sigma_y.trim(), form.swi_hp_sigma_z.trim()));
+        }
         push_if_changed(&mut parts, "--swi-mip-window", &form.swi_mip_window, &form_defaults.swi_mip_window);
     }
     if form.do_t2starmap {
@@ -343,9 +349,13 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         inhomogeneity_correction: ps.inhomogeneity_correction,
         obliquity_threshold: parse_optional_f64(&ps.obliquity_threshold),
         swi_hp_sigma: {
-            let parts: Vec<f64> = form.swi_hp_sigma.split_whitespace()
-                .filter_map(|s| s.parse().ok()).collect();
-            if parts.len() == 3 { Some(parts) } else { None }
+            let x: Option<f64> = form.swi_hp_sigma_x.trim().parse().ok();
+            let y: Option<f64> = form.swi_hp_sigma_y.trim().parse().ok();
+            let z: Option<f64> = form.swi_hp_sigma_z.trim().parse().ok();
+            match (x, y, z) {
+                (Some(a), Some(b), Some(c)) => Some(vec![a, b, c]),
+                _ => None,
+            }
         },
         swi_scaling: {
             let scaling_options = ["tanh", "negative-tanh", "positive", "negative", "triangular"];
