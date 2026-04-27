@@ -26,6 +26,16 @@ pub fn execute(args: InvertArgs) -> crate::Result<()> {
             &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
             bdir, args.tkd_threshold,
         ),
+        QsmAlgorithmArg::Tsvd => qsm_core::inversion::tsvd(
+            &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
+            bdir, args.tkd_threshold, // TSVD shares TKD threshold param in CLI
+        ),
+        QsmAlgorithmArg::Ilsqr => {
+            qsm_core::inversion::ilsqr_simple(
+                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
+                bdir, 0.01, 50,
+            )
+        }
         QsmAlgorithmArg::Tikhonov => {
             let p = qsm_core::inversion::TikhonovParams::default();
             qsm_core::inversion::tikhonov(
@@ -70,6 +80,11 @@ pub fn execute(args: InvertArgs) -> crate::Result<()> {
                 vsx as f32, vsy as f32, vsz as f32, &params, b0_f32,
             );
             chi_f32.iter().map(|&v| v as f64).collect()
+        }
+        QsmAlgorithmArg::Qsmart => {
+            return Err(QsmxtError::Config(
+                "QSMART requires the full pipeline (use `qsmxt run` instead)".to_string(),
+            ));
         }
     };
 

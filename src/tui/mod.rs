@@ -45,7 +45,7 @@ pub fn run_tui() -> crate::Result<()> {
             app.filter_state.maybe_rescan(&bids_dir);
         }
 
-        terminal.draw(|f| ui::draw(f, &app))?;
+        terminal.draw(|f| ui::draw(f, &mut app))?;
 
         if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
             app.handle_key(key);

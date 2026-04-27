@@ -172,7 +172,8 @@ pub fn run_pipeline_cached(
                     let mag_nifti = nifti_io::read_nifti_file(mag_path)
                         .map_err(|e| QsmxtError::NiftiIo(format!("{}: {}", mag_path.display(), e)))?;
                     let corrected = qsm_core::utils::makehomogeneous(
-                        &mag_nifti.data, nx, ny, nz, vsx, vsy, vsz, 7.0, 3,
+                        &mag_nifti.data, nx, ny, nz, vsx, vsy, vsz,
+                        config.homogeneity_sigma_mm, config.homogeneity_nbox,
                     );
                     let out_path = output.mag_path(&qsm_run.key, i + 1);
                     save_volume(&out_path, &corrected, &meta)?;
@@ -205,10 +206,7 @@ pub fn run_pipeline_cached(
     let mask_path = output.mask_path(&qsm_run.key);
     if !state.is_step_cached("mask") {
         let t = Instant::now();
-        log::info!("Creating mask ({} ops: {})",
-            config.mask_ops.len(),
-            config.mask_ops.iter().map(|op| format!("{}", op)).collect::<Vec<_>>().join(" → "),
-        );
+        log::info!("Creating mask ({} section(s))", config.mask_sections.len());
         progress("Creating mask");
         // Load scaled phases and magnitudes from disk
         let mut phases: Vec<NiftiData> = Vec::new();
@@ -228,18 +226,7 @@ pub fn run_pipeline_cached(
             }
         }
 
-        let working_mask = if !config.mask_ops.is_empty() {
-            build_mask_from_ops(&config.mask_ops, &phases, &magnitudes, nx, ny, nz, vsx, vsy, vsz, &meta.echo_times)?
-        } else {
-            let mask = create_mask(&phases, &magnitudes, nx, ny, nz, vsx, vsy, vsz, config, &meta.echo_times)?;
-            let mut working = mask;
-            for &erosion in &config.mask_erosions {
-                if erosion > 0 {
-                    working = phase::erode_mask(&working, nx, ny, nz, erosion);
-                }
-            }
-            working
-        };
+        let working_mask = build_mask_from_sections(&config.mask_sections, &phases, &magnitudes, nx, ny, nz, vsx, vsy, vsz, &meta.echo_times)?;
 
         save_mask(&mask_path, &working_mask, &meta)?;
         state.mark_completed("mask", vec![mask_path.clone()]);
@@ -265,10 +252,18 @@ pub fn run_pipeline_cached(
             let unwrapped = qsm_core::unwrap::laplacian_unwrap(
                 &phase_data, &mask, nx, ny, nz, vsx, vsy, vsz,
             );
-            let swi = qsm_core::swi::calculate_swi_default(
+            let swi_scaling = match config.swi_scaling.as_str() {
+                "negative_tanh" => qsm_core::swi::PhaseScaling::NegativeTanh,
+                "positive" => qsm_core::swi::PhaseScaling::Positive,
+                "negative" => qsm_core::swi::PhaseScaling::Negative,
+                "triangular" => qsm_core::swi::PhaseScaling::Triangular,
+                _ => qsm_core::swi::PhaseScaling::Tanh,
+            };
+            let swi = qsm_core::swi::calculate_swi(
                 &unwrapped, &mag_data, &mask, nx, ny, nz, vsx, vsy, vsz,
+                config.swi_hp_sigma, swi_scaling, config.swi_strength,
             );
-            let mip = qsm_core::swi::create_mip_default(&swi, nx, ny, nz);
+            let mip = qsm_core::swi::create_mip(&swi, nx, ny, nz, config.swi_mip_window);
 
             save_volume(&swi_path, &swi, &meta)?;
             save_volume(&mip_path, &mip, &meta)?;
@@ -289,9 +284,16 @@ pub fn run_pipeline_cached(
             let mask = load_mask(&mask_path)?;
             let n_voxels = nx * ny * nz;
 
+            // T2*/R2* uses uncorrected magnitude (inhomogeneity correction distorts decay)
             let mut interleaved = vec![0.0f64; n_voxels * meta.n_echoes];
             for i in 0..meta.n_echoes {
-                let mag_data = load_volume(&output.mag_path(&qsm_run.key, i + 1))?;
+                let mag_data = if let Some(ref raw_path) = qsm_run.echoes[i].magnitude_nifti {
+                    let nifti = nifti_io::read_nifti_file(raw_path)
+                        .map_err(|e| QsmxtError::NiftiIo(format!("mag echo {}: {}", i + 1, e)))?;
+                    nifti.data
+                } else {
+                    load_volume(&output.mag_path(&qsm_run.key, i + 1))?
+                };
                 for vox in 0..n_voxels {
                     interleaved[vox * meta.n_echoes + i] = mag_data[vox];
                 }
@@ -326,10 +328,87 @@ pub fn run_pipeline_cached(
     }
 
     // === STEP: QSM reconstruction ===
-    // Branch: TGV (single step) vs Standard (unwrap → bgremove → invert)
+    // All modes share phase combination/unwrapping for multi-echo data.
+    // Then branch: TGV (single step), QSMART (two-stage SDF+iLSQR), Standard (bgremove → invert).
+
+    // --- Phase combination / unwrapping (shared by all modes) ---
+    // TGV single-echo skips this (uses raw wrapped phase directly).
+    let field_path = output.field_ppm_path(&qsm_run.key);
+    let need_field = match config.qsm_algorithm {
+        QsmAlgorithm::Tgv if meta.n_echoes == 1 => false,
+        _ => true,
+    };
+
+    if need_field && !state.is_step_cached("unwrap") {
+        let t = Instant::now();
+        let unwrap_name = config.unwrapping_algorithm.map(|a| format!("{}", a)).unwrap_or("laplacian".to_string());
+        if meta.n_echoes > 1 && config.combine_phase {
+            log::info!("Phase combination (MCPC-3D-S, {} echoes, weighted B0)", meta.n_echoes);
+        } else if meta.n_echoes > 1 {
+            log::info!("Phase unwrapping ({}, {} echoes, linear fit)", unwrap_name, meta.n_echoes);
+        } else {
+            log::info!("Phase unwrapping ({}, single echo)", unwrap_name);
+        }
+        progress("Phase unwrapping / echo combination");
+        // Load all scaled phases + magnitudes
+        let mut phases: Vec<NiftiData> = Vec::new();
+        let mut magnitudes: Vec<NiftiData> = Vec::new();
+        for i in 0..meta.n_echoes {
+            let p = nifti_io::read_nifti_file(&output.phase_scaled_path(&qsm_run.key, i + 1))
+                .map_err(|e| QsmxtError::NiftiIo(format!("echo {}: {}", i + 1, e)))?;
+            phases.push(p);
+            let m_path = output.mag_path(&qsm_run.key, i + 1);
+            if m_path.exists() {
+                let m = nifti_io::read_nifti_file(&m_path)
+                    .map_err(|e| QsmxtError::NiftiIo(format!("mag echo {}: {}", i + 1, e)))?;
+                magnitudes.push(m);
+            }
+        }
+        let mask = load_mask(&mask_path)?;
+
+        // mcpc3ds_b0_pipeline expects echo times in milliseconds
+        let echo_times_ms: Vec<f64> = meta.echo_times.iter().map(|&t| t * 1000.0).collect();
+
+        let field_ppm = if phases.len() > 1 && config.combine_phase {
+            let phase_slices: Vec<&[f64]> = phases.iter().map(|p| p.data.as_slice()).collect();
+            let mag_slices: Vec<&[f64]> = magnitudes.iter().map(|m| m.data.as_slice()).collect();
+            let (b0_hz, _, _) = qsm_core::utils::mcpc3ds_b0_pipeline(
+                &phase_slices, &mag_slices, &echo_times_ms, &mask,
+                config.mcpc3ds_sigma, qsm_core::utils::B0WeightType::PhaseSNR, nx, ny, nz,
+            );
+            phase::hz_to_ppm(&b0_hz, meta.field_strength)
+        } else if phases.len() > 1 {
+            let mut unwrapped: Vec<Vec<f64>> = Vec::new();
+            for p in &phases {
+                let uw = unwrap_phase(&p.data, &mask, nx, ny, nz, vsx, vsy, vsz, &magnitudes, config);
+                unwrapped.push(uw);
+            }
+            let uw_refs: Vec<&[f64]> = unwrapped.iter().map(|u| u.as_slice()).collect();
+            let mag_refs: Vec<&[f64]> = magnitudes.iter().map(|m| m.data.as_slice()).collect();
+            let fit = qsm_core::utils::multi_echo_linear_fit(
+                &uw_refs, &mag_refs, &meta.echo_times, &mask, true, config.linear_fit_reliability_threshold,
+            );
+            phase::rads_to_ppm(&fit.field, meta.field_strength)
+        } else {
+            let unwrapped = unwrap_phase(&phases[0].data, &mask, nx, ny, nz, vsx, vsy, vsz, &magnitudes, config);
+            let te = meta.echo_times[0];
+            let field_rads: Vec<f64> = unwrapped.iter().map(|&v| v / te).collect();
+            phase::rads_to_ppm(&field_rads, meta.field_strength)
+        };
+
+        save_volume(&field_path, &field_ppm, &meta)?;
+        state.mark_completed("unwrap", vec![field_path.clone()]);
+        state.save(&state_path)?;
+        log_step_done("Phase unwrapping", t);
+        // phases, magnitudes, field_ppm all dropped
+    } else if need_field {
+        log::info!("Skipping unwrap (cached)");
+    }
+
+    // --- Branch: TGV / QSMART / Standard ---
 
     if config.qsm_algorithm == QsmAlgorithm::Tgv {
-        // TGV single-step
+        // TGV single-step: uses combined field for multi-echo, raw phase for single-echo
         let chi_raw_path = output.chi_raw_path(&qsm_run.key);
         if !state.is_step_cached("tgv") {
             let t = Instant::now();
@@ -339,9 +418,15 @@ pub fn run_pipeline_cached(
                 config.tgv_erosions, meta.echo_times[0] * 1000.0, meta.field_strength,
             );
             progress("TGV-QSM reconstruction");
-            let phase_data = load_volume(&output.phase_scaled_path(&qsm_run.key, 1))?;
             let mask = load_mask(&mask_path)?;
             let bdir = meta.b0_direction;
+
+            // For multi-echo, use the combined field; for single-echo, use raw wrapped phase
+            let phase_data = if meta.n_echoes > 1 {
+                load_volume(&field_path)?
+            } else {
+                load_volume(&output.phase_scaled_path(&qsm_run.key, 1))?
+            };
 
             let phase_f32: Vec<f32> = phase_data.iter().map(|&v| v as f32).collect();
             drop(phase_data);
@@ -351,9 +436,10 @@ pub fn run_pipeline_cached(
                 alpha1: config.tgv_alphas[0] as f32,
                 iterations: config.tgv_iterations,
                 erosions: config.tgv_erosions,
+                step_size: config.tgv_step_size as f32,
+                tol: config.tgv_tol as f32,
                 fieldstrength: meta.field_strength as f32,
                 te: meta.echo_times[0] as f32,
-                ..Default::default()
             };
             let b0_f32 = (bdir.0 as f32, bdir.1 as f32, bdir.2 as f32);
             let tgv_pb: std::cell::RefCell<Option<ProgressBar>> = std::cell::RefCell::new(None);
@@ -384,81 +470,163 @@ pub fn run_pipeline_cached(
         } else {
             log::info!("Skipping tgv (cached)");
         }
-    } else {
-        // Standard path: unwrap → bgremove → invert
-
-        // --- Unwrap ---
-        let field_path = output.field_ppm_path(&qsm_run.key);
-        if !state.is_step_cached("unwrap") {
+    } else if config.qsm_algorithm == QsmAlgorithm::Qsmart {
+        // QSMART: two-stage SDF + iLSQR pipeline
+        let chi_raw_path = output.chi_raw_path(&qsm_run.key);
+        if !state.is_step_cached("qsmart") {
             let t = Instant::now();
-            let unwrap_name = config.unwrapping_algorithm.map(|a| format!("{}", a)).unwrap_or("laplacian".to_string());
-            if meta.n_echoes > 1 && config.combine_phase {
-                log::info!("Phase combination (MCPC-3D-S, {} echoes, weighted B0)", meta.n_echoes);
-            } else if meta.n_echoes > 1 {
-                log::info!("Phase unwrapping ({}, {} echoes, linear fit)", unwrap_name, meta.n_echoes);
-            } else {
-                log::info!("Phase unwrapping ({}, single echo)", unwrap_name);
-            }
-            progress("Phase unwrapping / echo combination");
-            // Load all scaled phases + magnitudes
-            let mut phases: Vec<NiftiData> = Vec::new();
-            let mut magnitudes: Vec<NiftiData> = Vec::new();
-            for i in 0..meta.n_echoes {
-                let p = nifti_io::read_nifti_file(&output.phase_scaled_path(&qsm_run.key, i + 1))
-                    .map_err(|e| QsmxtError::NiftiIo(format!("echo {}: {}", i + 1, e)))?;
-                phases.push(p);
-                let m_path = output.mag_path(&qsm_run.key, i + 1);
-                if m_path.exists() {
-                    let m = nifti_io::read_nifti_file(&m_path)
-                        .map_err(|e| QsmxtError::NiftiIo(format!("mag echo {}: {}", i + 1, e)))?;
-                    magnitudes.push(m);
-                }
-            }
+            log::info!(
+                "QSMART (iLSQR tol={:.0e}, max_iter={}, vasc_radius={}, sdf_radius={})",
+                config.qsmart_ilsqr_tol, config.qsmart_ilsqr_max_iter,
+                config.qsmart_vasc_sphere_radius, config.qsmart_sdf_spatial_radius,
+            );
+            progress("QSMART reconstruction");
+            let field_ppm = load_volume(&field_path)?;
             let mask = load_mask(&mask_path)?;
+            let bdir = meta.b0_direction;
+            let qsmart_defaults = qsm_core::utils::QsmartParams::default();
 
-            // mcpc3ds_b0_pipeline expects echo times in milliseconds
-            let echo_times_ms: Vec<f64> = meta.echo_times.iter().map(|&t| t * 1000.0).collect();
-
-            let field_ppm = if phases.len() > 1 && config.combine_phase {
-                let phase_slices: Vec<&[f64]> = phases.iter().map(|p| p.data.as_slice()).collect();
-                let mag_slices: Vec<&[f64]> = magnitudes.iter().map(|m| m.data.as_slice()).collect();
-                let (b0_hz, _, _) = qsm_core::utils::mcpc3ds_b0_pipeline(
-                    &phase_slices, &mag_slices, &echo_times_ms, &mask,
-                    [4.0, 4.0, 4.0], qsm_core::utils::B0WeightType::PhaseSNR, nx, ny, nz,
-                );
-                phase::hz_to_ppm(&b0_hz, meta.field_strength)
-            } else if phases.len() > 1 {
-                let mut unwrapped: Vec<Vec<f64>> = Vec::new();
-                for p in &phases {
-                    let uw = unwrap_phase(&p.data, &mask, nx, ny, nz, vsx, vsy, vsz, &magnitudes, config);
-                    unwrapped.push(uw);
-                }
-                let uw_refs: Vec<&[f64]> = unwrapped.iter().map(|u| u.as_slice()).collect();
-                let mag_refs: Vec<&[f64]> = magnitudes.iter().map(|m| m.data.as_slice()).collect();
-                let fit = qsm_core::utils::multi_echo_linear_fit(
-                    &uw_refs, &mag_refs, &meta.echo_times, &mask, true, 90.0,
-                );
-                phase::rads_to_ppm(&fit.field, meta.field_strength)
+            // Step 1: Vasculature detection
+            progress("QSMART: vasculature detection");
+            let mag_path = output.mag_path(&qsm_run.key, 1);
+            let magnitude = if mag_path.exists() {
+                load_volume(&mag_path)?
             } else {
-                let unwrapped = unwrap_phase(&phases[0].data, &mask, nx, ny, nz, vsx, vsy, vsz, &magnitudes, config);
-                let te = meta.echo_times[0];
-                let field_rads: Vec<f64> = unwrapped.iter().map(|&v| v / te).collect();
-                phase::rads_to_ppm(&field_rads, meta.field_strength)
+                vec![1.0f64; nx * ny * nz]
             };
+            let vasc_params = qsm_core::utils::VasculatureParams {
+                sphere_radius: config.qsmart_vasc_sphere_radius,
+                frangi_scale_range: qsmart_defaults.frangi_scale_range,
+                frangi_scale_ratio: qsmart_defaults.frangi_scale_ratio,
+                frangi_c: qsmart_defaults.frangi_c,
+            };
+            let vasc_pb: std::cell::RefCell<Option<ProgressBar>> = std::cell::RefCell::new(None);
+            let vasc_mask = qsm_core::utils::generate_vasculature_mask_with_progress(
+                &magnitude, &mask, nx, ny, nz, &vasc_params,
+                |current: usize, total: usize| {
+                    let mut pb_ref = vasc_pb.borrow_mut();
+                    if pb_ref.is_none() && total > 0 {
+                        *pb_ref = Some(create_progress_bar("Vasculature", total as u64));
+                    }
+                    if let Some(ref bar) = *pb_ref {
+                        bar.set_position(current as u64);
+                        if current == 1 || current == total || current.is_multiple_of(10) {
+                            let rss = memory::process_rss_bytes();
+                            if rss > 0 { bar.set_message(memory::format_bytes(rss)); }
+                        }
+                        if current == total { bar.finish_and_clear(); }
+                    }
+                },
+            );
+            drop(magnitude);
 
-            save_volume(&field_path, &field_ppm, &meta)?;
-            state.mark_completed("unwrap", vec![field_path.clone()]);
+            // Convert mask to f64 for QSMART functions
+            let mask_f64: Vec<f64> = mask.iter().map(|&m| m as f64).collect();
+
+            // Step 2: Weighted masks
+            let w1 = qsm_core::utils::compute_weighted_mask_stage1(&mask_f64, &vasc_mask);
+            let w2 = qsm_core::utils::compute_weighted_mask_stage2(&mask_f64, &vasc_mask, &vasc_mask);
+
+            // Step 3: SDF stage 1 (background removal)
+            progress("QSMART: SDF stage 1");
+            let sdf_params1 = qsm_core::bgremove::SdfParams {
+                sigma1: qsmart_defaults.sdf_sigma1_stage1,
+                sigma2: qsmart_defaults.sdf_sigma2_stage1,
+                spatial_radius: config.qsmart_sdf_spatial_radius,
+                lower_lim: qsmart_defaults.sdf_lower_lim,
+                curv_constant: qsmart_defaults.sdf_curv_constant,
+                use_curvature: true,
+            };
+            let sdf1_pb: std::cell::RefCell<Option<ProgressBar>> = std::cell::RefCell::new(None);
+            let lfs1 = qsm_core::bgremove::sdf::sdf_with_progress(
+                &field_ppm, &w1, &vasc_mask, nx, ny, nz, &sdf_params1,
+                |current: usize, total: usize| {
+                    let mut pb_ref = sdf1_pb.borrow_mut();
+                    if pb_ref.is_none() && total > 0 {
+                        *pb_ref = Some(create_progress_bar("SDF-1", total as u64));
+                    }
+                    if let Some(ref bar) = *pb_ref {
+                        bar.set_position(current as u64);
+                        if current == 1 || current == total || current.is_multiple_of(10) {
+                            let rss = memory::process_rss_bytes();
+                            if rss > 0 { bar.set_message(memory::format_bytes(rss)); }
+                        }
+                        if current == total { bar.finish_and_clear(); }
+                    }
+                },
+            );
+
+            // Step 4: iLSQR stage 1
+            progress("QSMART: iLSQR stage 1");
+            let (prog, _) = iter_progress_bar("iLSQR-1");
+            let chi1 = qsm_core::inversion::ilsqr_with_progress(
+                &lfs1, &mask, nx, ny, nz, vsx, vsy, vsz,
+                bdir, config.qsmart_ilsqr_tol, config.qsmart_ilsqr_max_iter, prog,
+            );
+
+            // Step 5: SDF stage 2 (different sigma parameters)
+            progress("QSMART: SDF stage 2");
+            let sdf_params2 = qsm_core::bgremove::SdfParams {
+                sigma1: qsmart_defaults.sdf_sigma1_stage2,
+                sigma2: qsmart_defaults.sdf_sigma2_stage2,
+                spatial_radius: config.qsmart_sdf_spatial_radius,
+                lower_lim: qsmart_defaults.sdf_lower_lim,
+                curv_constant: qsmart_defaults.sdf_curv_constant,
+                use_curvature: true,
+            };
+            let sdf2_pb: std::cell::RefCell<Option<ProgressBar>> = std::cell::RefCell::new(None);
+            let lfs2 = qsm_core::bgremove::sdf::sdf_with_progress(
+                &field_ppm, &w2, &vasc_mask, nx, ny, nz, &sdf_params2,
+                |current: usize, total: usize| {
+                    let mut pb_ref = sdf2_pb.borrow_mut();
+                    if pb_ref.is_none() && total > 0 {
+                        *pb_ref = Some(create_progress_bar("SDF-2", total as u64));
+                    }
+                    if let Some(ref bar) = *pb_ref {
+                        bar.set_position(current as u64);
+                        if current == 1 || current == total || current.is_multiple_of(10) {
+                            let rss = memory::process_rss_bytes();
+                            if rss > 0 { bar.set_message(memory::format_bytes(rss)); }
+                        }
+                        if current == total { bar.finish_and_clear(); }
+                    }
+                },
+            );
+
+            // Step 6: iLSQR stage 2
+            progress("QSMART: iLSQR stage 2");
+            let (prog, _) = iter_progress_bar("iLSQR-2");
+            let chi2 = qsm_core::inversion::ilsqr_with_progress(
+                &lfs2, &mask, nx, ny, nz, vsx, vsy, vsz,
+                bdir, config.qsmart_ilsqr_tol, config.qsmart_ilsqr_max_iter, prog,
+            );
+
+            // Step 7: Combine with offset adjustment
+            progress("QSMART: combining stages");
+            let ppm = qsmart_defaults.ppm;
+            let chi = qsm_core::utils::adjust_offset(
+                &vasc_mask, &lfs1, &chi1, &chi2,
+                nx, ny, nz, vsx, vsy, vsz, bdir, ppm,
+            );
+
+            save_volume(&chi_raw_path, &chi, &meta)?;
+            state.mark_completed("qsmart", vec![chi_raw_path.clone()]);
             state.save(&state_path)?;
-            log_step_done("Phase unwrapping", t);
-            // phases, magnitudes, field_ppm all dropped
+            log_step_done("QSMART", t);
         } else {
-            log::info!("Skipping unwrap (cached)");
+            log::info!("Skipping qsmart (cached)");
         }
+    } else {
+        // Standard path: bgremove → invert
 
-        // --- Background removal ---
+        // --- Background removal (skipped when MEDI+SMV handles it internally) ---
+        let skip_bgremove = config.qsm_algorithm == QsmAlgorithm::Medi && config.medi_smv;
         let local_field_path = output.local_field_path(&qsm_run.key);
         let bg_mask_path = output.bg_mask_path(&qsm_run.key);
-        if !state.is_step_cached("bgremove") {
+        if skip_bgremove {
+            log::info!("Skipping background removal (MEDI SMV handles it internally)");
+        }
+        if !skip_bgremove && !state.is_step_cached("bgremove") {
             let t = Instant::now();
             let bf_name = config.bf_algorithm.map(|a| format!("{}", a)).unwrap_or("none".to_string());
             progress("Background field removal");
@@ -471,8 +639,8 @@ pub fn run_pipeline_cached(
                     let min_vox = vsx.min(vsy).min(vsz);
                     let max_vox = vsx.max(vsy).max(vsz);
                     let mut radii = Vec::new();
-                    let mut r = 18.0 * min_vox;
-                    while r >= 2.0 * max_vox { radii.push(r); r -= 2.0 * max_vox; }
+                    let mut r = config.vsharp_max_radius_factor * min_vox;
+                    while r >= config.vsharp_min_radius_factor * max_vox { radii.push(r); r -= config.vsharp_min_radius_factor * max_vox; }
                     log::info!("Background removal (V-SHARP, {} radii, threshold={})", radii.len(), config.vsharp_threshold);
                     let (prog, _) = iter_progress_bar("V-SHARP");
                     qsm_core::bgremove::vsharp_with_progress(
@@ -501,7 +669,7 @@ pub fn run_pipeline_cached(
                     )
                 }
                 Some(BfAlgorithm::Ismv) => {
-                    let radius = 2.0 * vsx.max(vsy).max(vsz);
+                    let radius = config.ismv_radius_factor * vsx.max(vsy).max(vsz);
                     log::info!("Background removal (iSMV, radius={:.1}, tol={:.0e}, max_iter={})",
                         radius, config.ismv_tol, config.ismv_max_iter);
                     let (prog, _) = iter_progress_bar("iSMV");
@@ -511,7 +679,7 @@ pub fn run_pipeline_cached(
                     )
                 }
                 Some(BfAlgorithm::Sharp) => {
-                    let radius = 18.0 * vsx.min(vsy).min(vsz);
+                    let radius = config.sharp_radius_factor * vsx.min(vsy).min(vsz);
                     log::info!("Background removal (SHARP, radius={:.1}, threshold={})",
                         radius, config.sharp_threshold);
                     qsm_core::bgremove::sharp(
@@ -520,7 +688,7 @@ pub fn run_pipeline_cached(
                     )
                 }
                 None => {
-                    return Err(QsmxtError::Config("bf_algorithm must be set for non-TGV pipeline".to_string()));
+                    return Err(QsmxtError::Config("bf_algorithm must be set for standard pipeline".to_string()));
                 }
             };
 
@@ -538,8 +706,17 @@ pub fn run_pipeline_cached(
         if !state.is_step_cached("invert") {
             let t = Instant::now();
             progress("Dipole inversion");
-            let local_field = load_volume(&local_field_path)?;
-            let eroded_mask = load_mask(&bg_mask_path)?;
+            // When MEDI+SMV, use the total field (field_ppm) instead of local field
+            let local_field = if skip_bgremove {
+                load_volume(&field_path)?
+            } else {
+                load_volume(&local_field_path)?
+            };
+            let eroded_mask = if skip_bgremove {
+                load_mask(&mask_path)?
+            } else {
+                load_mask(&bg_mask_path)?
+            };
             let bdir = meta.b0_direction;
 
             let chi = match config.qsm_algorithm {
@@ -569,6 +746,22 @@ pub fn run_pipeline_cached(
                     qsm_core::inversion::tkd(
                         &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
                         bdir, config.tkd_threshold,
+                    )
+                }
+                QsmAlgorithm::Tsvd => {
+                    log::info!("Dipole inversion (TSVD, threshold={})", config.tsvd_threshold);
+                    qsm_core::inversion::tsvd(
+                        &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
+                        bdir, config.tsvd_threshold,
+                    )
+                }
+                QsmAlgorithm::Ilsqr => {
+                    log::info!("Dipole inversion (iLSQR, tol={:.0e}, max_iter={})",
+                        config.ilsqr_tol, config.ilsqr_max_iter);
+                    let (prog, _) = iter_progress_bar("iLSQR");
+                    qsm_core::inversion::ilsqr_with_progress(
+                        &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
+                        bdir, config.ilsqr_tol, config.ilsqr_max_iter, prog,
                     )
                 }
                 QsmAlgorithm::Tikhonov => {
@@ -602,12 +795,13 @@ pub fn run_pipeline_cached(
                     qsm_core::inversion::medi_l1_with_progress(
                         &local_field, &n_std, &magnitude, &eroded_mask,
                         nx, ny, nz, vsx, vsy, vsz,
-                        config.medi_lambda, bdir, false, false, config.medi_smv_radius,
+                        config.medi_lambda, bdir, false, config.medi_smv, config.medi_smv_radius,
                         1, config.medi_percentage, config.medi_cg_tol, config.medi_cg_max_iter,
                         config.medi_max_iter, config.medi_tol, prog,
                     )
                 }
                 QsmAlgorithm::Tgv => unreachable!("TGV handled separately"),
+                QsmAlgorithm::Qsmart => unreachable!("QSMART handled separately"),
             };
 
             save_volume(&chi_raw_path, &chi, &meta)?;
@@ -705,61 +899,46 @@ fn resolve_masking_input(
     }
 }
 
+/// Build mask from multiple sections, OR'd together.
 #[allow(clippy::too_many_arguments)]
-fn create_mask(
+fn build_mask_from_sections(
+    sections: &[crate::pipeline::config::MaskSection],
     phases: &[NiftiData],
     magnitudes: &[NiftiData],
     nx: usize, ny: usize, nz: usize,
     vsx: f64, vsy: f64, vsz: f64,
-    config: &PipelineConfig,
     echo_times: &[f64],
 ) -> crate::Result<Vec<u8>> {
-    match config.masking_algorithm {
-        MaskingAlgorithm::Bet => {
-            if magnitudes.is_empty() {
-                return Err(QsmxtError::Config(
-                    "BET masking requires magnitude images".to_string(),
-                ));
-            }
-            let mag_data = if magnitudes.len() > 1 {
-                let refs: Vec<&[f64]> = magnitudes.iter().map(|m| m.data.as_slice()).collect();
-                phase::rss_combine(&refs)
-            } else {
-                magnitudes[0].data.clone()
-            };
-            Ok(qsm_core::bet::run_bet(
-                &mag_data,
-                nx, ny, nz,
-                vsx, vsy, vsz,
-                config.bet_fractional_intensity,
-                config.bet_smoothness,
-                config.bet_gradient_threshold,
-                config.bet_iterations,
-                config.bet_subdivisions,
-            ))
-        }
-        MaskingAlgorithm::Threshold => {
-            if magnitudes.is_empty() && config.masking_input != MaskingInput::PhaseQuality {
-                return Err(QsmxtError::Config(
-                    "Threshold masking requires magnitude images (or use --masking-input phase-quality)".to_string(),
-                ));
-            }
-            let input_data = resolve_masking_input(
-                &config.masking_input, phases, magnitudes, nx, ny, nz, echo_times,
-            );
-            let threshold = qsm_core::utils::otsu_threshold(&input_data, 256);
-            Ok(input_data
-                .iter()
-                .map(|&v| if v > threshold { 1u8 } else { 0u8 })
-                .collect())
+    let n_voxels = nx * ny * nz;
+
+    if sections.is_empty() {
+        return Err(QsmxtError::Config("No mask sections configured".to_string()));
+    }
+
+    if sections.len() == 1 {
+        // Single section: run directly
+        return build_mask_from_section(&sections[0], phases, magnitudes, nx, ny, nz, vsx, vsy, vsz, echo_times);
+    }
+
+    // Multiple sections: run each, OR together
+    log::info!("Building mask from {} sections (OR'd)", sections.len());
+    let mut final_mask = vec![0u8; n_voxels];
+    for (i, section) in sections.iter().enumerate() {
+        log::info!("Mask section {} (input: {})", i + 1, section.input);
+        let section_mask = build_mask_from_section(section, phases, magnitudes, nx, ny, nz, vsx, vsy, vsz, echo_times)?;
+        for j in 0..n_voxels {
+            final_mask[j] |= section_mask[j];
         }
     }
+    let count: usize = final_mask.iter().map(|&m| m as usize).sum();
+    log::info!("Combined mask: {}/{} voxels ({:.1}%)", count, n_voxels, 100.0 * count as f64 / n_voxels as f64);
+    Ok(final_mask)
 }
 
-/// Build mask from an ordered sequence of mask operations.
+/// Build mask from a single section (input + ordered ops).
 #[allow(clippy::too_many_arguments)]
-fn build_mask_from_ops(
-    ops: &[MaskOp],
+fn build_mask_from_section(
+    section: &crate::pipeline::config::MaskSection,
     phases: &[NiftiData],
     magnitudes: &[NiftiData],
     nx: usize, ny: usize, nz: usize,
@@ -770,22 +949,11 @@ fn build_mask_from_ops(
 
     let n_voxels = nx * ny * nz;
     let mut mask = vec![1u8; n_voxels];
-    // Default input data: magnitude if available, else absolute phase
-    let mut input_data: Vec<f64> = if !magnitudes.is_empty() {
-        magnitudes[0].data.clone()
-    } else if !phases.is_empty() {
-        phases[0].data.iter().map(|v| v.abs()).collect()
-    } else {
-        vec![0.0; n_voxels]
-    };
+    let input_data = resolve_masking_input(&section.input, phases, magnitudes, nx, ny, nz, echo_times);
 
-    for op in ops {
+    let all_ops = section.all_ops();
+    for op in &all_ops {
         match op {
-            MaskOp::Input { source } => {
-                input_data = resolve_masking_input(
-                    source, phases, magnitudes, nx, ny, nz, echo_times,
-                );
-            }
             MaskOp::Threshold { method, value } => {
                 let threshold = match method {
                     MaskThresholdMethod::Otsu => {

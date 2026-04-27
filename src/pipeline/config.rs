@@ -7,6 +7,33 @@ use crate::error::QsmxtError;
 
 // ─── Mask operation pipeline ───
 
+/// A single mask section: input → generator → refinement steps.
+/// Multiple sections are OR'd together at runtime.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MaskSection {
+    pub input: MaskingInput,
+    /// The mask-generating step (threshold or BET). Always exactly one.
+    pub generator: MaskOp,
+    /// Morphological refinement steps applied after the generator.
+    #[serde(default)]
+    pub refinements: Vec<MaskOp>,
+}
+
+impl MaskSection {
+    /// Check if this section has a valid generator.
+    pub fn has_generator(&self) -> bool {
+        matches!(self.generator, MaskOp::Threshold { .. } | MaskOp::Bet { .. })
+    }
+
+    /// Get all ops in order (generator + refinements) for runtime execution.
+    pub fn all_ops(&self) -> Vec<MaskOp> {
+        let mut ops = vec![self.generator.clone()];
+        ops.extend(self.refinements.iter().cloned());
+        ops
+    }
+}
+
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum MaskThresholdMethod {
@@ -18,8 +45,6 @@ pub enum MaskThresholdMethod {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "op", rename_all = "kebab-case")]
 pub enum MaskOp {
-    /// Select masking input source
-    Input { source: MaskingInput },
     /// Apply threshold to produce binary mask
     Threshold { method: MaskThresholdMethod, #[serde(default)] value: Option<f64> },
     /// BET brain extraction
@@ -39,7 +64,6 @@ pub enum MaskOp {
 impl fmt::Display for MaskOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Input { source } => write!(f, "input:{}", source),
             Self::Threshold { method: MaskThresholdMethod::Otsu, .. } => write!(f, "threshold:otsu"),
             Self::Threshold { method: MaskThresholdMethod::Fixed, value } =>
                 write!(f, "threshold:fixed:{}", value.unwrap_or(0.5)),
@@ -59,18 +83,6 @@ impl fmt::Display for MaskOp {
 pub fn parse_mask_op(s: &str) -> crate::Result<MaskOp> {
     let parts: Vec<&str> = s.splitn(3, ':').collect();
     match parts[0] {
-        "input" => {
-            let source = match parts.get(1).copied() {
-                Some("magnitude") => MaskingInput::Magnitude,
-                Some("magnitude-first") => MaskingInput::MagnitudeFirst,
-                Some("magnitude-last") => MaskingInput::MagnitudeLast,
-                Some("phase-quality") => MaskingInput::PhaseQuality,
-                _ => return Err(QsmxtError::Config(
-                    format!("Invalid mask-op input source: '{}'. Expected magnitude, magnitude-first, magnitude-last, or phase-quality", s)
-                )),
-            };
-            Ok(MaskOp::Input { source })
-        }
         "threshold" => {
             match parts.get(1).copied() {
                 Some("otsu") | None => Ok(MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None }),
@@ -129,10 +141,13 @@ pub enum QsmAlgorithm {
     Rts,
     Tv,
     Tkd,
+    Tsvd,
     Tgv,
     Tikhonov,
     Nltv,
     Medi,
+    Ilsqr,
+    Qsmart,
 }
 
 impl fmt::Display for QsmAlgorithm {
@@ -141,10 +156,13 @@ impl fmt::Display for QsmAlgorithm {
             Self::Rts => write!(f, "rts"),
             Self::Tv => write!(f, "tv"),
             Self::Tkd => write!(f, "tkd"),
+            Self::Tsvd => write!(f, "tsvd"),
             Self::Tgv => write!(f, "tgv"),
             Self::Tikhonov => write!(f, "tikhonov"),
             Self::Nltv => write!(f, "nltv"),
             Self::Medi => write!(f, "medi"),
+            Self::Ilsqr => write!(f, "ilsqr"),
+            Self::Qsmart => write!(f, "qsmart"),
         }
     }
 }
@@ -187,21 +205,6 @@ impl fmt::Display for BfAlgorithm {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum MaskingAlgorithm {
-    Bet,
-    Threshold,
-}
-
-impl fmt::Display for MaskingAlgorithm {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Bet => write!(f, "bet"),
-            Self::Threshold => write!(f, "threshold"),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -265,9 +268,9 @@ pub struct PipelineConfig {
     #[serde(default = "default_obliquity_threshold")]
     pub obliquity_threshold: f64,
 
-    /// Ordered mask-building operations. If empty, falls back to legacy masking fields.
-    #[serde(default)]
-    pub mask_ops: Vec<MaskOp>,
+    /// Mask sections, OR'd together at runtime. Each section has an input source and ops.
+    #[serde(default = "default_mask_sections")]
+    pub mask_sections: Vec<MaskSection>,
 
     // Algorithm choices
     #[serde(default = "default_qsm_algorithm")]
@@ -276,10 +279,6 @@ pub struct PipelineConfig {
     pub unwrapping_algorithm: Option<UnwrappingAlgorithm>,
     #[serde(default = "default_bf")]
     pub bf_algorithm: Option<BfAlgorithm>,
-    #[serde(default = "default_masking")]
-    pub masking_algorithm: MaskingAlgorithm,
-    #[serde(default = "default_masking_input")]
-    pub masking_input: MaskingInput,
 
     // Multi-echo
     #[serde(default = "default_true")]
@@ -300,8 +299,6 @@ pub struct PipelineConfig {
     pub bet_iterations: usize,
     #[serde(default = "default_bet_subdivisions")]
     pub bet_subdivisions: usize,
-    #[serde(default = "default_erosions")]
-    pub mask_erosions: Vec<usize>,
 
     // RTS parameters
     #[serde(default = "default_rts_delta")]
@@ -330,6 +327,16 @@ pub struct PipelineConfig {
     // TKD parameters
     #[serde(default = "default_tkd_threshold")]
     pub tkd_threshold: f64,
+
+    // TSVD parameters
+    #[serde(default = "default_tsvd_threshold")]
+    pub tsvd_threshold: f64,
+
+    // iLSQR parameters
+    #[serde(default = "default_ilsqr_tol")]
+    pub ilsqr_tol: f64,
+    #[serde(default = "default_ilsqr_max_iter")]
+    pub ilsqr_max_iter: usize,
 
     // Tikhonov parameters
     #[serde(default = "default_tikhonov_lambda")]
@@ -362,10 +369,16 @@ pub struct PipelineConfig {
     pub medi_percentage: f64,
     #[serde(default = "default_medi_smv_radius")]
     pub medi_smv_radius: f64,
+    #[serde(default = "default_medi_smv")]
+    pub medi_smv: bool,
 
     // V-SHARP parameters
     #[serde(default = "default_vsharp_threshold")]
     pub vsharp_threshold: f64,
+    #[serde(default = "default_vsharp_max_radius_factor")]
+    pub vsharp_max_radius_factor: f64,
+    #[serde(default = "default_vsharp_min_radius_factor")]
+    pub vsharp_min_radius_factor: f64,
 
     // PDF parameters
     #[serde(default = "default_pdf_tol")]
@@ -380,10 +393,46 @@ pub struct PipelineConfig {
     pub ismv_tol: f64,
     #[serde(default = "default_ismv_max_iter")]
     pub ismv_max_iter: usize,
+    #[serde(default = "default_ismv_radius_factor")]
+    pub ismv_radius_factor: f64,
 
     // SHARP parameters
     #[serde(default = "default_sharp_threshold")]
     pub sharp_threshold: f64,
+    #[serde(default = "default_sharp_radius_factor")]
+    pub sharp_radius_factor: f64,
+
+    // ROMEO parameters
+    #[serde(default = "default_romeo_phase_gradient_coherence")]
+    pub romeo_phase_gradient_coherence: bool,
+    #[serde(default = "default_romeo_mag_coherence")]
+    pub romeo_mag_coherence: bool,
+    #[serde(default = "default_romeo_mag_weight")]
+    pub romeo_mag_weight: bool,
+
+    // MCPC-3D-S parameters
+    #[serde(default = "default_mcpc3ds_sigma")]
+    pub mcpc3ds_sigma: [f64; 3],
+
+    // SWI parameters
+    #[serde(default = "default_swi_hp_sigma")]
+    pub swi_hp_sigma: [f64; 3],
+    #[serde(default = "default_swi_scaling")]
+    pub swi_scaling: String,
+    #[serde(default = "default_swi_strength")]
+    pub swi_strength: f64,
+    #[serde(default = "default_swi_mip_window")]
+    pub swi_mip_window: usize,
+
+    // Homogeneity correction parameters
+    #[serde(default = "default_homogeneity_sigma_mm")]
+    pub homogeneity_sigma_mm: f64,
+    #[serde(default = "default_homogeneity_nbox")]
+    pub homogeneity_nbox: usize,
+
+    // Linear fit parameters
+    #[serde(default = "default_linear_fit_reliability_threshold")]
+    pub linear_fit_reliability_threshold: f64,
 
     // TGV parameters
     #[serde(default = "default_tgv_iterations")]
@@ -392,6 +441,20 @@ pub struct PipelineConfig {
     pub tgv_alphas: [f64; 2],
     #[serde(default = "default_tgv_erosions")]
     pub tgv_erosions: usize,
+    #[serde(default = "default_tgv_step_size")]
+    pub tgv_step_size: f64,
+    #[serde(default = "default_tgv_tol")]
+    pub tgv_tol: f64,
+
+    // QSMART parameters
+    #[serde(default = "default_qsmart_ilsqr_tol")]
+    pub qsmart_ilsqr_tol: f64,
+    #[serde(default = "default_qsmart_ilsqr_max_iter")]
+    pub qsmart_ilsqr_max_iter: usize,
+    #[serde(default = "default_qsmart_vasc_sphere_radius")]
+    pub qsmart_vasc_sphere_radius: i32,
+    #[serde(default = "default_qsmart_sdf_spatial_radius")]
+    pub qsmart_sdf_spatial_radius: i32,
 }
 
 // Defaults
@@ -399,15 +462,12 @@ fn default_true() -> bool { true }
 fn default_qsm_algorithm() -> QsmAlgorithm { QsmAlgorithm::Rts }
 fn default_unwrapping() -> Option<UnwrappingAlgorithm> { Some(UnwrappingAlgorithm::Romeo) }
 fn default_bf() -> Option<BfAlgorithm> { Some(BfAlgorithm::Vsharp) }
-fn default_masking() -> MaskingAlgorithm { MaskingAlgorithm::Threshold }
-fn default_masking_input() -> MaskingInput { MaskingInput::PhaseQuality }
 fn default_reference() -> QsmReference { QsmReference::Mean }
 fn default_bet_fi() -> f64 { qsm_core::bet::BetParams::default().fractional_intensity }
 fn default_bet_smoothness() -> f64 { qsm_core::bet::BetParams::default().smoothness }
 fn default_bet_gradient() -> f64 { qsm_core::bet::BetParams::default().gradient_threshold }
 fn default_bet_iterations() -> usize { qsm_core::bet::BetParams::default().iterations }
 fn default_bet_subdivisions() -> usize { qsm_core::bet::BetParams::default().subdivisions }
-fn default_erosions() -> Vec<usize> { vec![2] }
 fn default_rts_delta() -> f64 { qsm_core::inversion::RtsParams::default().delta }
 fn default_rts_mu() -> f64 { qsm_core::inversion::RtsParams::default().mu }
 fn default_rts_tol() -> f64 { qsm_core::inversion::RtsParams::default().tol }
@@ -419,6 +479,9 @@ fn default_tv_rho() -> f64 { qsm_core::inversion::TvParams::default().rho }
 fn default_tv_tol() -> f64 { qsm_core::inversion::TvParams::default().tol }
 fn default_tv_max_iter() -> usize { qsm_core::inversion::TvParams::default().max_iter }
 fn default_tkd_threshold() -> f64 { qsm_core::inversion::TkdParams::default().threshold }
+fn default_tsvd_threshold() -> f64 { qsm_core::inversion::TkdParams::default().threshold }
+fn default_ilsqr_tol() -> f64 { qsm_core::inversion::IlsqrParams::default().tol }
+fn default_ilsqr_max_iter() -> usize { qsm_core::inversion::IlsqrParams::default().max_iter }
 fn default_tikhonov_lambda() -> f64 { qsm_core::inversion::TikhonovParams::default().lambda }
 fn default_nltv_lambda() -> f64 { qsm_core::inversion::NltvParams::default().lambda }
 fn default_nltv_mu() -> f64 { qsm_core::inversion::NltvParams::default().mu }
@@ -432,28 +495,63 @@ fn default_medi_cg_tol() -> f64 { qsm_core::inversion::MediParams::default().cg_
 fn default_medi_tol() -> f64 { qsm_core::inversion::MediParams::default().tol }
 fn default_medi_percentage() -> f64 { qsm_core::inversion::MediParams::default().percentage }
 fn default_medi_smv_radius() -> f64 { qsm_core::inversion::MediParams::default().smv_radius }
+fn default_medi_smv() -> bool { qsm_core::inversion::MediParams::default().smv }
 fn default_vsharp_threshold() -> f64 { qsm_core::bgremove::VsharpParams::default().threshold }
+fn default_vsharp_max_radius_factor() -> f64 { qsm_core::bgremove::VsharpParams::default().max_radius_factor }
+fn default_vsharp_min_radius_factor() -> f64 { qsm_core::bgremove::VsharpParams::default().min_radius_factor }
 fn default_pdf_tol() -> f64 { qsm_core::bgremove::PdfParams::default().tol }
 fn default_lbv_tol() -> f64 { qsm_core::bgremove::LbvParams::default().tol }
 fn default_ismv_tol() -> f64 { qsm_core::bgremove::IsmvParams::default().tol }
 fn default_ismv_max_iter() -> usize { qsm_core::bgremove::IsmvParams::default().max_iter }
+fn default_ismv_radius_factor() -> f64 { qsm_core::bgremove::IsmvParams::default().radius_factor }
 fn default_sharp_threshold() -> f64 { qsm_core::bgremove::SharpParams::default().threshold }
+fn default_sharp_radius_factor() -> f64 { qsm_core::bgremove::SharpParams::default().radius_factor }
+fn default_romeo_phase_gradient_coherence() -> bool { qsm_core::unwrap::RomeoParams::default().phase_gradient_coherence }
+fn default_romeo_mag_coherence() -> bool { qsm_core::unwrap::RomeoParams::default().mag_coherence }
+fn default_romeo_mag_weight() -> bool { qsm_core::unwrap::RomeoParams::default().mag_weight }
+fn default_mcpc3ds_sigma() -> [f64; 3] { qsm_core::utils::Mcpc3dsParams::default().sigma }
+fn default_swi_hp_sigma() -> [f64; 3] { qsm_core::swi::SwiParams::default().hp_sigma }
+fn default_swi_scaling() -> String { "tanh".to_string() }
+fn default_swi_strength() -> f64 { qsm_core::swi::SwiParams::default().strength }
+fn default_swi_mip_window() -> usize { qsm_core::swi::SwiParams::default().mip_window }
+fn default_homogeneity_sigma_mm() -> f64 { qsm_core::utils::HomogeneityParams::default().sigma_mm }
+fn default_homogeneity_nbox() -> usize { qsm_core::utils::HomogeneityParams::default().nbox }
+fn default_linear_fit_reliability_threshold() -> f64 { qsm_core::utils::LinearFitParams::default().reliability_threshold_percentile }
 fn default_tgv_iterations() -> usize { qsm_core::inversion::TgvParams::default().iterations }
-fn default_mask_ops() -> Vec<MaskOp> {
-    vec![
-        MaskOp::Input { source: MaskingInput::PhaseQuality },
-        MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
-        MaskOp::Dilate { iterations: 2 },
-        MaskOp::FillHoles { max_size: 0 }, // 0 = auto (volume/20)
-        MaskOp::Erode { iterations: 2 },
-    ]
+fn default_tgv_step_size() -> f64 { qsm_core::inversion::TgvParams::default().step_size as f64 }
+fn default_tgv_tol() -> f64 { qsm_core::inversion::TgvParams::default().tol as f64 }
+fn default_mask_sections() -> Vec<MaskSection> {
+    vec![MaskSection {
+        input: MaskingInput::PhaseQuality,
+        generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+        refinements: vec![
+            MaskOp::Dilate { iterations: 2 },
+            MaskOp::FillHoles { max_size: 0 },
+            MaskOp::Erode { iterations: 2 },
+        ],
+    }]
 }
+/// Parse a masking input source string.
+pub fn parse_masking_input(s: &str) -> Option<MaskingInput> {
+    match s.trim() {
+        "magnitude" => Some(MaskingInput::Magnitude),
+        "magnitude-first" => Some(MaskingInput::MagnitudeFirst),
+        "magnitude-last" => Some(MaskingInput::MagnitudeLast),
+        "phase-quality" => Some(MaskingInput::PhaseQuality),
+        _ => None,
+    }
+}
+
 fn default_obliquity_threshold() -> f64 { -1.0 }
 fn default_tgv_alphas() -> [f64; 2] {
     let p = qsm_core::inversion::TgvParams::default();
     [p.alpha1 as f64, p.alpha0 as f64]
 }
 fn default_tgv_erosions() -> usize { qsm_core::inversion::TgvParams::default().erosions }
+fn default_qsmart_ilsqr_tol() -> f64 { qsm_core::utils::QsmartParams::default().ilsqr_tol }
+fn default_qsmart_ilsqr_max_iter() -> usize { qsm_core::utils::QsmartParams::default().ilsqr_max_iter }
+fn default_qsmart_vasc_sphere_radius() -> i32 { qsm_core::utils::QsmartParams::default().vasc_sphere_radius }
+fn default_qsmart_sdf_spatial_radius() -> i32 { qsm_core::utils::QsmartParams::default().sdf_spatial_radius }
 
 impl Default for PipelineConfig {
     fn default() -> Self {
@@ -471,14 +569,12 @@ impl PipelineConfig {
                 do_swi: false,
                 do_t2starmap: false,
                 do_r2starmap: false,
-                inhomogeneity_correction: false,
+                inhomogeneity_correction: true,
                 obliquity_threshold: -1.0,
-                mask_ops: default_mask_ops(),
+                mask_sections: default_mask_sections(),
                 qsm_algorithm: QsmAlgorithm::Rts,
                 unwrapping_algorithm: Some(UnwrappingAlgorithm::Romeo),
                 bf_algorithm: Some(BfAlgorithm::Vsharp),
-                masking_algorithm: MaskingAlgorithm::Threshold,
-                masking_input: MaskingInput::PhaseQuality,
                 combine_phase: true,
                 qsm_reference: QsmReference::Mean,
                 bet_fractional_intensity: default_bet_fi(),
@@ -486,7 +582,6 @@ impl PipelineConfig {
                 bet_gradient_threshold: default_bet_gradient(),
                 bet_iterations: default_bet_iterations(),
                 bet_subdivisions: default_bet_subdivisions(),
-                mask_erosions: vec![2],
                 rts_delta: default_rts_delta(),
                 rts_mu: default_rts_mu(),
                 rts_tol: default_rts_tol(),
@@ -498,6 +593,9 @@ impl PipelineConfig {
                 tv_tol: default_tv_tol(),
                 tv_max_iter: default_tv_max_iter(),
                 tkd_threshold: default_tkd_threshold(),
+                tsvd_threshold: default_tsvd_threshold(),
+                ilsqr_tol: default_ilsqr_tol(),
+                ilsqr_max_iter: default_ilsqr_max_iter(),
                 tikhonov_lambda: default_tikhonov_lambda(),
                 nltv_lambda: default_nltv_lambda(),
                 nltv_mu: default_nltv_mu(),
@@ -511,42 +609,59 @@ impl PipelineConfig {
                 medi_tol: default_medi_tol(),
                 medi_percentage: default_medi_percentage(),
                 medi_smv_radius: default_medi_smv_radius(),
+                medi_smv: default_medi_smv(),
                 vsharp_threshold: default_vsharp_threshold(),
+                vsharp_max_radius_factor: default_vsharp_max_radius_factor(),
+                vsharp_min_radius_factor: default_vsharp_min_radius_factor(),
                 pdf_tol: default_pdf_tol(),
                 lbv_tol: default_lbv_tol(),
                 ismv_tol: default_ismv_tol(),
                 ismv_max_iter: default_ismv_max_iter(),
+                ismv_radius_factor: default_ismv_radius_factor(),
                 sharp_threshold: default_sharp_threshold(),
+                sharp_radius_factor: default_sharp_radius_factor(),
+                romeo_phase_gradient_coherence: default_romeo_phase_gradient_coherence(),
+                romeo_mag_coherence: default_romeo_mag_coherence(),
+                romeo_mag_weight: default_romeo_mag_weight(),
+                mcpc3ds_sigma: default_mcpc3ds_sigma(),
+                swi_hp_sigma: default_swi_hp_sigma(),
+                swi_scaling: default_swi_scaling(),
+                swi_strength: default_swi_strength(),
+                swi_mip_window: default_swi_mip_window(),
+                homogeneity_sigma_mm: default_homogeneity_sigma_mm(),
+                homogeneity_nbox: default_homogeneity_nbox(),
+                linear_fit_reliability_threshold: default_linear_fit_reliability_threshold(),
                 tgv_iterations: default_tgv_iterations(),
                 tgv_alphas: default_tgv_alphas(),
                 tgv_erosions: default_tgv_erosions(),
+                tgv_step_size: default_tgv_step_size(),
+                tgv_tol: default_tgv_tol(),
+                qsmart_ilsqr_tol: default_qsmart_ilsqr_tol(),
+                qsmart_ilsqr_max_iter: default_qsmart_ilsqr_max_iter(),
+                qsmart_vasc_sphere_radius: default_qsmart_vasc_sphere_radius(),
+                qsmart_sdf_spatial_radius: default_qsmart_sdf_spatial_radius(),
             },
             cli::Preset::Epi => Self {
                 description: "3D-EPI images (human brain)".to_string(),
-                mask_erosions: vec![3],
                 ..Self::from_preset(cli::Preset::Gre)
             },
             cli::Preset::Bet => Self {
                 description: "Traditional BET masking (human brain)".to_string(),
-                masking_algorithm: MaskingAlgorithm::Bet,
-                masking_input: MaskingInput::Magnitude,
-                mask_ops: vec![
-                    MaskOp::Bet { fractional_intensity: 0.5 },
-                    MaskOp::Erode { iterations: 3 },
-                ],
-                mask_erosions: vec![3],
+                mask_sections: vec![MaskSection {
+                    input: MaskingInput::Magnitude,
+                    generator: MaskOp::Bet { fractional_intensity: 0.5 },
+                    refinements: vec![MaskOp::Erode { iterations: 3 }],
+                }],
                 ..Self::from_preset(cli::Preset::Gre)
             },
             cli::Preset::Fast => Self {
                 description: "Fast algorithms".to_string(),
-                masking_algorithm: MaskingAlgorithm::Bet,
-                masking_input: MaskingInput::Magnitude,
                 bf_algorithm: Some(BfAlgorithm::Vsharp),
-                mask_ops: vec![
-                    MaskOp::Bet { fractional_intensity: 0.5 },
-                    MaskOp::Erode { iterations: 3 },
-                ],
-                mask_erosions: vec![3],
+                mask_sections: vec![MaskSection {
+                    input: MaskingInput::Magnitude,
+                    generator: MaskOp::Bet { fractional_intensity: 0.5 },
+                    refinements: vec![MaskOp::Erode { iterations: 3 }],
+                }],
                 ..Self::from_preset(cli::Preset::Gre)
             },
             cli::Preset::Body => Self {
@@ -555,16 +670,15 @@ impl PipelineConfig {
                 unwrapping_algorithm: None,
                 bf_algorithm: None,
                 combine_phase: false,
-                masking_algorithm: MaskingAlgorithm::Threshold,
-                masking_input: MaskingInput::Magnitude,
-                mask_ops: vec![
-                    MaskOp::Input { source: MaskingInput::Magnitude },
-                    MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
-                    MaskOp::Dilate { iterations: 2 },
-                    MaskOp::FillHoles { max_size: 0 },
-                    MaskOp::Erode { iterations: 3 },
-                ],
-                mask_erosions: vec![3],
+                mask_sections: vec![MaskSection {
+                    input: MaskingInput::Magnitude,
+                    generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                    refinements: vec![
+                        MaskOp::Dilate { iterations: 2 },
+                        MaskOp::FillHoles { max_size: 0 },
+                        MaskOp::Erode { iterations: 3 },
+                    ],
+                }],
                 ..Self::from_preset(cli::Preset::Gre)
             },
         }
@@ -586,7 +700,10 @@ impl PipelineConfig {
                 cli::QsmAlgorithmArg::Tgv => QsmAlgorithm::Tgv,
                 cli::QsmAlgorithmArg::Tikhonov => QsmAlgorithm::Tikhonov,
                 cli::QsmAlgorithmArg::Nltv => QsmAlgorithm::Nltv,
+                cli::QsmAlgorithmArg::Tsvd => QsmAlgorithm::Tsvd,
                 cli::QsmAlgorithmArg::Medi => QsmAlgorithm::Medi,
+                cli::QsmAlgorithmArg::Ilsqr => QsmAlgorithm::Ilsqr,
+                cli::QsmAlgorithmArg::Qsmart => QsmAlgorithm::Qsmart,
             };
         }
         if let Some(a) = args.unwrapping_algorithm {
@@ -603,20 +720,6 @@ impl PipelineConfig {
                 cli::BfAlgorithmArg::Ismv => BfAlgorithm::Ismv,
                 cli::BfAlgorithmArg::Sharp => BfAlgorithm::Sharp,
             });
-        }
-        if let Some(a) = args.masking_algorithm {
-            self.masking_algorithm = match a {
-                cli::MaskAlgorithmArg::Bet => MaskingAlgorithm::Bet,
-                cli::MaskAlgorithmArg::Threshold => MaskingAlgorithm::Threshold,
-            };
-        }
-        if let Some(a) = args.masking_input {
-            self.masking_input = match a {
-                cli::MaskInputArg::MagnitudeFirst => MaskingInput::MagnitudeFirst,
-                cli::MaskInputArg::Magnitude => MaskingInput::Magnitude,
-                cli::MaskInputArg::MagnitudeLast => MaskingInput::MagnitudeLast,
-                cli::MaskInputArg::PhaseQuality => MaskingInput::PhaseQuality,
-            };
         }
         if let Some(v) = args.combine_phase {
             self.combine_phase = v;
@@ -647,9 +750,6 @@ impl PipelineConfig {
         }
         if let Some(v) = args.tgv_alpha0 {
             self.tgv_alphas[1] = v;
-        }
-        if let Some(ref v) = args.mask_erosions {
-            self.mask_erosions = v.clone();
         }
         if let Some(v) = args.rts_delta {
             self.rts_delta = v;
@@ -683,6 +783,15 @@ impl PipelineConfig {
         }
         if let Some(v) = args.tkd_threshold {
             self.tkd_threshold = v;
+        }
+        if let Some(v) = args.tsvd_threshold {
+            self.tsvd_threshold = v;
+        }
+        if let Some(v) = args.ilsqr_tol {
+            self.ilsqr_tol = v;
+        }
+        if let Some(v) = args.ilsqr_max_iter {
+            self.ilsqr_max_iter = v;
         }
         if let Some(v) = args.tikhonov_lambda {
             self.tikhonov_lambda = v;
@@ -723,6 +832,9 @@ impl PipelineConfig {
         if let Some(v) = args.medi_smv_radius {
             self.medi_smv_radius = v;
         }
+        if args.medi_smv {
+            self.medi_smv = true;
+        }
         if let Some(v) = args.vsharp_threshold {
             self.vsharp_threshold = v;
         }
@@ -741,11 +853,76 @@ impl PipelineConfig {
         if let Some(v) = args.sharp_threshold {
             self.sharp_threshold = v;
         }
+        if let Some(v) = args.sharp_radius_factor {
+            self.sharp_radius_factor = v;
+        }
+        if let Some(v) = args.vsharp_max_radius_factor {
+            self.vsharp_max_radius_factor = v;
+        }
+        if let Some(v) = args.vsharp_min_radius_factor {
+            self.vsharp_min_radius_factor = v;
+        }
+        if let Some(v) = args.ismv_radius_factor {
+            self.ismv_radius_factor = v;
+        }
+        if args.no_romeo_phase_gradient_coherence {
+            self.romeo_phase_gradient_coherence = false;
+        }
+        if args.no_romeo_mag_coherence {
+            self.romeo_mag_coherence = false;
+        }
+        if args.no_romeo_mag_weight {
+            self.romeo_mag_weight = false;
+        }
+        if let Some(ref s) = args.mcpc3ds_sigma {
+            if s.len() == 3 {
+                self.mcpc3ds_sigma = [s[0], s[1], s[2]];
+            }
+        }
         if let Some(v) = args.tgv_iterations {
             self.tgv_iterations = v;
         }
         if let Some(v) = args.tgv_erosions {
             self.tgv_erosions = v;
+        }
+        if let Some(v) = args.qsmart_ilsqr_tol {
+            self.qsmart_ilsqr_tol = v;
+        }
+        if let Some(v) = args.qsmart_ilsqr_max_iter {
+            self.qsmart_ilsqr_max_iter = v;
+        }
+        if let Some(v) = args.qsmart_vasc_sphere_radius {
+            self.qsmart_vasc_sphere_radius = v;
+        }
+        if let Some(v) = args.qsmart_sdf_spatial_radius {
+            self.qsmart_sdf_spatial_radius = v;
+        }
+        if let Some(ref s) = args.swi_hp_sigma {
+            if s.len() == 3 { self.swi_hp_sigma = [s[0], s[1], s[2]]; }
+        }
+        if let Some(ref v) = args.swi_scaling {
+            self.swi_scaling = v.clone();
+        }
+        if let Some(v) = args.swi_strength {
+            self.swi_strength = v;
+        }
+        if let Some(v) = args.swi_mip_window {
+            self.swi_mip_window = v;
+        }
+        if let Some(v) = args.homogeneity_sigma_mm {
+            self.homogeneity_sigma_mm = v;
+        }
+        if let Some(v) = args.homogeneity_nbox {
+            self.homogeneity_nbox = v;
+        }
+        if let Some(v) = args.linear_fit_reliability_threshold {
+            self.linear_fit_reliability_threshold = v;
+        }
+        if let Some(v) = args.tgv_step_size {
+            self.tgv_step_size = v;
+        }
+        if let Some(v) = args.tgv_tol {
+            self.tgv_tol = v;
         }
         if args.do_swi {
             self.do_swi = true;
@@ -762,16 +939,54 @@ impl PipelineConfig {
         if let Some(v) = args.obliquity_threshold {
             self.obliquity_threshold = v;
         }
-        if let Some(ref ops) = args.mask_ops {
-            let mut parsed = Vec::new();
-            for s in ops {
-                match parse_mask_op(s) {
-                    Ok(op) => parsed.push(op),
-                    Err(e) => log::warn!("Ignoring invalid mask-op '{}': {}", s, e),
+        // Handle --mask-preset
+        if let Some(preset) = args.mask_preset {
+            self.mask_sections = match preset {
+                cli::MaskPresetArg::RobustThreshold => default_mask_sections(),
+                cli::MaskPresetArg::Bet => vec![MaskSection {
+                    input: MaskingInput::Magnitude,
+                    generator: MaskOp::Bet { fractional_intensity: 0.5 },
+                    refinements: vec![MaskOp::Erode { iterations: 2 }],
+                }],
+            };
+        }
+        // Handle --mask: each flag defines a complete section (overrides --mask-preset)
+        // Format: <input>,<generator>,<refinement1>,<refinement2>,...
+        // e.g. --mask-section phase-quality,threshold:otsu,dilate:2,erode:2
+        // Multiple sections are OR'd together.
+        if let Some(ref sections) = args.mask_sections_cli {
+            let mut new_sections = Vec::new();
+            for s in sections {
+                let parts: Vec<&str> = s.split(',').collect();
+                if parts.is_empty() { continue; }
+                let input = match parse_masking_input(parts[0]) {
+                    Some(i) => i,
+                    None => {
+                        log::warn!("Ignoring invalid --mask-section input: '{}'", parts[0]);
+                        continue;
+                    }
+                };
+                let mut ops: Vec<MaskOp> = Vec::new();
+                for part in &parts[1..] {
+                    match parse_mask_op(part) {
+                        Ok(op) => ops.push(op),
+                        Err(e) => log::warn!("Ignoring invalid mask-section op '{}': {}", part, e),
+                    }
                 }
+                let gen_idx = ops.iter().position(|op| matches!(op, MaskOp::Threshold { .. } | MaskOp::Bet { .. }));
+                let generator = if let Some(gi) = gen_idx {
+                    ops.remove(gi)
+                } else {
+                    MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None }
+                };
+                new_sections.push(MaskSection {
+                    input,
+                    generator,
+                    refinements: ops,
+                });
             }
-            if !parsed.is_empty() {
-                self.mask_ops = parsed;
+            if !new_sections.is_empty() {
+                self.mask_sections = new_sections;
             }
         }
     }
@@ -786,10 +1001,66 @@ impl PipelineConfig {
             if self.bf_algorithm.is_some() {
                 log::debug!("TGV selected; ignoring bf_algorithm");
             }
+        } else if self.qsm_algorithm == QsmAlgorithm::Qsmart {
+            // QSMART does its own BG removal (SDF) and inversion (iLSQR)
+            if self.bf_algorithm.is_some() {
+                log::debug!("QSMART selected; ignoring bf_algorithm");
+            }
+        } else if self.qsm_algorithm == QsmAlgorithm::Medi && self.medi_smv {
+            // MEDI with SMV handles background removal internally
+            if self.bf_algorithm.is_some() {
+                log::debug!("MEDI+SMV selected; ignoring bf_algorithm");
+            }
         } else if self.bf_algorithm.is_none() {
             return Err(QsmxtError::Config(
-                "bf_algorithm must be set for non-TGV algorithms".to_string(),
+                "bf_algorithm must be set for standard algorithms".to_string(),
             ));
+        }
+        // Validate mask sections
+        if self.mask_sections.is_empty() {
+            return Err(QsmxtError::Config(
+                "At least one mask section is required".to_string(),
+            ));
+        }
+        for (i, section) in self.mask_sections.iter().enumerate() {
+            if !section.has_generator() {
+                return Err(QsmxtError::Config(
+                    format!("Mask section {} has an invalid generator (must be threshold or BET)", i + 1),
+                ));
+            }
+            // Validate generator parameters
+            match &section.generator {
+                MaskOp::Bet { fractional_intensity } => {
+                    if *fractional_intensity < 0.0 || *fractional_intensity > 1.0 {
+                        return Err(QsmxtError::Config(
+                            format!("Mask section {} BET fractional intensity must be 0.0-1.0, got {}", i + 1, fractional_intensity),
+                        ));
+                    }
+                }
+                MaskOp::Threshold { method: MaskThresholdMethod::Fixed, value: Some(v) } => {
+                    if *v < 0.0 {
+                        return Err(QsmxtError::Config(
+                            format!("Mask section {} fixed threshold must be ≥ 0.0, got {}", i + 1, v),
+                        ));
+                    }
+                }
+                MaskOp::Threshold { method: MaskThresholdMethod::Percentile, value: Some(v) } => {
+                    if *v < 0.0 || *v > 100.0 {
+                        return Err(QsmxtError::Config(
+                            format!("Mask section {} percentile must be 0-100, got {}", i + 1, v),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+            // Refinements must not contain generators
+            for (j, op) in section.refinements.iter().enumerate() {
+                if matches!(op, MaskOp::Threshold { .. } | MaskOp::Bet { .. }) {
+                    return Err(QsmxtError::Config(
+                        format!("Mask section {} refinement step {} is a generator (threshold/BET) — generators must be the first step. Use multiple sections (OR'd) instead.", i + 1, j + 1),
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -816,10 +1087,6 @@ impl PipelineConfig {
             Some(a) => s.push_str(&format!("bf_algorithm = \"{}\"\n", a)),
             None => s.push_str("# bf_algorithm = \"pdf\"  # Not used with TGV\n"),
         }
-        s.push_str("# Masking method: bet | threshold\n");
-        s.push_str(&format!("masking_algorithm = \"{}\"\n", self.masking_algorithm));
-        s.push_str("# Masking input: magnitude | magnitude-combined | magnitude-last | phase-quality\n");
-        s.push_str(&format!("masking_input = \"{}\"\n", self.masking_input));
         s.push_str("# Combine multi-echo phase data using MCPC-3D-S\n");
         s.push_str(&format!("combine_phase = {}\n", self.combine_phase));
         s.push_str("# QSM reference: mean | none\n");
@@ -838,8 +1105,6 @@ impl PipelineConfig {
         s.push_str("[masking]\n");
         s.push_str("# BET fractional intensity (0.0-1.0, smaller = larger brain)\n");
         s.push_str(&format!("bet_fractional_intensity = {}\n", self.bet_fractional_intensity));
-        s.push_str("# Mask erosion iterations\n");
-        s.push_str(&format!("mask_erosions = {:?}\n", self.mask_erosions));
         s.push('\n');
 
         s.push_str("[rts]\n");
@@ -919,6 +1184,9 @@ mod tests {
             tv_tol: None,
             tv_max_iter: None,
             tkd_threshold: None,
+            tsvd_threshold: None,
+            ilsqr_tol: None,
+            ilsqr_max_iter: None,
             tikhonov_lambda: None,
             nltv_lambda: None,
             nltv_mu: None,
@@ -932,21 +1200,44 @@ mod tests {
             medi_tol: None,
             medi_percentage: None,
             medi_smv_radius: None,
+            medi_smv: false,
             vsharp_threshold: None,
             pdf_tol: None,
             lbv_tol: None,
             ismv_tol: None,
             ismv_max_iter: None,
             sharp_threshold: None,
+            sharp_radius_factor: None,
+            vsharp_max_radius_factor: None,
+            vsharp_min_radius_factor: None,
+            ismv_radius_factor: None,
+            no_romeo_phase_gradient_coherence: false,
+            no_romeo_mag_coherence: false,
+            no_romeo_mag_weight: false,
+            mcpc3ds_sigma: None,
             tgv_iterations: None,
             tgv_erosions: None,
+            qsmart_ilsqr_tol: None,
+            qsmart_ilsqr_max_iter: None,
+            qsmart_vasc_sphere_radius: None,
+            qsmart_sdf_spatial_radius: None,
             n_procs: None,
             do_swi: false,
             do_t2starmap: false,
             do_r2starmap: false,
             inhomogeneity_correction: false,
             obliquity_threshold: None,
-            mask_ops: None,
+            swi_hp_sigma: None,
+            swi_scaling: None,
+            swi_strength: None,
+            swi_mip_window: None,
+            homogeneity_sigma_mm: None,
+            homogeneity_nbox: None,
+            linear_fit_reliability_threshold: None,
+            tgv_step_size: None,
+            tgv_tol: None,
+            mask_preset: None,
+            mask_sections_cli: None,
             dry: false,
             debug: false,
             mem_limit_gb: None,
@@ -958,42 +1249,9 @@ mod tests {
 
     // --- from_preset ---
 
-    #[test]
-    fn test_from_preset_gre_defaults() {
-        let c = PipelineConfig::from_preset(cli::Preset::Gre);
-        assert_eq!(c.qsm_algorithm, QsmAlgorithm::Rts);
-        assert_eq!(c.unwrapping_algorithm, Some(UnwrappingAlgorithm::Romeo));
-        assert_eq!(c.bf_algorithm, Some(BfAlgorithm::Vsharp));
-        assert_eq!(c.masking_algorithm, MaskingAlgorithm::Threshold);
-        assert_eq!(c.masking_input, MaskingInput::PhaseQuality);
-        assert!(c.combine_phase);
-        assert_eq!(c.mask_erosions, vec![2]);
-        assert!(!c.do_swi);
-        assert!(!c.do_t2starmap);
-        assert!(!c.do_r2starmap);
-    }
 
-    #[test]
-    fn test_from_preset_epi_differs_from_gre() {
-        let epi = PipelineConfig::from_preset(cli::Preset::Epi);
-        assert_eq!(epi.mask_erosions, vec![3]);
-        assert_eq!(epi.qsm_algorithm, QsmAlgorithm::Rts); // inherits GRE
-    }
 
-    #[test]
-    fn test_from_preset_bet_uses_bet_masking() {
-        let c = PipelineConfig::from_preset(cli::Preset::Bet);
-        assert_eq!(c.masking_algorithm, MaskingAlgorithm::Bet);
-        assert_eq!(c.masking_input, MaskingInput::Magnitude);
-        assert_eq!(c.mask_erosions, vec![3]);
-    }
 
-    #[test]
-    fn test_from_preset_fast_uses_vsharp() {
-        let c = PipelineConfig::from_preset(cli::Preset::Fast);
-        assert_eq!(c.bf_algorithm, Some(BfAlgorithm::Vsharp));
-        assert_eq!(c.masking_algorithm, MaskingAlgorithm::Bet);
-    }
 
     #[test]
     fn test_from_preset_body_is_tgv() {
@@ -1006,43 +1264,8 @@ mod tests {
 
     // --- apply_run_overrides ---
 
-    #[test]
-    fn test_apply_run_overrides_no_change_when_all_none() {
-        let original = PipelineConfig::from_preset(cli::Preset::Gre);
-        let mut config = original.clone();
-        let args = default_run_args();
-        config.apply_run_overrides(&args);
-        assert_eq!(config.qsm_algorithm, original.qsm_algorithm);
-        assert_eq!(config.bf_algorithm, original.bf_algorithm);
-        assert_eq!(config.masking_algorithm, original.masking_algorithm);
-        assert_eq!(config.bet_fractional_intensity, original.bet_fractional_intensity);
-    }
 
-    #[test]
-    fn test_apply_run_overrides_single_field() {
-        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
-        let mut args = default_run_args();
-        args.qsm_algorithm = Some(cli::QsmAlgorithmArg::Tgv);
-        config.apply_run_overrides(&args);
-        assert_eq!(config.qsm_algorithm, QsmAlgorithm::Tgv);
-        // Other fields unchanged
-        assert_eq!(config.masking_algorithm, MaskingAlgorithm::Threshold);
-    }
 
-    #[test]
-    fn test_apply_run_overrides_multiple_fields() {
-        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
-        let mut args = default_run_args();
-        args.bf_algorithm = Some(cli::BfAlgorithmArg::Vsharp);
-        args.masking_algorithm = Some(cli::MaskAlgorithmArg::Bet);
-        args.bet_fractional_intensity = Some(0.3);
-        args.mask_erosions = Some(vec![5, 3]);
-        config.apply_run_overrides(&args);
-        assert_eq!(config.bf_algorithm, Some(BfAlgorithm::Vsharp));
-        assert_eq!(config.masking_algorithm, MaskingAlgorithm::Bet);
-        assert!((config.bet_fractional_intensity - 0.3).abs() < 1e-10);
-        assert_eq!(config.mask_erosions, vec![5, 3]);
-    }
 
     #[test]
     fn test_apply_run_overrides_flags() {
@@ -1081,17 +1304,6 @@ mod tests {
 
     // --- to_annotated_toml ---
 
-    #[test]
-    fn test_to_annotated_toml_contains_key_fields() {
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
-        let toml = config.to_annotated_toml();
-        assert!(toml.contains("qsm_algorithm = \"rts\""));
-        assert!(toml.contains("bf_algorithm = \"vsharp\""));
-        assert!(toml.contains("masking_algorithm = \"threshold\""));
-        assert!(toml.contains("[masking]"));
-        assert!(toml.contains("[rts]"));
-        assert!(toml.contains("[tgv]"));
-    }
 
     #[test]
     fn test_to_annotated_toml_body_comments_out_bf() {
@@ -1102,23 +1314,7 @@ mod tests {
 
     // --- MaskingInput::PhaseQuality ---
 
-    #[test]
-    fn test_apply_run_overrides_masking_input() {
-        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
-        assert_eq!(config.masking_input, MaskingInput::PhaseQuality); // default
-        let mut args = default_run_args();
-        args.masking_input = Some(cli::MaskInputArg::MagnitudeFirst);
-        config.apply_run_overrides(&args);
-        assert_eq!(config.masking_input, MaskingInput::MagnitudeFirst);
-    }
 
-    #[test]
-    fn test_masking_input_display() {
-        assert_eq!(format!("{}", MaskingInput::PhaseQuality), "phase-quality");
-        assert_eq!(format!("{}", MaskingInput::Magnitude), "magnitude");
-        assert_eq!(format!("{}", MaskingInput::MagnitudeFirst), "magnitude-first");
-        assert_eq!(format!("{}", MaskingInput::MagnitudeLast), "magnitude-last");
-    }
 
     // --- obliquity_threshold ---
 
@@ -1187,11 +1383,6 @@ mod tests {
         assert_eq!(op, MaskOp::GaussianSmooth { sigma_mm: 4.0 });
     }
 
-    #[test]
-    fn test_parse_mask_op_input_magnitude() {
-        let op = parse_mask_op("input:magnitude").unwrap();
-        assert_eq!(op, MaskOp::Input { source: MaskingInput::Magnitude });
-    }
 
     #[test]
     fn test_parse_mask_op_bet() {
@@ -1204,46 +1395,8 @@ mod tests {
         assert!(parse_mask_op("foobar:123").is_err());
     }
 
-    #[test]
-    fn test_algorithm_display() {
-        assert_eq!(format!("{}", QsmAlgorithm::Rts), "rts");
-        assert_eq!(format!("{}", QsmAlgorithm::Tv), "tv");
-        assert_eq!(format!("{}", QsmAlgorithm::Tkd), "tkd");
-        assert_eq!(format!("{}", QsmAlgorithm::Tgv), "tgv");
-        assert_eq!(format!("{}", UnwrappingAlgorithm::Romeo), "romeo");
-        assert_eq!(format!("{}", UnwrappingAlgorithm::Laplacian), "laplacian");
-        assert_eq!(format!("{}", BfAlgorithm::Vsharp), "vsharp");
-        assert_eq!(format!("{}", BfAlgorithm::Pdf), "pdf");
-        assert_eq!(format!("{}", BfAlgorithm::Lbv), "lbv");
-        assert_eq!(format!("{}", BfAlgorithm::Ismv), "ismv");
-        assert_eq!(format!("{}", MaskingAlgorithm::Bet), "bet");
-        assert_eq!(format!("{}", MaskingAlgorithm::Threshold), "threshold");
-        assert_eq!(format!("{}", QsmReference::Mean), "mean");
-        assert_eq!(format!("{}", QsmReference::None), "none");
-    }
 
-    #[test]
-    fn test_mask_op_display_all_variants() {
-        assert_eq!(format!("{}", MaskOp::Input { source: MaskingInput::Magnitude }), "input:magnitude");
-        assert_eq!(format!("{}", MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None }), "threshold:otsu");
-        assert_eq!(format!("{}", MaskOp::Threshold { method: MaskThresholdMethod::Fixed, value: Some(0.3) }), "threshold:fixed:0.3");
-        assert_eq!(format!("{}", MaskOp::Threshold { method: MaskThresholdMethod::Fixed, value: None }), "threshold:fixed:0.5");
-        assert_eq!(format!("{}", MaskOp::Threshold { method: MaskThresholdMethod::Percentile, value: Some(90.0) }), "threshold:percentile:90");
-        assert_eq!(format!("{}", MaskOp::Threshold { method: MaskThresholdMethod::Percentile, value: None }), "threshold:percentile:75");
-        assert_eq!(format!("{}", MaskOp::Bet { fractional_intensity: 0.4 }), "bet:0.4");
-        assert_eq!(format!("{}", MaskOp::Erode { iterations: 3 }), "erode:3");
-        assert_eq!(format!("{}", MaskOp::Dilate { iterations: 1 }), "dilate:1");
-        assert_eq!(format!("{}", MaskOp::Close { radius: 2 }), "close:2");
-        assert_eq!(format!("{}", MaskOp::FillHoles { max_size: 500 }), "fill-holes:500");
-        assert_eq!(format!("{}", MaskOp::GaussianSmooth { sigma_mm: 4.0 }), "gaussian:4");
-    }
 
-    #[test]
-    fn test_parse_mask_op_input_all_sources() {
-        assert_eq!(parse_mask_op("input:magnitude-first").unwrap(), MaskOp::Input { source: MaskingInput::MagnitudeFirst });
-        assert_eq!(parse_mask_op("input:magnitude-last").unwrap(), MaskOp::Input { source: MaskingInput::MagnitudeLast });
-        assert_eq!(parse_mask_op("input:phase-quality").unwrap(), MaskOp::Input { source: MaskingInput::PhaseQuality });
-    }
 
     #[test]
     fn test_parse_mask_op_input_invalid() {
@@ -1308,7 +1461,7 @@ mod tests {
         assert!(toml.contains("do_swi = false"));
         assert!(toml.contains("do_t2starmap = false"));
         assert!(toml.contains("do_r2starmap = false"));
-        assert!(toml.contains("inhomogeneity_correction = false"));
+        assert!(toml.contains("inhomogeneity_correction = true"));
         assert!(toml.contains("obliquity_threshold = -1"));
     }
 
@@ -1336,50 +1489,6 @@ mod tests {
         assert_eq!(presets[4].0, "body");
     }
 
-    #[test]
-    fn test_apply_run_overrides_all_algorithms() {
-        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
-        let mut args = default_run_args();
-
-        // TV
-        args.qsm_algorithm = Some(cli::QsmAlgorithmArg::Tv);
-        config.apply_run_overrides(&args);
-        assert_eq!(config.qsm_algorithm, QsmAlgorithm::Tv);
-
-        // TKD
-        args.qsm_algorithm = Some(cli::QsmAlgorithmArg::Tkd);
-        config.apply_run_overrides(&args);
-        assert_eq!(config.qsm_algorithm, QsmAlgorithm::Tkd);
-
-        // Laplacian
-        args.unwrapping_algorithm = Some(cli::UnwrapAlgorithmArg::Laplacian);
-        config.apply_run_overrides(&args);
-        assert_eq!(config.unwrapping_algorithm, Some(UnwrappingAlgorithm::Laplacian));
-
-        // LBV
-        args.bf_algorithm = Some(cli::BfAlgorithmArg::Lbv);
-        config.apply_run_overrides(&args);
-        assert_eq!(config.bf_algorithm, Some(BfAlgorithm::Lbv));
-
-        // iSMV
-        args.bf_algorithm = Some(cli::BfAlgorithmArg::Ismv);
-        config.apply_run_overrides(&args);
-        assert_eq!(config.bf_algorithm, Some(BfAlgorithm::Ismv));
-
-        // PDF
-        args.bf_algorithm = Some(cli::BfAlgorithmArg::Pdf);
-        config.apply_run_overrides(&args);
-        assert_eq!(config.bf_algorithm, Some(BfAlgorithm::Pdf));
-
-        // Masking input variants
-        args.masking_input = Some(cli::MaskInputArg::Magnitude);
-        config.apply_run_overrides(&args);
-        assert_eq!(config.masking_input, MaskingInput::Magnitude);
-
-        args.masking_input = Some(cli::MaskInputArg::MagnitudeLast);
-        config.apply_run_overrides(&args);
-        assert_eq!(config.masking_input, MaskingInput::MagnitudeLast);
-    }
 
     #[test]
     fn test_apply_run_overrides_numeric_params() {
@@ -1428,38 +1537,6 @@ mod tests {
         assert_eq!(parsed, op);
     }
 
-    #[test]
-    fn test_mask_ops_default_in_preset() {
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
-        assert!(!config.mask_ops.is_empty(), "GRE preset should have default mask_ops");
-        // Default: Input(PhaseQuality) → Threshold(Otsu) → Dilate(2) → FillHoles → Erode(2)
-        assert_eq!(config.mask_ops.len(), 5);
-        assert_eq!(config.mask_ops[0], MaskOp::Input { source: MaskingInput::PhaseQuality });
-        assert_eq!(config.mask_ops[1], MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None });
-        assert_eq!(config.mask_ops[2], MaskOp::Dilate { iterations: 2 });
-        assert_eq!(config.mask_ops[4], MaskOp::Erode { iterations: 2 });
-    }
 
-    #[test]
-    fn test_mask_ops_bet_preset() {
-        let config = PipelineConfig::from_preset(cli::Preset::Bet);
-        assert_eq!(config.mask_ops.len(), 2);
-        assert_eq!(config.mask_ops[0], MaskOp::Bet { fractional_intensity: 0.5 });
-        assert_eq!(config.mask_ops[1], MaskOp::Erode { iterations: 3 });
-    }
 
-    #[test]
-    fn test_mask_ops_override_from_cli() {
-        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
-        let mut args = default_run_args();
-        args.mask_ops = Some(vec![
-            "input:magnitude".to_string(),
-            "threshold:otsu".to_string(),
-            "erode:2".to_string(),
-        ]);
-        config.apply_run_overrides(&args);
-        assert_eq!(config.mask_ops.len(), 3);
-        assert_eq!(config.mask_ops[0], MaskOp::Input { source: MaskingInput::Magnitude });
-        assert_eq!(config.mask_ops[2], MaskOp::Erode { iterations: 2 });
-    }
 }

@@ -213,6 +213,18 @@ pub struct RunArgs {
     #[arg(long)]
     pub tkd_threshold: Option<f64>,
 
+    /// TSVD threshold
+    #[arg(long)]
+    pub tsvd_threshold: Option<f64>,
+
+    /// iLSQR tolerance
+    #[arg(long)]
+    pub ilsqr_tol: Option<f64>,
+
+    /// iLSQR max iterations
+    #[arg(long)]
+    pub ilsqr_max_iter: Option<usize>,
+
     /// Tikhonov lambda
     #[arg(long)]
     pub tikhonov_lambda: Option<f64>,
@@ -265,6 +277,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub medi_smv_radius: Option<f64>,
 
+    /// Enable MEDI SMV mode (MEDI handles background removal internally; skips BG removal step)
+    #[arg(long)]
+    pub medi_smv: bool,
+
     /// V-SHARP deconvolution threshold
     #[arg(long)]
     pub vsharp_threshold: Option<f64>,
@@ -289,10 +305,94 @@ pub struct RunArgs {
     #[arg(long)]
     pub sharp_threshold: Option<f64>,
 
+    /// SHARP radius factor (multiplied by min voxel size)
+    #[arg(long)]
+    pub sharp_radius_factor: Option<f64>,
+
+    /// V-SHARP max radius factor (multiplied by min voxel size)
+    #[arg(long)]
+    pub vsharp_max_radius_factor: Option<f64>,
+
+    /// V-SHARP min radius factor (multiplied by max voxel size)
+    #[arg(long)]
+    pub vsharp_min_radius_factor: Option<f64>,
+
+    /// iSMV radius factor (multiplied by max voxel size)
+    #[arg(long)]
+    pub ismv_radius_factor: Option<f64>,
+
+    /// ROMEO: disable phase gradient coherence weights
+    #[arg(long)]
+    pub no_romeo_phase_gradient_coherence: bool,
+
+    /// ROMEO: disable magnitude coherence weights
+    #[arg(long)]
+    pub no_romeo_mag_coherence: bool,
+
+    /// ROMEO: disable magnitude weighting
+    #[arg(long)]
+    pub no_romeo_mag_weight: bool,
+
+    /// MCPC-3D-S smoothing sigma (3 values, in voxels)
+    #[arg(long, num_args = 3)]
+    pub mcpc3ds_sigma: Option<Vec<f64>>,
+
+    /// QSMART iLSQR tolerance
+    #[arg(long)]
+    pub qsmart_ilsqr_tol: Option<f64>,
+
+    /// QSMART iLSQR max iterations
+    #[arg(long)]
+    pub qsmart_ilsqr_max_iter: Option<usize>,
+
+    /// QSMART vasculature detection sphere radius
+    #[arg(long)]
+    pub qsmart_vasc_sphere_radius: Option<i32>,
+
+    /// QSMART SDF spatial radius
+    #[arg(long)]
+    pub qsmart_sdf_spatial_radius: Option<i32>,
+
     // Execution
     /// Number of parallel threads
     #[arg(long)]
     pub n_procs: Option<usize>,
+
+    /// SWI high-pass filter sigma (3 values, in voxels)
+    #[arg(long, num_args = 3)]
+    pub swi_hp_sigma: Option<Vec<f64>>,
+
+    /// SWI phase scaling type (tanh, negative-tanh, positive, negative, triangular)
+    #[arg(long)]
+    pub swi_scaling: Option<String>,
+
+    /// SWI phase scaling strength
+    #[arg(long)]
+    pub swi_strength: Option<f64>,
+
+    /// SWI MIP window size in slices
+    #[arg(long)]
+    pub swi_mip_window: Option<usize>,
+
+    /// Inhomogeneity correction smoothing sigma in mm
+    #[arg(long)]
+    pub homogeneity_sigma_mm: Option<f64>,
+
+    /// Inhomogeneity correction box filter passes
+    #[arg(long)]
+    pub homogeneity_nbox: Option<usize>,
+
+    /// Linear fit reliability threshold percentile (degrees)
+    #[arg(long)]
+    pub linear_fit_reliability_threshold: Option<f64>,
+
+    /// TGV primal step size multiplier
+    #[arg(long)]
+    pub tgv_step_size: Option<f64>,
+
+    /// TGV convergence tolerance
+    #[arg(long)]
+    pub tgv_tol: Option<f64>,
 
     /// Also compute SWI
     #[arg(long)]
@@ -314,10 +414,16 @@ pub struct RunArgs {
     #[arg(long)]
     pub obliquity_threshold: Option<f64>,
 
-    /// Mask-building operation (repeatable, applied in order). Overrides --masking-algorithm.
-    /// Format: input:magnitude, threshold:otsu, erode:2, dilate:1, close:1, fill-holes:1000, gaussian:4.0, bet:0.5
-    #[arg(long = "mask-op", num_args = 1)]
-    pub mask_ops: Option<Vec<String>>,
+    /// Mask preset (robust-threshold or bet)
+    #[arg(long, value_enum)]
+    pub mask_preset: Option<MaskPresetArg>,
+
+    /// Define a mask section (repeatable, multiple sections are OR'd together).
+    /// Format: <input>,<generator>,<refinement1>,<refinement2>,...
+    /// Example: phase-quality,threshold:otsu,dilate:2,fill-holes:0,erode:2
+    /// Example: magnitude,bet:0.5,erode:2
+    #[arg(long = "mask", num_args = 1)]
+    pub mask_sections_cli: Option<Vec<String>>,
 
     /// Print processing plan without executing
     #[arg(long)]
@@ -771,10 +877,13 @@ pub enum QsmAlgorithmArg {
     Rts,
     Tv,
     Tkd,
+    Tsvd,
     Tgv,
     Tikhonov,
     Nltv,
     Medi,
+    Ilsqr,
+    Qsmart,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
@@ -810,6 +919,12 @@ pub enum MaskInputArg {
 pub enum QsmReferenceArg {
     Mean,
     None,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
+pub enum MaskPresetArg {
+    RobustThreshold,
+    Bet,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]

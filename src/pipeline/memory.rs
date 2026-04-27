@@ -44,13 +44,10 @@ pub fn estimate_peak_memory_bytes(
                  + n_mag * n * F64     // magnitudes (Vec<f64> per echo)
                  + 2 * n * U8;        // mask + working_mask
 
-    // Masking stage (temporary)
-    let mask_mem = match config.masking_algorithm {
-        // BET: sorted nonzero vec (~N*8) + within_brain values (~N*8) + output (N)
-        MaskingAlgorithm::Bet => 17 * n,
-        // Threshold: input clone (N*8) + output (N)
-        MaskingAlgorithm::Threshold => 9 * n,
-    };
+    // Masking stage (temporary) — worst case across all sections
+    // BET is the most expensive: sorted nonzero vec (~N*8) + within_brain values (~N*8) + output (N)
+    let has_bet = config.mask_sections.iter().any(|s| matches!(s.generator, MaskOp::Bet { .. }));
+    let mask_mem = if has_bet { 17 * n } else { 9 * n };
 
     // SWI runs before QSM; its outputs persist through QSM stages
     let swi_persistent = if config.do_swi { 16 * n } else { 0 }; // swi + mip results
@@ -62,6 +59,14 @@ pub fn estimate_peak_memory_bytes(
         // Worst case: bounding box = full volume (actual is often 30-70% of N)
         // phase_f32 input: 4N, TGV workspace: 154*N (f32), mask temps: 6N, output: 12N
         20 * n + 154 * n * F32 / F64 + 10 * 1024 * 1024 // ~97N + 10MB stencil
+    } else if config.qsm_algorithm == QsmAlgorithm::Qsmart {
+        // QSMART: ~2× standard pipeline (two-stage SDF + iLSQR) + vasculature buffers
+        // Vasculature detection: Frangi vesselness + sphere filtering (~80N)
+        // Two SDF passes (~80N each) + two iLSQR passes (~160N each) + combine step
+        // Peak is during iLSQR (biggest single-step allocation)
+        let unwrap_mem = estimate_unwrap_mem(n, n_echoes, config);
+        let qsmart_mem = 240 * n; // iLSQR workspace + SDF input/output + vasculature
+        unwrap_mem.max(qsmart_mem)
     } else {
         // Standard path: stages run sequentially
         estimate_standard_pipeline(n, n_echoes, config)
@@ -114,8 +119,12 @@ fn estimate_standard_pipeline(n: usize, n_echoes: usize, config: &PipelineConfig
     let inv_temp = match config.qsm_algorithm {
         // TKD: dipole kernel + inverse + complex field + output
         QsmAlgorithm::Tkd => 40 * n,
+        // TSVD: same as TKD (closed-form k-space solution with different thresholding)
+        QsmAlgorithm::Tsvd => 40 * n,
         // Tikhonov: similar to TKD (closed-form k-space solution)
         QsmAlgorithm::Tikhonov => 40 * n,
+        // iLSQR: iterative LSQR with dipole kernel + workspace buffers
+        QsmAlgorithm::Ilsqr => 160 * n,
         // TV-ADMM: kernels + 9 ADMM buffers + FFT workspace + inv_a
         QsmAlgorithm::Tv => 120 * n,
         // NLTV: similar to TV + reweighting buffers
@@ -125,6 +134,7 @@ fn estimate_standard_pipeline(n: usize, n_echoes: usize, config: &PipelineConfig
         // MEDI: magnitude + edge weights + CG buffers
         QsmAlgorithm::Medi => 180 * n,
         QsmAlgorithm::Tgv => unreachable!("TGV handled separately"),
+        QsmAlgorithm::Qsmart => unreachable!("QSMART handled separately"),
     };
 
     // Peak is the maximum across the three sequential stages
@@ -271,7 +281,6 @@ mod tests {
         let config = PipelineConfig {
             qsm_algorithm: QsmAlgorithm::Tkd,
             bf_algorithm: Some(BfAlgorithm::Lbv),
-            masking_algorithm: MaskingAlgorithm::Threshold,
             do_swi: false,
             ..default_config()
         };

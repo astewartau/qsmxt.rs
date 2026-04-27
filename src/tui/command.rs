@@ -51,7 +51,7 @@ pub fn build_command_string(app: &App) -> String {
     }
 
     // Algorithm selects (only if changed from default)
-    use super::app::{QSM_ALGO_OPTIONS, UNWRAP_OPTIONS, BF_OPTIONS, MASK_ALGO_OPTIONS, MASK_INPUT_OPTIONS, QSM_REF_OPTIONS};
+    use super::app::{QSM_ALGO_OPTIONS, UNWRAP_OPTIONS, BF_OPTIONS, QSM_REF_OPTIONS};
     if ps.qsm_algorithm != defaults.qsm_algorithm {
         parts.push(format!("--qsm-algorithm {}", QSM_ALGO_OPTIONS[ps.qsm_algorithm]));
     }
@@ -60,12 +60,6 @@ pub fn build_command_string(app: &App) -> String {
     }
     if ps.bf_algorithm != defaults.bf_algorithm {
         parts.push(format!("--bf-algorithm {}", BF_OPTIONS[ps.bf_algorithm]));
-    }
-    if ps.masking_algorithm != defaults.masking_algorithm {
-        parts.push(format!("--masking-algorithm {}", MASK_ALGO_OPTIONS[ps.masking_algorithm]));
-    }
-    if ps.masking_input != defaults.masking_input {
-        parts.push(format!("--masking-input {}", MASK_INPUT_OPTIONS[ps.masking_input]));
     }
     if ps.qsm_reference != defaults.qsm_reference {
         parts.push(format!("--qsm-reference {}", QSM_REF_OPTIONS[ps.qsm_reference]));
@@ -79,7 +73,6 @@ pub fn build_command_string(app: &App) -> String {
 
     // Parameters (only if changed from default)
     push_if_changed(&mut parts, "--obliquity-threshold", &ps.obliquity_threshold, &defaults.obliquity_threshold);
-    push_if_changed(&mut parts, "--mask-erosions", &ps.mask_erosions, &defaults.mask_erosions);
 
     // BET params
     push_if_changed(&mut parts, "--bet-fractional-intensity", &ps.bet_fractional_intensity, &defaults.bet_fractional_intensity);
@@ -105,6 +98,13 @@ pub fn build_command_string(app: &App) -> String {
     // TKD params
     push_if_changed(&mut parts, "--tkd-threshold", &ps.tkd_threshold, &defaults.tkd_threshold);
 
+    // TSVD params
+    push_if_changed(&mut parts, "--tsvd-threshold", &ps.tsvd_threshold, &defaults.tsvd_threshold);
+
+    // iLSQR params
+    push_if_changed(&mut parts, "--ilsqr-tol", &ps.ilsqr_tol, &defaults.ilsqr_tol);
+    push_if_changed(&mut parts, "--ilsqr-max-iter", &ps.ilsqr_max_iter, &defaults.ilsqr_max_iter);
+
     // Tikhonov
     push_if_changed(&mut parts, "--tikhonov-lambda", &ps.tikhonov_lambda, &defaults.tikhonov_lambda);
 
@@ -123,6 +123,11 @@ pub fn build_command_string(app: &App) -> String {
     push_if_changed(&mut parts, "--medi-tol", &ps.medi_tol, &defaults.medi_tol);
     push_if_changed(&mut parts, "--medi-percentage", &ps.medi_percentage, &defaults.medi_percentage);
     push_if_changed(&mut parts, "--medi-smv-radius", &ps.medi_smv_radius, &defaults.medi_smv_radius);
+    if ps.medi_smv != defaults.medi_smv {
+        if ps.medi_smv {
+            parts.push("--medi-smv".to_string());
+        }
+    }
 
     // BG removal params
     push_if_changed(&mut parts, "--vsharp-threshold", &ps.vsharp_threshold, &defaults.vsharp_threshold);
@@ -138,17 +143,46 @@ pub fn build_command_string(app: &App) -> String {
     push_if_changed(&mut parts, "--tgv-alpha1", &ps.tgv_alpha1, &defaults.tgv_alpha1);
     push_if_changed(&mut parts, "--tgv-alpha0", &ps.tgv_alpha0, &defaults.tgv_alpha0);
 
-    // Mask ops (only if changed from the default for the selected masking algorithm)
-    let default_ops = ps.default_mask_ops_for_current_masking();
-    if ps.mask_ops != default_ops {
-        for op in &ps.mask_ops {
-            parts.push(format!("--mask-op {}", op));
+    // QSMART params
+    push_if_changed(&mut parts, "--qsmart-ilsqr-tol", &ps.qsmart_ilsqr_tol, &defaults.qsmart_ilsqr_tol);
+    push_if_changed(&mut parts, "--qsmart-ilsqr-max-iter", &ps.qsmart_ilsqr_max_iter, &defaults.qsmart_ilsqr_max_iter);
+    push_if_changed(&mut parts, "--qsmart-vasc-sphere-radius", &ps.qsmart_vasc_sphere_radius, &defaults.qsmart_vasc_sphere_radius);
+    push_if_changed(&mut parts, "--qsmart-sdf-spatial-radius", &ps.qsmart_sdf_spatial_radius, &defaults.qsmart_sdf_spatial_radius);
+
+    // Mask: emit --mask-preset for known presets, --mask for custom
+    let default_sections = super::app::PipelineFormState::default().mask_sections;
+    if ps.mask_sections != default_sections {
+        // Check if it matches the BET preset
+        let bet_preset = vec![crate::pipeline::config::MaskSection {
+            input: crate::pipeline::config::MaskingInput::Magnitude,
+            generator: crate::pipeline::config::MaskOp::Bet { fractional_intensity: 0.5 },
+            refinements: vec![crate::pipeline::config::MaskOp::Erode { iterations: 2 }],
+        }];
+        if ps.mask_sections == bet_preset {
+            parts.push("--mask-preset bet".to_string());
+        } else {
+            for section in ps.mask_sections.iter() {
+                let mut section_parts = vec![format!("{}", section.input)];
+                for op in &section.all_ops() {
+                    section_parts.push(format!("{}", op));
+                }
+                parts.push(format!("--mask {}", section_parts.join(",")));
+            }
         }
     }
 
     // Execution flags (only if non-default — defaults are all false/empty)
     if form.do_swi {
         parts.push("--do-swi".to_string());
+        // SWI params (only if changed from default)
+        let swi_scaling_options = ["tanh", "negative-tanh", "positive", "negative", "triangular"];
+        let swi_scaling = swi_scaling_options.get(form.swi_scaling).unwrap_or(&"tanh");
+        if *swi_scaling != "tanh" {
+            parts.push(format!("--swi-scaling {}", swi_scaling));
+        }
+        let form_defaults = super::app::RunForm::default();
+        push_if_changed(&mut parts, "--swi-strength", &form.swi_strength, &form_defaults.swi_strength);
+        push_if_changed(&mut parts, "--swi-mip-window", &form.swi_mip_window, &form_defaults.swi_mip_window);
     }
     if form.do_t2starmap {
         parts.push("--do-t2starmap".to_string());
@@ -156,8 +190,10 @@ pub fn build_command_string(app: &App) -> String {
     if form.do_r2starmap {
         parts.push("--do-r2starmap".to_string());
     }
-    if ps.inhomogeneity_correction {
-        parts.push("--inhomogeneity-correction".to_string());
+    if ps.inhomogeneity_correction != defaults.inhomogeneity_correction {
+        if ps.inhomogeneity_correction {
+            parts.push("--inhomogeneity-correction".to_string());
+        }
     }
     if form.dry_run {
         parts.push("--dry".to_string());
@@ -199,10 +235,13 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         QsmAlgorithmArg::Rts,
         QsmAlgorithmArg::Tv,
         QsmAlgorithmArg::Tkd,
+        QsmAlgorithmArg::Tsvd,
         QsmAlgorithmArg::Tgv,
         QsmAlgorithmArg::Tikhonov,
         QsmAlgorithmArg::Nltv,
         QsmAlgorithmArg::Medi,
+        QsmAlgorithmArg::Ilsqr,
+        QsmAlgorithmArg::Qsmart,
     ];
     let unwrap_options = [UnwrapAlgorithmArg::Romeo, UnwrapAlgorithmArg::Laplacian];
     let bf_options = [
@@ -228,8 +267,8 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         qsm_algorithm: Some(qsm_options[ps.qsm_algorithm]),
         unwrapping_algorithm: Some(unwrap_options[ps.unwrapping_algorithm]),
         bf_algorithm: Some(bf_options[ps.bf_algorithm]),
-        masking_algorithm: Some(mask_algo_options[ps.masking_algorithm]),
-        masking_input: Some(mask_input_options[ps.masking_input]),
+        masking_algorithm: None,
+        masking_input: None,
         combine_phase: Some(ps.phase_combination == 0), // 0=mcpc3ds (true), 1=linear_fit (false)
         bet_fractional_intensity: parse_optional_f64(&ps.bet_fractional_intensity),
         bet_smoothness: parse_optional_f64(&ps.bet_smoothness),
@@ -243,7 +282,7 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         },
         tgv_alpha1: parse_optional_f64(&ps.tgv_alpha1),
         tgv_alpha0: parse_optional_f64(&ps.tgv_alpha0),
-        mask_erosions: parse_optional_usize_vec(&ps.mask_erosions),
+        mask_erosions: None,
         rts_delta: parse_optional_f64(&ps.rts_delta),
         rts_mu: parse_optional_f64(&ps.rts_mu),
         rts_tol: parse_optional_f64(&ps.rts_tol),
@@ -257,6 +296,9 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         tv_tol: parse_optional_f64(&ps.tv_tol),
         tv_max_iter: parse_optional_usize(&ps.tv_max_iter),
         tkd_threshold: parse_optional_f64(&ps.tkd_threshold),
+        tsvd_threshold: parse_optional_f64(&ps.tsvd_threshold),
+        ilsqr_tol: parse_optional_f64(&ps.ilsqr_tol),
+        ilsqr_max_iter: parse_optional_usize(&ps.ilsqr_max_iter),
         tikhonov_lambda: parse_optional_f64(&ps.tikhonov_lambda),
         nltv_lambda: parse_optional_f64(&ps.nltv_lambda),
         nltv_mu: parse_optional_f64(&ps.nltv_mu),
@@ -270,20 +312,53 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         medi_tol: parse_optional_f64(&ps.medi_tol),
         medi_percentage: parse_optional_f64(&ps.medi_percentage),
         medi_smv_radius: parse_optional_f64(&ps.medi_smv_radius),
+        medi_smv: ps.medi_smv,
         vsharp_threshold: parse_optional_f64(&ps.vsharp_threshold),
         pdf_tol: parse_optional_f64(&ps.pdf_tol),
         lbv_tol: parse_optional_f64(&ps.lbv_tol),
         ismv_tol: parse_optional_f64(&ps.ismv_tol),
         ismv_max_iter: parse_optional_usize(&ps.ismv_max_iter),
         sharp_threshold: parse_optional_f64(&ps.sharp_threshold),
+        sharp_radius_factor: None,
+        vsharp_max_radius_factor: None,
+        vsharp_min_radius_factor: None,
+        ismv_radius_factor: None,
+        no_romeo_phase_gradient_coherence: !ps.romeo_phase_gradient_coherence,
+        no_romeo_mag_coherence: !ps.romeo_mag_coherence,
+        no_romeo_mag_weight: !ps.romeo_mag_weight,
+        mcpc3ds_sigma: None,
+        qsmart_ilsqr_tol: parse_optional_f64(&ps.qsmart_ilsqr_tol),
+        qsmart_ilsqr_max_iter: parse_optional_usize(&ps.qsmart_ilsqr_max_iter),
+        qsmart_vasc_sphere_radius: ps.qsmart_vasc_sphere_radius.trim().parse::<i32>().ok(),
+        qsmart_sdf_spatial_radius: ps.qsmart_sdf_spatial_radius.trim().parse::<i32>().ok(),
         n_procs: parse_optional_usize(&form.n_procs),
         do_swi: form.do_swi,
         do_t2starmap: form.do_t2starmap,
         do_r2starmap: form.do_r2starmap,
         inhomogeneity_correction: ps.inhomogeneity_correction,
         obliquity_threshold: parse_optional_f64(&ps.obliquity_threshold),
-        mask_ops: if ps.mask_ops.is_empty() { None } else {
-            Some(ps.mask_ops.iter().map(|op| format!("{}", op)).collect())
+        swi_hp_sigma: None,
+        swi_scaling: {
+            let scaling_options = ["tanh", "negative-tanh", "positive", "negative", "triangular"];
+            Some(scaling_options.get(form.swi_scaling).unwrap_or(&"tanh").to_string())
+        },
+        swi_strength: parse_optional_f64(&form.swi_strength),
+        swi_mip_window: parse_optional_usize(&form.swi_mip_window),
+        homogeneity_sigma_mm: None,
+        homogeneity_nbox: None,
+        linear_fit_reliability_threshold: None,
+        tgv_step_size: None,
+        tgv_tol: None,
+        mask_preset: None,
+        mask_sections_cli: {
+            let secs: Vec<String> = ps.mask_sections.iter().map(|section| {
+                let mut parts = vec![format!("{}", section.input)];
+                for op in &section.all_ops() {
+                    parts.push(format!("{}", op));
+                }
+                parts.join(",")
+            }).collect();
+            if secs.is_empty() { None } else { Some(secs) }
         },
         dry: form.dry_run,
         debug: form.debug,
@@ -408,21 +483,6 @@ mod tests {
         assert!(cmd.contains("--num-echoes 4"));
     }
 
-    #[test]
-    fn test_command_string_algorithms() {
-        let mut app = default_app();
-        app.pipeline_state.qsm_algorithm = 2; // tkd
-        app.pipeline_state.unwrapping_algorithm = 1; // laplacian
-        app.pipeline_state.bf_algorithm = 3; // ismv
-        app.pipeline_state.masking_algorithm = 0; // bet
-        app.pipeline_state.masking_input = 1; // magnitude (non-default)
-        let cmd = build_command_string(&app);
-        assert!(cmd.contains("--qsm-algorithm tkd"));
-        assert!(cmd.contains("--unwrapping-algorithm laplacian"));
-        assert!(cmd.contains("--bf-algorithm ismv"));
-        assert!(cmd.contains("--masking-algorithm bet"));
-        assert!(cmd.contains("--masking-input magnitude"));
-    }
 
     #[test]
     fn test_command_string_parameters() {
@@ -462,7 +522,6 @@ mod tests {
         app.form.do_swi = true;
         app.form.do_t2starmap = true;
         app.form.do_r2starmap = true;
-        app.pipeline_state.inhomogeneity_correction = true;
         app.form.dry_run = true;
         app.form.debug = true;
         app.form.n_procs = "4".to_string();
@@ -470,23 +529,13 @@ mod tests {
         assert!(cmd.contains("--do-swi"));
         assert!(cmd.contains("--do-t2starmap"));
         assert!(cmd.contains("--do-r2starmap"));
-        assert!(cmd.contains("--inhomogeneity-correction"));
+        // inhomogeneity_correction is true by default, so shouldn't appear
+        assert!(!cmd.contains("--inhomogeneity-correction"));
         assert!(cmd.contains("--dry"));
         assert!(cmd.contains("--debug"));
         assert!(cmd.contains("--n-procs 4"));
     }
 
-    #[test]
-    fn test_command_string_mask_ops() {
-        let mut app = default_app();
-        app.pipeline_state.mask_ops = vec![
-            crate::pipeline::config::MaskOp::Erode { iterations: 2 },
-            crate::pipeline::config::MaskOp::Dilate { iterations: 1 },
-        ];
-        let cmd = build_command_string(&app);
-        assert!(cmd.contains("--mask-op erode:2"));
-        assert!(cmd.contains("--mask-op dilate:1"));
-    }
 
     // --- build_run_args ---
 
@@ -538,23 +587,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_build_run_args_algorithms() {
-        let mut app = default_app();
-        app.form.bids_dir = "/b".to_string();
-        app.form.output_dir = "/o".to_string();
-        app.pipeline_state.qsm_algorithm = 3; // tgv
-        app.pipeline_state.unwrapping_algorithm = 1; // laplacian
-        app.pipeline_state.bf_algorithm = 2; // lbv
-        app.pipeline_state.masking_algorithm = 0; // bet
-        app.pipeline_state.masking_input = 2; // magnitude-last
-        let args = build_run_args(&app).unwrap();
-        assert_eq!(args.qsm_algorithm, Some(crate::cli::QsmAlgorithmArg::Tgv));
-        assert_eq!(args.unwrapping_algorithm, Some(crate::cli::UnwrapAlgorithmArg::Laplacian));
-        assert_eq!(args.bf_algorithm, Some(crate::cli::BfAlgorithmArg::Lbv));
-        assert_eq!(args.masking_algorithm, Some(crate::cli::MaskAlgorithmArg::Bet));
-        assert_eq!(args.masking_input, Some(crate::cli::MaskInputArg::MagnitudeLast));
-    }
 
     #[test]
     fn test_build_run_args_num_echoes() {
@@ -618,27 +650,7 @@ mod tests {
         assert_eq!(args.combine_phase, Some(false));
     }
 
-    #[test]
-    fn test_build_run_args_mask_ops() {
-        let mut app = default_app();
-        app.form.bids_dir = "/b".to_string();
-        app.form.output_dir = "/o".to_string();
-        app.pipeline_state.mask_ops = vec![
-            crate::pipeline::config::MaskOp::Erode { iterations: 2 },
-        ];
-        let args = build_run_args(&app).unwrap();
-        assert!(args.mask_ops.is_some());
-    }
 
-    #[test]
-    fn test_build_run_args_default_mask_ops() {
-        let mut app = default_app();
-        app.form.bids_dir = "/b".to_string();
-        app.form.output_dir = "/o".to_string();
-        let args = build_run_args(&app).unwrap();
-        // Default pipeline_state has threshold mask_ops
-        assert!(args.mask_ops.is_some());
-    }
 
     #[test]
     fn test_build_run_args_config_file() {
@@ -650,15 +662,6 @@ mod tests {
         assert_eq!(args.config, Some(PathBuf::from("pipeline.toml")));
     }
 
-    #[test]
-    fn test_build_run_args_mask_erosions() {
-        let mut app = default_app();
-        app.form.bids_dir = "/b".to_string();
-        app.form.output_dir = "/o".to_string();
-        app.pipeline_state.mask_erosions = "2 3 4".to_string();
-        let args = build_run_args(&app).unwrap();
-        assert_eq!(args.mask_erosions, Some(vec![2, 3, 4]));
-    }
 
     #[test]
     fn test_build_run_args_obliquity() {
