@@ -149,6 +149,19 @@ pub fn run_pipeline_cached(
     let (nx, ny, nz) = meta.dims;
     let (vsx, vsy, vsz) = meta.voxel_size;
 
+    // Determine which steps are needed
+    let needs_mask = config.do_qsm || config.do_swi
+        || (config.do_t2starmap && meta.n_echoes >= 3 && meta.has_magnitude)
+        || (config.do_r2starmap && meta.n_echoes >= 3 && meta.has_magnitude);
+    let needs_phase = needs_mask || config.do_qsm;
+
+    if !needs_phase {
+        log::info!("No outputs enabled — nothing to process");
+        state.mark_run_complete();
+        state.save(&state_path)?;
+        return Ok(());
+    }
+
     // === STEP: Scale phase & save ===
     if !state.is_step_cached("scale_phase") {
         let t = Instant::now();
@@ -202,9 +215,9 @@ pub fn run_pipeline_cached(
         log::info!("Skipping scale_phase (cached)");
     }
 
-    // === STEP: Create mask ===
+    // === STEP: Create mask (only if something needs it) ===
     let mask_path = output.mask_path(&qsm_run.key);
-    if !state.is_step_cached("mask") {
+    if needs_mask && !state.is_step_cached("mask") {
         let t = Instant::now();
         log::info!("Creating mask ({} section(s))", config.mask_sections.len());
         progress("Creating mask");
@@ -327,7 +340,12 @@ pub fn run_pipeline_cached(
         }
     }
 
-    // === STEP: QSM reconstruction ===
+    // === STEP: QSM reconstruction (skipped if do_qsm is false) ===
+    if !config.do_qsm {
+        log::info!("QSM processing disabled — skipping reconstruction");
+    }
+
+    if config.do_qsm {
     // All modes share phase combination/unwrapping for multi-echo data.
     // Then branch: TGV (single step), QSMART (two-stage SDF+iLSQR), Standard (bgremove → invert).
 
@@ -832,6 +850,8 @@ pub fn run_pipeline_cached(
     } else {
         log::info!("Skipping reference (cached)");
     }
+
+    } // end if config.do_qsm
 
     // === Done ===
     state.mark_run_complete();

@@ -39,8 +39,8 @@ pub fn run_tui() -> crate::Result<()> {
 
     // Main loop
     loop {
-        // Rescan BIDS tree when on Filters tab if bids_dir changed
-        if app.active_tab == 1 {
+        // Rescan BIDS tree when on Input tab if bids_dir changed
+        if app.active_tab == 0 {
             let bids_dir = app.form.bids_dir.clone();
             app.filter_state.maybe_rescan(&bids_dir);
         }

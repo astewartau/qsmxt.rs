@@ -101,11 +101,11 @@ fn draw_tabs(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn draw_form(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
-    if app.active_tab == 1 {
-        draw_filters_tab(f, app, area);
+    if app.active_tab == 0 {
+        draw_input_tab(f, app, area);
         return;
     }
-    if app.active_tab == 2 {
+    if app.active_tab == 1 {
         draw_pipeline_tab(f, app, area);
         return;
     }
@@ -209,6 +209,231 @@ fn draw_form(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         if app.active_field >= scroll && app.active_field < scroll + form_area.height as usize {
             let y = form_area.y + (app.active_field - scroll) as u16;
             let x = form_area.x + 24 + app.cursor_pos as u16;
+            f.set_cursor_position((x, y));
+        }
+    }
+}
+
+fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Input ");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let io_field_count = super::app::App::INPUT_IO_FIELDS;
+    let in_io = app.active_field < io_field_count;
+
+    // Build lines for IO fields
+    let mut lines: Vec<Line> = Vec::new();
+    let io_labels = ["BIDS Directory", "Output Directory", "Preset", "Config File"];
+    let preset_options = ["(none)", "gre", "epi", "bet", "fast", "body"];
+
+    for i in 0..io_field_count {
+        let focused = in_io && i == app.active_field;
+        let label_style = if focused {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let line = if i == 2 {
+            // Preset select
+            let val = preset_options.get(app.form.preset).unwrap_or(&"?");
+            if focused {
+                Line::from(vec![
+                    Span::styled(format!("  {:22}", format!("{}:", io_labels[i])), label_style),
+                    Span::styled("◀ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(*val, Style::default().fg(Color::Cyan)),
+                    Span::styled(" ▶", Style::default().fg(Color::DarkGray)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(format!("  {:22}", format!("{}:", io_labels[i])), label_style),
+                    Span::styled(*val, Style::default().fg(Color::Gray)),
+                ])
+            }
+        } else {
+            // Text field
+            let value = match i {
+                0 => &app.form.bids_dir,
+                1 => &app.form.output_dir,
+                3 => &app.form.config_file,
+                _ => "",
+            };
+            let val_style = if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::Gray) };
+            let display_val = if value.is_empty() && !(focused && app.editing) {
+                Span::styled("(empty)", Style::default().fg(Color::DarkGray))
+            } else {
+                Span::styled(value.to_string(), val_style)
+            };
+            Line::from(vec![
+                Span::styled(format!("  {:22}", format!("{}:", io_labels[i])), label_style),
+                display_val,
+            ])
+        };
+        lines.push(line);
+    }
+
+    // Separator
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  ── Filters ──",
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+    )));
+
+    // Filter tree content
+    if app.form.bids_dir.trim().is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  Set BIDS directory above first",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        let has_runs = app.filter_state.tree.as_ref().is_some_and(|t| !t.subjects.is_empty());
+        if !has_runs {
+            lines.push(Line::from(Span::styled(
+                "  No QSM-compatible runs found",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            let tree = app.filter_state.tree.as_ref().unwrap();
+
+            // Pattern
+            let pattern_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::Pattern;
+            let pattern_label = Span::styled(
+                "  Pattern: ",
+                if pattern_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
+                else { Style::default().fg(Color::White) },
+            );
+            let pattern_val = if app.filter_state.pattern.is_empty() && !app.filter_state.pattern_editing {
+                Span::styled("(enter glob to filter)", Style::default().fg(Color::DarkGray))
+            } else {
+                Span::styled(&app.filter_state.pattern, Style::default().fg(Color::Cyan))
+            };
+            lines.push(Line::from(vec![pattern_label, pattern_val]));
+            lines.push(Line::from(""));
+
+            // Tree rows
+            let visible = app.filter_state.visible_rows();
+            for (i, row) in visible.iter().enumerate() {
+                let focused = !in_io && app.filter_state.focus == super::app::FilterFocus::TreeNode(i);
+                let line = match row {
+                    super::app::TreeRow::Subject(si) => {
+                        let sub = &tree.subjects[*si];
+                        let collapsed = app.filter_state.collapsed.contains(&format!("sub-{}", sub.name));
+                        let arrow = if collapsed { "▶" } else { "▼" };
+                        let sel = sub.selected_runs();
+                        let total = sub.total_runs();
+                        let sel_info = if sel == total { "all selected".to_string() } else { format!("{}/{} selected", sel, total) };
+                        let style = if focused {
+                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                        };
+                        Line::from(Span::styled(
+                            format!("  {} sub-{} ({} run{}, {})", arrow, sub.name, total, if total == 1 { "" } else { "s" }, sel_info),
+                            style,
+                        ))
+                    }
+                    super::app::TreeRow::Session(si, sei) => {
+                        let sub = &tree.subjects[*si];
+                        let ses = &sub.sessions[*sei];
+                        let collapsed = app.filter_state.collapsed.contains(&format!("sub-{}/ses-{}", sub.name, ses.name));
+                        let arrow = if collapsed { "▶" } else { "▼" };
+                        let style = if focused {
+                            Style::default().fg(Color::Yellow)
+                        } else {
+                            Style::default().fg(Color::White)
+                        };
+                        Line::from(Span::styled(format!("    {} ses-{}", arrow, ses.name), style))
+                    }
+                    super::app::TreeRow::Run { sub, ses, run } => {
+                        let leaf = match ses {
+                            Some(sei) => &tree.subjects[*sub].sessions[*sei].runs[*run],
+                            None => &tree.subjects[*sub].runs[*run],
+                        };
+                        let indent = if ses.is_some() { "      " } else { "    " };
+                        let (marker, color) = if leaf.selected { ("[x]", Color::Green) } else { ("[ ]", Color::Gray) };
+                        let style = if focused {
+                            Style::default().fg(color).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(color)
+                        };
+                        Line::from(Span::styled(format!("{}{} {}", indent, marker, leaf.display), style))
+                    }
+                };
+                lines.push(line);
+            }
+
+            // Num Echoes
+            lines.push(Line::from(""));
+            let ne_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::NumEchoes;
+            let ne_label = Span::styled(
+                "  Num Echoes: ",
+                if ne_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
+                else { Style::default().fg(Color::White) },
+            );
+            let ne_val = if app.filter_state.num_echoes.is_empty() && !app.filter_state.num_echoes_editing {
+                Span::styled("(all)", Style::default().fg(Color::DarkGray))
+            } else {
+                Span::styled(&app.filter_state.num_echoes, Style::default().fg(Color::Cyan))
+            };
+            lines.push(Line::from(vec![ne_label, ne_val]));
+
+            // Summary
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("  {} run(s), {} selected", tree.total_runs(), tree.selected_runs()),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+
+    // Determine focused line for scroll
+    let focused_line = if in_io {
+        Some(app.active_field)
+    } else {
+        // Filter area starts after IO fields + separator + header
+        let offset = io_field_count + 2;
+        match app.filter_state.focus {
+            super::app::FilterFocus::Pattern => Some(offset),
+            super::app::FilterFocus::TreeNode(i) => Some(offset + i + 2),
+            super::app::FilterFocus::NumEchoes => {
+                let vis_len = app.filter_state.visible_rows().len();
+                Some(offset + vis_len + 3)
+            }
+        }
+    };
+
+    render_scrollable(f, inner, lines, &mut app.form_scroll_offset, focused_line);
+
+    // Set cursor if editing IO field
+    if app.editing && in_io {
+        let scroll = app.form_scroll_offset;
+        if app.active_field >= scroll && app.active_field < scroll + inner.height as usize {
+            let y = inner.y + (app.active_field - scroll) as u16;
+            let x = inner.x + 24 + app.cursor_pos as u16;
+            f.set_cursor_position((x, y));
+        }
+    }
+    // Set cursor if editing filter pattern/num_echoes
+    if app.filter_state.pattern_editing {
+        let offset = io_field_count + 2;
+        let scroll = app.form_scroll_offset;
+        let line = offset;
+        if line >= scroll && line < scroll + inner.height as usize {
+            let y = inner.y + (line - scroll) as u16;
+            let x = inner.x + 11 + app.filter_state.pattern_cursor as u16;
+            f.set_cursor_position((x, y));
+        }
+    } else if app.filter_state.num_echoes_editing {
+        let offset = io_field_count + 2;
+        let vis_len = app.filter_state.visible_rows().len();
+        let line = offset + vis_len + 3;
+        let scroll = app.form_scroll_offset;
+        if line >= scroll && line < scroll + inner.height as usize {
+            let y = inner.y + (line - scroll) as u16;
+            let x = inner.x + 14 + app.filter_state.num_echoes_cursor as u16;
             f.set_cursor_position((x, y));
         }
     }

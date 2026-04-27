@@ -924,6 +924,9 @@ impl PipelineConfig {
         if let Some(v) = args.tgv_tol {
             self.tgv_tol = v;
         }
+        if args.no_qsm {
+            self.do_qsm = false;
+        }
         if args.do_swi {
             self.do_swi = true;
         }
@@ -1222,6 +1225,7 @@ mod tests {
             qsmart_vasc_sphere_radius: None,
             qsmart_sdf_spatial_radius: None,
             n_procs: None,
+            no_qsm: false,
             do_swi: false,
             do_t2starmap: false,
             do_r2starmap: false,

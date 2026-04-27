@@ -172,6 +172,9 @@ pub fn build_command_string(app: &App) -> String {
     }
 
     // Execution flags (only if non-default — defaults are all false/empty)
+    if !ps.do_qsm {
+        parts.push("--no-qsm".to_string());
+    }
     if form.do_swi {
         parts.push("--do-swi".to_string());
         // SWI params (only if changed from default)
@@ -332,6 +335,7 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         qsmart_vasc_sphere_radius: ps.qsmart_vasc_sphere_radius.trim().parse::<i32>().ok(),
         qsmart_sdf_spatial_radius: ps.qsmart_sdf_spatial_radius.trim().parse::<i32>().ok(),
         n_procs: parse_optional_usize(&form.n_procs),
+        no_qsm: !ps.do_qsm,
         do_swi: form.do_swi,
         do_t2starmap: form.do_t2starmap,
         do_r2starmap: form.do_r2starmap,

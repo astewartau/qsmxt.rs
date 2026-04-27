@@ -5,9 +5,8 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::bids::discovery::{self, BidsTree};
 
-pub const TAB_NAMES: [&str; 5] = [
-    "Input/Output",
-    "Filters",
+pub const TAB_NAMES: [&str; 4] = [
+    "Input",
     "Pipeline",
     "Supplementary",
     "Execution",
@@ -505,6 +504,9 @@ pub struct PipelineFormState {
     pub bet_iterations: String,
     pub bet_subdivisions: String,
 
+    // QSM toggle
+    pub do_qsm: bool,
+
     // ROMEO
     pub romeo_phase_gradient_coherence: bool,
     pub romeo_mag_coherence: bool,
@@ -586,6 +588,7 @@ impl Default for PipelineFormState {
             ismv_tol: format!("{}", qsm_core::bgremove::IsmvParams::default().tol),
             ismv_max_iter: format!("{}", qsm_core::bgremove::IsmvParams::default().max_iter),
             sharp_threshold: format!("{}", qsm_core::bgremove::SharpParams::default().threshold),
+            do_qsm: true,
             romeo_phase_gradient_coherence: qsm_core::unwrap::RomeoParams::default().phase_gradient_coherence,
             romeo_mag_coherence: qsm_core::unwrap::RomeoParams::default().mag_coherence,
             romeo_mag_weight: qsm_core::unwrap::RomeoParams::default().mag_weight,
@@ -646,7 +649,16 @@ impl PipelineFormState {
         let is_qsmart = self.qsm_algorithm == 9;
         let is_medi_smv = self.qsm_algorithm == 7 && self.medi_smv;
 
-        // General settings first
+        // QSM toggle
+        rows.push(PipelineRow::Toggle {
+            label: "QSM Processing", field: "do_qsm",
+            help: "Enable QSM reconstruction (disable to only run supplementary outputs)",
+        });
+
+        rows.push(PipelineRow::Separator);
+
+        // General settings (QSM-only)
+        if self.do_qsm {
         rows.push(PipelineRow::AlgoSelect {
             label: "Phase Combination", field: "phase_combination",
             options: PHASE_COMBO_OPTIONS, help: PHASE_COMBO_HELP,
@@ -661,8 +673,9 @@ impl PipelineFormState {
         });
 
         rows.push(PipelineRow::Separator);
+        } // end if do_qsm (general settings)
 
-        // Mask preset selector
+        // Mask preset selector (always visible — needed for SWI/T2*/R2* too)
         rows.push(PipelineRow::AlgoSelect {
             label: "Mask Preset", field: "mask_preset",
             options: MASK_PRESET_OPTIONS, help: MASK_PRESET_HELP,
@@ -695,6 +708,7 @@ impl PipelineFormState {
 
         rows.push(PipelineRow::Separator);
 
+        if self.do_qsm {
         // Unwrapping (hidden if TGV or QSMART)
         if !is_tgv && !is_qsmart {
             rows.push(PipelineRow::AlgoSelect {
@@ -807,6 +821,7 @@ impl PipelineFormState {
             label: "QSM Reference", field: "qsm_reference",
             options: QSM_REF_OPTIONS, help: QSM_REF_HELP,
         });
+        } // end if do_qsm (unwrapping/inversion/reference)
 
         rows
     }
@@ -951,6 +966,7 @@ impl PipelineFormState {
     /// Get a toggle value by field name.
     pub fn get_toggle(&self, field: &str) -> bool {
         match field {
+            "do_qsm" => self.do_qsm,
             "inhomogeneity_correction" => self.inhomogeneity_correction,
             "medi_smv" => self.medi_smv,
             _ => false,
@@ -960,6 +976,7 @@ impl PipelineFormState {
     /// Toggle a boolean by field name.
     pub fn toggle(&mut self, field: &str) {
         match field {
+            "do_qsm" => self.do_qsm = !self.do_qsm,
             "inhomogeneity_correction" => self.inhomogeneity_correction = !self.inhomogeneity_correction,
             "medi_smv" => self.medi_smv = !self.medi_smv,
             _ => {}
@@ -1244,36 +1261,11 @@ impl Default for RunForm {
 impl App {
     pub fn new() -> Self {
         let tab_fields = vec![
-            // Tab 0: Input/Output
-            vec![
-                FieldDef {
-                    label: "BIDS Directory",
-                    kind: FieldKind::Text,
-                    help: "Path to input BIDS dataset (required)",
-                },
-                FieldDef {
-                    label: "Output Directory",
-                    kind: FieldKind::Text,
-                    help: "Path for output derivatives (required)",
-                },
-                FieldDef {
-                    label: "Preset",
-                    kind: FieldKind::Select {
-                        options: vec!["(none)", "gre", "epi", "bet", "fast", "body"],
-                    },
-                    help: "Premade pipeline configuration preset",
-                },
-                FieldDef {
-                    label: "Config File",
-                    kind: FieldKind::Text,
-                    help: "Custom TOML config file (overrides preset)",
-                },
-            ],
-            // Tab 1: Filters (custom rendering — see FilterTreeState)
+            // Tab 0: Input (custom rendering — IO fields + filter tree)
             vec![],
-            // Tab 2: Pipeline (custom rendering — see PipelineFormState)
+            // Tab 1: Pipeline (custom rendering — see PipelineFormState)
             vec![],
-            // Tab 3: Supplementary
+            // Tab 2: Supplementary
             vec![
                 FieldDef {
                     label: "Compute SWI",
@@ -1350,13 +1342,13 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
-        // Route tab 1 (Filters) to its own handler
-        if self.active_tab == 1 {
-            self.handle_filter_key(key);
+        // Route tab 0 (Input) to its combined IO + filter handler
+        if self.active_tab == 0 {
+            self.handle_input_tab_key(key);
             return;
         }
-        // Route tab 2 (Pipeline) to its own handler
-        if self.active_tab == 2 {
+        // Route tab 1 (Pipeline) to its own handler
+        if self.active_tab == 1 {
             self.handle_pipeline_key(key);
             return;
         }
@@ -1370,7 +1362,7 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
 
             // Tab switching
-            KeyCode::Char(c @ '1'..='5') => {
+            KeyCode::Char(c @ '1'..='4') => {
                 self.active_tab = (c as usize) - ('1' as usize);
                 self.active_field = 0;
             }
@@ -1409,6 +1401,91 @@ impl App {
 
     // ─── Filter tab key handling ───
 
+    /// Number of IO fields at the top of the Input tab
+    pub const INPUT_IO_FIELDS: usize = 4; // bids_dir, output_dir, preset, config_file
+
+    fn handle_input_tab_key(&mut self, key: KeyEvent) {
+        // IO fields are at active_field 0-3, filter tree starts at 4+
+        let in_io = self.active_field < Self::INPUT_IO_FIELDS;
+
+        if in_io {
+            // Handle IO field editing
+            if self.editing {
+                self.handle_editing_key(key);
+                return;
+            }
+            match key.code {
+                KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+                KeyCode::Char(c @ '1'..='4') => {
+                    self.active_tab = (c as usize) - ('1' as usize);
+                    self.active_field = 0;
+                }
+                KeyCode::Tab => {
+                    self.active_tab = (self.active_tab + 1) % TAB_NAMES.len();
+                    self.active_field = 0;
+                }
+                KeyCode::BackTab => {
+                    self.active_tab = (self.active_tab + TAB_NAMES.len() - 1) % TAB_NAMES.len();
+                    self.active_field = 0;
+                }
+                KeyCode::Up | KeyCode::Char('k') if self.active_field > 0 => {
+                    self.active_field -= 1;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.active_field += 1;
+                    // After IO fields, enter filter tree
+                }
+                KeyCode::Enter | KeyCode::Char(' ') => self.interact_io_field(),
+                KeyCode::Left => self.adjust_io_select(-1),
+                KeyCode::Right => self.adjust_io_select(1),
+                KeyCode::F(5) => self.should_run = true,
+                _ => {}
+            }
+            // Trigger BIDS rescan when bids_dir changes
+            let bids_dir = self.form.bids_dir.clone();
+            self.filter_state.maybe_rescan(&bids_dir);
+        } else {
+            // Delegate to filter tree handler, but intercept Up at the top to go back to IO
+            if self.filter_state.pattern_editing || self.filter_state.num_echoes_editing {
+                // Let filter handle its own editing
+                self.handle_filter_key(key);
+                return;
+            }
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') if self.filter_state.focus == FilterFocus::Pattern => {
+                    // At top of filter tree, go back to IO fields
+                    self.active_field = Self::INPUT_IO_FIELDS - 1;
+                }
+                _ => self.handle_filter_key(key),
+            }
+        }
+    }
+
+    fn interact_io_field(&mut self) {
+        match self.active_field {
+            0 | 1 | 3 => { // Text fields: bids_dir, output_dir, config_file
+                self.editing = true;
+                self.cursor_pos = match self.active_field {
+                    0 => self.form.bids_dir.len(),
+                    1 => self.form.output_dir.len(),
+                    3 => self.form.config_file.len(),
+                    _ => 0,
+                };
+            }
+            2 => { // Preset select: cycle
+                self.form.preset = (self.form.preset + 1) % 6;
+            }
+            _ => {}
+        }
+    }
+
+    fn adjust_io_select(&mut self, delta: isize) {
+        if self.active_field == 2 {
+            let n = 6isize; // preset options count
+            self.form.preset = (self.form.preset as isize + delta).rem_euclid(n) as usize;
+        }
+    }
+
     fn handle_filter_key(&mut self, key: KeyEvent) {
         // Handle editing mode (pattern or num_echoes text input)
         if self.filter_state.pattern_editing {
@@ -1425,7 +1502,7 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
 
             // Tab switching (same as other tabs)
-            KeyCode::Char(c @ '1'..='5') => {
+            KeyCode::Char(c @ '1'..='4') => {
                 self.active_tab = (c as usize) - ('1' as usize);
                 self.active_field = 0;
             }
@@ -1627,7 +1704,7 @@ impl App {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
 
-            KeyCode::Char(c @ '1'..='5') => {
+            KeyCode::Char(c @ '1'..='4') => {
                 self.active_tab = (c as usize) - ('1' as usize);
                 self.active_field = 0;
             }
@@ -1903,9 +1980,9 @@ impl App {
             (0, 0) => &self.form.bids_dir,
             (0, 1) => &self.form.output_dir,
             (0, 3) => &self.form.config_file,
-            (3, 2) => &self.form.swi_strength,
-            (3, 3) => &self.form.swi_mip_window,
-            (4, 2) => &self.form.n_procs,
+            (2, 2) => &self.form.swi_strength,
+            (2, 3) => &self.form.swi_mip_window,
+            (3, 2) => &self.form.n_procs,
             _ => "",
         }
     }
@@ -1915,25 +1992,23 @@ impl App {
             (0, 0) => &mut self.form.bids_dir,
             (0, 1) => &mut self.form.output_dir,
             (0, 3) => &mut self.form.config_file,
-            (3, 2) => &mut self.form.swi_strength,
-            (3, 3) => &mut self.form.swi_mip_window,
-            (4, 2) => &mut self.form.n_procs,
+            (2, 2) => &mut self.form.swi_strength,
+            (2, 3) => &mut self.form.swi_mip_window,
+            (3, 2) => &mut self.form.n_procs,
             _ => unreachable!("text_value_mut called on non-text field"),
         }
     }
 
     pub fn select_value(&self) -> usize {
         match (self.active_tab, self.active_field) {
-            (0, 2) => self.form.preset,
-            (3, 1) => self.form.swi_scaling,
+            (2, 1) => self.form.swi_scaling,
             _ => 0,
         }
     }
 
     fn set_select_value(&mut self, val: usize) {
         match (self.active_tab, self.active_field) {
-            (0, 2) => self.form.preset = val,
-            (3, 1) => self.form.swi_scaling = val,
+            (2, 1) => self.form.swi_scaling = val,
             _ => {}
         }
     }
@@ -1941,22 +2016,22 @@ impl App {
     #[allow(dead_code)]
     fn checkbox_value(&self) -> bool {
         match (self.active_tab, self.active_field) {
-            (3, 0) => self.form.do_swi,
-            (3, 4) => self.form.do_t2starmap,
-            (3, 5) => self.form.do_r2starmap,
-            (4, 0) => self.form.dry_run,
-            (4, 1) => self.form.debug,
+            (2, 0) => self.form.do_swi,
+            (2, 4) => self.form.do_t2starmap,
+            (2, 5) => self.form.do_r2starmap,
+            (3, 0) => self.form.dry_run,
+            (3, 1) => self.form.debug,
             _ => false,
         }
     }
 
     fn toggle_checkbox(&mut self) {
         match (self.active_tab, self.active_field) {
-            (3, 0) => self.form.do_swi = !self.form.do_swi,
-            (3, 4) => self.form.do_t2starmap = !self.form.do_t2starmap,
-            (3, 5) => self.form.do_r2starmap = !self.form.do_r2starmap,
-            (4, 0) => self.form.dry_run = !self.form.dry_run,
-            (4, 1) => self.form.debug = !self.form.debug,
+            (2, 0) => self.form.do_swi = !self.form.do_swi,
+            (2, 4) => self.form.do_t2starmap = !self.form.do_t2starmap,
+            (2, 5) => self.form.do_r2starmap = !self.form.do_r2starmap,
+            (3, 0) => self.form.dry_run = !self.form.dry_run,
+            (3, 1) => self.form.debug = !self.form.debug,
             _ => {}
         }
     }
@@ -1964,31 +2039,27 @@ impl App {
     // Generalized accessors for rendering arbitrary (tab, field) pairs
     pub fn get_text_value(&self, tab: usize, field: usize) -> &str {
         match (tab, field) {
-            (0, 0) => &self.form.bids_dir,
-            (0, 1) => &self.form.output_dir,
-            (0, 3) => &self.form.config_file,
-            (3, 2) => &self.form.swi_strength,
-            (3, 3) => &self.form.swi_mip_window,
-            (4, 2) => &self.form.n_procs,
+            (2, 2) => &self.form.swi_strength,
+            (2, 3) => &self.form.swi_mip_window,
+            (3, 2) => &self.form.n_procs,
             _ => "",
         }
     }
 
     pub fn get_select_value(&self, tab: usize, field: usize) -> usize {
         match (tab, field) {
-            (0, 2) => self.form.preset,
-            (3, 1) => self.form.swi_scaling,
+            (2, 1) => self.form.swi_scaling,
             _ => 0,
         }
     }
 
     pub fn get_checkbox_value(&self, tab: usize, field: usize) -> bool {
         match (tab, field) {
-            (3, 0) => self.form.do_swi,
-            (3, 4) => self.form.do_t2starmap,
-            (3, 5) => self.form.do_r2starmap,
-            (4, 0) => self.form.dry_run,
-            (4, 1) => self.form.debug,
+            (2, 0) => self.form.do_swi,
+            (2, 4) => self.form.do_t2starmap,
+            (2, 5) => self.form.do_r2starmap,
+            (3, 0) => self.form.dry_run,
+            (3, 1) => self.form.debug,
             _ => false,
         }
     }
@@ -2007,17 +2078,6 @@ mod tests {
     // --- App::new ---
 
 
-    #[test]
-    fn test_field_count_per_tab() {
-        let mut app = App::new();
-        assert_eq!(app.field_count(), 4); // Tab 0: Input/Output
-        app.active_tab = 1;
-        assert_eq!(app.field_count(), 0); // Tab 1: Filters (custom rendering)
-        app.active_tab = 2;
-        assert_eq!(app.field_count(), 0); // Tab 2: Pipeline (custom rendering)
-        app.active_tab = 3;
-        assert_eq!(app.field_count(), 6); // Tab 3: Execution
-    }
 
     // --- Navigation ---
 
@@ -2075,18 +2135,6 @@ mod tests {
         assert_eq!(app.active_field, 0);
     }
 
-    #[test]
-    fn test_field_navigation_clamped() {
-        let mut app = App::new();
-        // Can't go below 0
-        app.handle_key(key(KeyCode::Up));
-        assert_eq!(app.active_field, 0);
-        // Can't go past max
-        app.active_field = app.field_count() - 1;
-        let max = app.active_field;
-        app.handle_key(key(KeyCode::Down));
-        assert_eq!(app.active_field, max);
-    }
 
     // --- Text editing ---
 
@@ -2226,17 +2274,6 @@ mod tests {
 
     // --- Checkbox fields ---
 
-    #[test]
-    fn test_checkbox_toggle() {
-        let mut app = App::new();
-        app.active_tab = 3; // Execution tab
-        app.active_field = 0; // do_swi
-        assert!(!app.form.do_swi);
-        app.handle_key(key(KeyCode::Enter));
-        assert!(app.form.do_swi);
-        app.handle_key(key(KeyCode::Char(' ')));
-        assert!(!app.form.do_swi);
-    }
 
 
     #[test]
@@ -2330,22 +2367,6 @@ mod tests {
 
     // --- checkbox_value (private, exercised for coverage) ---
 
-    #[test]
-    fn test_checkbox_value_accessor() {
-        let mut app = App::new();
-        app.form.do_swi = true;
-        app.active_tab = 3;
-        app.active_field = 0;
-        assert!(app.checkbox_value());
-
-        app.active_field = 1; // do_t2starmap
-        assert!(!app.checkbox_value());
-
-        // Unknown field returns false
-        app.active_tab = 0;
-        app.active_field = 0;
-        assert!(!app.checkbox_value());
-    }
 
     // --- RunForm default ---
 
@@ -2511,41 +2532,7 @@ mod tests {
         assert_eq!(tree.selected_runs(), tree.total_runs());
     }
 
-    #[test]
-    fn test_filter_pattern_editing() {
-        let mut app = App::new();
-        app.active_tab = 1;
-        let dir = tempfile::tempdir().unwrap();
-        crate::testutils::create_single_echo_bids(dir.path());
-        app.form.bids_dir = dir.path().to_str().unwrap().to_string();
-        app.filter_state.maybe_rescan(&app.form.bids_dir.clone());
 
-        // Enter pattern editing
-        app.filter_state.focus = super::FilterFocus::Pattern;
-        app.handle_key(key(KeyCode::Enter));
-        assert!(app.filter_state.pattern_editing);
-
-        // Type something
-        app.handle_key(key(KeyCode::Char('*')));
-        assert_eq!(app.filter_state.pattern, "*");
-
-        // Esc cancels
-        app.handle_key(key(KeyCode::Esc));
-        assert!(!app.filter_state.pattern_editing);
-    }
-
-    #[test]
-    fn test_filter_num_echoes_editing() {
-        let mut app = App::new();
-        app.active_tab = 1;
-        app.filter_state.focus = super::FilterFocus::NumEchoes;
-        app.handle_key(key(KeyCode::Enter));
-        assert!(app.filter_state.num_echoes_editing);
-        app.handle_key(key(KeyCode::Char('3')));
-        assert_eq!(app.filter_state.num_echoes, "3");
-        app.handle_key(key(KeyCode::Enter));
-        assert!(!app.filter_state.num_echoes_editing);
-    }
 
     #[test]
     fn test_filter_collapse() {

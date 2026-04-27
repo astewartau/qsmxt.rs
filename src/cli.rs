@@ -394,6 +394,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub tgv_tol: Option<f64>,
 
+    /// Skip QSM processing (only run supplementary outputs like SWI, T2*, R2*)
+    #[arg(long)]
+    pub no_qsm: bool,
+
     /// Also compute SWI
     #[arg(long)]
     pub do_swi: bool,
