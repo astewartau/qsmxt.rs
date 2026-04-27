@@ -1227,6 +1227,7 @@ pub struct RunForm {
     pub do_swi: bool,
     pub swi_scaling: usize,  // 0=tanh, 1=negative-tanh, 2=positive, 3=negative, 4=triangular
     pub swi_strength: String,
+    pub swi_hp_sigma: String,
     pub swi_mip_window: String,
     pub do_t2starmap: bool,
     pub do_r2starmap: bool,
@@ -1248,6 +1249,7 @@ impl Default for RunForm {
             do_swi: false,
             swi_scaling: 0,
             swi_strength: format!("{}", swi.strength),
+            swi_hp_sigma: format!("{} {} {}", swi.hp_sigma[0], swi.hp_sigma[1], swi.hp_sigma[2]),
             swi_mip_window: format!("{}", swi.mip_window),
             do_t2starmap: false,
             do_r2starmap: false,
@@ -1281,6 +1283,11 @@ impl App {
                     label: "SWI Strength",
                     kind: FieldKind::Text,
                     help: "Phase scaling strength (higher = stronger phase contrast)",
+                },
+                FieldDef {
+                    label: "SWI HP Sigma",
+                    kind: FieldKind::Text,
+                    help: "High-pass filter sigma in voxels (X Y Z, e.g. '4 4 0'). Set Z=0 for thin axial slices.",
                 },
                 FieldDef {
                     label: "SWI MIP Window",
@@ -1981,7 +1988,8 @@ impl App {
             (0, 1) => &self.form.output_dir,
             (0, 3) => &self.form.config_file,
             (2, 2) => &self.form.swi_strength,
-            (2, 3) => &self.form.swi_mip_window,
+            (2, 3) => &self.form.swi_hp_sigma,
+            (2, 4) => &self.form.swi_mip_window,
             (3, 2) => &self.form.n_procs,
             _ => "",
         }
@@ -1993,7 +2001,8 @@ impl App {
             (0, 1) => &mut self.form.output_dir,
             (0, 3) => &mut self.form.config_file,
             (2, 2) => &mut self.form.swi_strength,
-            (2, 3) => &mut self.form.swi_mip_window,
+            (2, 3) => &mut self.form.swi_hp_sigma,
+            (2, 4) => &mut self.form.swi_mip_window,
             (3, 2) => &mut self.form.n_procs,
             _ => unreachable!("text_value_mut called on non-text field"),
         }
@@ -2017,8 +2026,8 @@ impl App {
     fn checkbox_value(&self) -> bool {
         match (self.active_tab, self.active_field) {
             (2, 0) => self.form.do_swi,
-            (2, 4) => self.form.do_t2starmap,
-            (2, 5) => self.form.do_r2starmap,
+            (2, 5) => self.form.do_t2starmap,
+            (2, 6) => self.form.do_r2starmap,
             (3, 0) => self.form.dry_run,
             (3, 1) => self.form.debug,
             _ => false,
@@ -2028,8 +2037,8 @@ impl App {
     fn toggle_checkbox(&mut self) {
         match (self.active_tab, self.active_field) {
             (2, 0) => self.form.do_swi = !self.form.do_swi,
-            (2, 4) => self.form.do_t2starmap = !self.form.do_t2starmap,
-            (2, 5) => self.form.do_r2starmap = !self.form.do_r2starmap,
+            (2, 5) => self.form.do_t2starmap = !self.form.do_t2starmap,
+            (2, 6) => self.form.do_r2starmap = !self.form.do_r2starmap,
             (3, 0) => self.form.dry_run = !self.form.dry_run,
             (3, 1) => self.form.debug = !self.form.debug,
             _ => {}
@@ -2040,7 +2049,8 @@ impl App {
     pub fn get_text_value(&self, tab: usize, field: usize) -> &str {
         match (tab, field) {
             (2, 2) => &self.form.swi_strength,
-            (2, 3) => &self.form.swi_mip_window,
+            (2, 3) => &self.form.swi_hp_sigma,
+            (2, 4) => &self.form.swi_mip_window,
             (3, 2) => &self.form.n_procs,
             _ => "",
         }
@@ -2056,8 +2066,8 @@ impl App {
     pub fn get_checkbox_value(&self, tab: usize, field: usize) -> bool {
         match (tab, field) {
             (2, 0) => self.form.do_swi,
-            (2, 4) => self.form.do_t2starmap,
-            (2, 5) => self.form.do_r2starmap,
+            (2, 5) => self.form.do_t2starmap,
+            (2, 6) => self.form.do_r2starmap,
             (3, 0) => self.form.dry_run,
             (3, 1) => self.form.debug,
             _ => false,
