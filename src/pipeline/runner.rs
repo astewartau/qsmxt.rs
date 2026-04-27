@@ -1007,9 +1007,12 @@ fn build_mask_from_section(
                 } else {
                     magnitudes[0].data.clone()
                 };
+                let bet_defaults = qsm_core::bet::BetParams::default();
                 mask = qsm_core::bet::run_bet(
                     &mag_data, nx, ny, nz, vsx, vsy, vsz,
-                    *fractional_intensity, 1.0, 0.0, 1000, 4,
+                    *fractional_intensity, bet_defaults.smoothness,
+                    bet_defaults.gradient_threshold, bet_defaults.iterations,
+                    bet_defaults.subdivisions,
                 );
             }
             MaskOp::Erode { iterations } => {

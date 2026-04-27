@@ -511,7 +511,15 @@ fn default_romeo_mag_coherence() -> bool { qsm_core::unwrap::RomeoParams::defaul
 fn default_romeo_mag_weight() -> bool { qsm_core::unwrap::RomeoParams::default().mag_weight }
 fn default_mcpc3ds_sigma() -> [f64; 3] { qsm_core::utils::Mcpc3dsParams::default().sigma }
 fn default_swi_hp_sigma() -> [f64; 3] { qsm_core::swi::SwiParams::default().hp_sigma }
-fn default_swi_scaling() -> String { "tanh".to_string() }
+fn default_swi_scaling() -> String {
+    match qsm_core::swi::SwiParams::default().scaling {
+        qsm_core::swi::PhaseScaling::Tanh => "tanh",
+        qsm_core::swi::PhaseScaling::NegativeTanh => "negative-tanh",
+        qsm_core::swi::PhaseScaling::Positive => "positive",
+        qsm_core::swi::PhaseScaling::Negative => "negative",
+        qsm_core::swi::PhaseScaling::Triangular => "triangular",
+    }.to_string()
+}
 fn default_swi_strength() -> f64 { qsm_core::swi::SwiParams::default().strength }
 fn default_swi_mip_window() -> usize { qsm_core::swi::SwiParams::default().mip_window }
 fn default_homogeneity_sigma_mm() -> f64 { qsm_core::utils::HomogeneityParams::default().sigma_mm }
