@@ -1557,17 +1557,14 @@ impl App {
     }
 
     fn interact_io_field(&mut self) {
-        match self.active_field {
-            0 | 1 | 2 => { // Text fields: bids_dir, output_dir, config_file
-                self.editing = true;
-                self.cursor_pos = match self.active_field {
-                    0 => self.form.bids_dir.len(),
-                    1 => self.form.output_dir.len(),
-                    2 => self.form.config_file.len(),
-                    _ => 0,
-                };
-            }
-            _ => {}
+        if let 0..=2 = self.active_field { // Text fields: bids_dir, output_dir, config_file
+            self.editing = true;
+            self.cursor_pos = match self.active_field {
+                0 => self.form.bids_dir.len(),
+                1 => self.form.output_dir.len(),
+                2 => self.form.config_file.len(),
+                _ => 0,
+            };
         }
     }
 
@@ -2788,5 +2785,158 @@ mod tests {
                 "get_param_mut returned None for field: {}", field_name,
             );
         }
+    }
+
+    // --- SLURM field visibility ---
+
+    #[test]
+    fn test_field_visibility_local_mode() {
+        let mut app = App::new();
+        app.form.execution_mode = 0; // Local
+        // Local-only fields visible
+        assert!(app.is_field_visible(3, 0)); // Execution Mode
+        assert!(app.is_field_visible(3, 1)); // Dry Run
+        assert!(app.is_field_visible(3, 2)); // Debug
+        assert!(app.is_field_visible(3, 3)); // Num Processes
+        // SLURM fields hidden
+        assert!(!app.is_field_visible(3, 4)); // SLURM Account
+        assert!(!app.is_field_visible(3, 5)); // SLURM Partition
+        assert!(!app.is_field_visible(3, 6)); // SLURM Time
+        assert!(!app.is_field_visible(3, 7)); // SLURM Mem
+        assert!(!app.is_field_visible(3, 8)); // SLURM CPUs
+        assert!(!app.is_field_visible(3, 9)); // Auto-Submit
+    }
+
+    #[test]
+    fn test_field_visibility_slurm_mode() {
+        let mut app = App::new();
+        app.form.execution_mode = 1; // SLURM
+        // Execution Mode always visible
+        assert!(app.is_field_visible(3, 0));
+        // Dry Run and Num Processes hidden in SLURM mode
+        assert!(!app.is_field_visible(3, 1)); // Dry Run
+        assert!(!app.is_field_visible(3, 3)); // Num Processes
+        // Debug visible in both modes
+        assert!(app.is_field_visible(3, 2));
+        // SLURM fields visible
+        assert!(app.is_field_visible(3, 4));
+        assert!(app.is_field_visible(3, 5));
+        assert!(app.is_field_visible(3, 6));
+        assert!(app.is_field_visible(3, 7));
+        assert!(app.is_field_visible(3, 8));
+        assert!(app.is_field_visible(3, 9));
+    }
+
+    #[test]
+    fn test_field_visibility_other_tabs() {
+        let app = App::new();
+        // All fields on other tabs are always visible
+        assert!(app.is_field_visible(0, 0));
+        assert!(app.is_field_visible(2, 0));
+        assert!(app.is_field_visible(2, 8));
+    }
+
+    // --- SLURM form fields ---
+
+    #[test]
+    fn test_slurm_form_defaults() {
+        let form = RunForm::default();
+        assert_eq!(form.execution_mode, 0);
+        assert!(form.slurm_account.is_empty());
+        assert!(form.slurm_partition.is_empty());
+        assert_eq!(form.slurm_time, "02:00:00");
+        assert_eq!(form.slurm_mem, "32");
+        assert_eq!(form.slurm_cpus, "4");
+        assert!(!form.slurm_submit);
+    }
+
+    // --- Execution mode select ---
+
+    #[test]
+    fn test_execution_mode_select() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.active_field = 0;
+        assert_eq!(app.select_value(), 0); // Local
+        app.form.execution_mode = 1;
+        assert_eq!(app.select_value(), 1); // SLURM
+    }
+
+    // --- SLURM field accessors ---
+
+    #[test]
+    fn test_slurm_text_values() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.form.slurm_account = "myacct".to_string();
+        app.form.slurm_partition = "gpu".to_string();
+        app.form.slurm_time = "04:00:00".to_string();
+        app.form.slurm_mem = "64".to_string();
+        app.form.slurm_cpus = "8".to_string();
+        assert_eq!(app.get_text_value(3, 4), "myacct");
+        assert_eq!(app.get_text_value(3, 5), "gpu");
+        assert_eq!(app.get_text_value(3, 6), "04:00:00");
+        assert_eq!(app.get_text_value(3, 7), "64");
+        assert_eq!(app.get_text_value(3, 8), "8");
+    }
+
+    #[test]
+    fn test_slurm_checkbox_value() {
+        let mut app = App::new();
+        assert!(!app.get_checkbox_value(3, 9)); // slurm_submit default
+        app.form.slurm_submit = true;
+        assert!(app.get_checkbox_value(3, 9));
+    }
+
+    // --- Reset SLURM fields ---
+
+    #[test]
+    fn test_reset_slurm_fields() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.form.execution_mode = 1;
+        app.form.slurm_account = "changed".to_string();
+        app.form.slurm_time = "99:00:00".to_string();
+        // Reset entire tab
+        app.reset_current_tab();
+        assert_eq!(app.form.execution_mode, 0);
+        assert!(app.form.slurm_account.is_empty());
+        assert_eq!(app.form.slurm_time, "02:00:00");
+    }
+
+    #[test]
+    fn test_reset_single_slurm_field() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.active_field = 4; // slurm_account
+        app.form.slurm_account = "changed".to_string();
+        app.reset_current_field();
+        assert!(app.form.slurm_account.is_empty());
+    }
+
+    // --- Navigation skips hidden fields ---
+
+    #[test]
+    fn test_navigation_skips_hidden_slurm_fields() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.active_field = 2; // Debug (last visible in Local mode before Num Processes at 3)
+        app.form.execution_mode = 1; // SLURM — hides fields 1 (Dry Run) and 3 (Num Processes)
+        // Navigate down from Debug (2) — should skip 3 (hidden) and go to 4 (SLURM Account)
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.active_field, 4);
+    }
+
+    // --- Cursor doesn't go below Config File when no BIDS tree ---
+
+    #[test]
+    fn test_input_tab_no_tree_cursor_stays() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = 2; // Config File
+        // No BIDS tree loaded
+        assert!(app.filter_state.tree.is_none());
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.active_field, 2); // Should stay on Config File
     }
 }

@@ -13,11 +13,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // Compute command preview height dynamically
     let cmd = command::build_command_string(app);
     let available_width = f.area().width.saturating_sub(4) as usize; // borders + padding
-    let cmd_lines = if available_width > 0 {
-        (cmd.len() / available_width + 1).max(1).min(6)
-    } else {
-        1
-    };
+    let cmd_lines = cmd.len()
+        .checked_div(available_width)
+        .map(|v| (v + 1).clamp(1, 6))
+        .unwrap_or(1);
     let preview_height = cmd_lines as u16 + 2; // +2 for borders
 
     let chunks = Layout::default()
@@ -240,7 +239,7 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let mut lines: Vec<Line> = Vec::new();
     let io_labels = ["BIDS Directory", "Output Directory", "Config File"];
 
-    for i in 0..io_field_count {
+    for (i, io_label) in io_labels.iter().enumerate().take(io_field_count) {
         let focused = in_io && i == app.active_field;
         let label_style = if focused {
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
@@ -265,7 +264,7 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
             Span::styled(value.to_string(), val_style)
         };
         let line = Line::from(vec![
-            Span::styled(format!("  {:22}", format!("{}:", io_labels[i])), label_style),
+            Span::styled(format!("  {:22}", format!("{}:", io_label)), label_style),
             display_val,
         ]);
         lines.push(line);
@@ -663,11 +662,10 @@ fn draw_pipeline_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
                 } else {
                     val
                 };
-                if focused {
-                    if focused_help.is_none() {
+                if focused
+                    && focused_help.is_none() {
                         focused_help = Some("Enter to edit value, Esc to cancel".to_string());
                     }
-                }
                 let val_style = if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::Gray) };
                 Line::from(vec![
                     Span::styled(format!("  {:22}", label), label_style),

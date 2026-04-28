@@ -888,27 +888,24 @@ impl PipelineConfig {
             }
             // Validate generator parameters
             match &section.generator {
-                MaskOp::Bet { fractional_intensity } => {
-                    if *fractional_intensity < 0.0 || *fractional_intensity > 1.0 {
+                MaskOp::Bet { fractional_intensity }
+                    if (*fractional_intensity < 0.0 || *fractional_intensity > 1.0) => {
                         return Err(QsmxtError::Config(
                             format!("Mask section {} BET fractional intensity must be 0.0-1.0, got {}", i + 1, fractional_intensity),
                         ));
                     }
-                }
-                MaskOp::Threshold { method: MaskThresholdMethod::Fixed, value: Some(v) } => {
-                    if *v < 0.0 {
+                MaskOp::Threshold { method: MaskThresholdMethod::Fixed, value: Some(v) }
+                    if *v < 0.0 => {
                         return Err(QsmxtError::Config(
                             format!("Mask section {} fixed threshold must be ≥ 0.0, got {}", i + 1, v),
                         ));
                     }
-                }
-                MaskOp::Threshold { method: MaskThresholdMethod::Percentile, value: Some(v) } => {
-                    if *v < 0.0 || *v > 100.0 {
+                MaskOp::Threshold { method: MaskThresholdMethod::Percentile, value: Some(v) }
+                    if (*v < 0.0 || *v > 100.0) => {
                         return Err(QsmxtError::Config(
                             format!("Mask section {} percentile must be 0-100, got {}", i + 1, v),
                         ));
                     }
-                }
                 _ => {}
             }
             // Refinements must not contain generators
@@ -1144,18 +1141,19 @@ mod tests {
 
     #[test]
     fn test_validate_tgv_accepts_none_bf_and_unwrap() {
-        let mut config = PipelineConfig::default();
-        config.qsm_algorithm = QsmAlgorithm::Tgv;
-        config.unwrapping_algorithm = None;
-        config.bf_algorithm = None;
-        config.combine_phase = false;
+        let config = PipelineConfig {
+            qsm_algorithm: QsmAlgorithm::Tgv,
+            unwrapping_algorithm: None,
+            bf_algorithm: None,
+            combine_phase: false,
+            ..PipelineConfig::default()
+        };
         assert!(config.validate().is_ok());
     }
 
     #[test]
     fn test_validate_non_tgv_requires_bf() {
-        let mut config = PipelineConfig::default();
-        config.bf_algorithm = None;
+        let config = PipelineConfig { bf_algorithm: None, ..PipelineConfig::default() };
         let result = config.validate();
         assert!(result.is_err());
     }
@@ -1165,11 +1163,13 @@ mod tests {
 
     #[test]
     fn test_to_annotated_toml_body_comments_out_bf() {
-        let mut config = PipelineConfig::default();
-        config.qsm_algorithm = QsmAlgorithm::Tgv;
-        config.unwrapping_algorithm = None;
-        config.bf_algorithm = None;
-        config.combine_phase = false;
+        let config = PipelineConfig {
+            qsm_algorithm: QsmAlgorithm::Tgv,
+            unwrapping_algorithm: None,
+            bf_algorithm: None,
+            combine_phase: false,
+            ..PipelineConfig::default()
+        };
         let toml = config.to_annotated_toml();
         assert!(toml.contains("# bf_algorithm"), "BF should be commented out for Body/TGV");
     }
@@ -1314,11 +1314,13 @@ mod tests {
 
     #[test]
     fn test_to_annotated_toml_body_preset() {
-        let mut config = PipelineConfig::default();
-        config.qsm_algorithm = QsmAlgorithm::Tgv;
-        config.unwrapping_algorithm = None;
-        config.bf_algorithm = None;
-        config.combine_phase = false;
+        let config = PipelineConfig {
+            qsm_algorithm: QsmAlgorithm::Tgv,
+            unwrapping_algorithm: None,
+            bf_algorithm: None,
+            combine_phase: false,
+            ..PipelineConfig::default()
+        };
         let toml = config.to_annotated_toml();
         assert!(toml.contains("qsm_algorithm = \"tgv\""));
         assert!(toml.contains("# unwrapping_algorithm")); // commented out
@@ -1333,12 +1335,14 @@ mod tests {
 
     #[test]
     fn test_to_annotated_toml_with_features_enabled() {
-        let mut config = PipelineConfig::default();
-        config.do_swi = true;
-        config.do_t2starmap = true;
-        config.do_r2starmap = true;
-        config.inhomogeneity_correction = true;
-        config.description = "".to_string();
+        let config = PipelineConfig {
+            do_swi: true,
+            do_t2starmap: true,
+            do_r2starmap: true,
+            inhomogeneity_correction: true,
+            description: "".to_string(),
+            ..PipelineConfig::default()
+        };
         let toml = config.to_annotated_toml();
         assert!(toml.contains("do_swi = true"));
         assert!(toml.contains("do_t2starmap = true"));
@@ -1379,9 +1383,11 @@ mod tests {
 
     #[test]
     fn test_validate_tgv_with_bf_set() {
-        let mut config = PipelineConfig::default();
-        config.qsm_algorithm = QsmAlgorithm::Tgv;
-        config.bf_algorithm = Some(BfAlgorithm::Vsharp);
+        let config = PipelineConfig {
+            qsm_algorithm: QsmAlgorithm::Tgv,
+            bf_algorithm: Some(BfAlgorithm::Vsharp),
+            ..PipelineConfig::default()
+        };
         // Should still pass — TGV ignores bf/unwrap but doesn't error
         assert!(config.validate().is_ok());
     }

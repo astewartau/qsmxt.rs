@@ -303,11 +303,13 @@ mod tests {
 
     #[test]
     fn test_tgv_path() {
-        let mut config = PipelineConfig::default();
-        config.qsm_algorithm = QsmAlgorithm::Tgv;
-        config.unwrapping_algorithm = None;
-        config.bf_algorithm = None;
-        config.combine_phase = false;
+        let config = PipelineConfig {
+            qsm_algorithm: QsmAlgorithm::Tgv,
+            unwrapping_algorithm: None,
+            bf_algorithm: None,
+            combine_phase: false,
+            ..PipelineConfig::default()
+        };
         let est = estimate_peak_memory_bytes(128, 128, 128, 1, true, &config);
         assert!(est > 0, "TGV estimate should be positive");
     }

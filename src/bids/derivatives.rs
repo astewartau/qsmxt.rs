@@ -164,6 +164,12 @@ mod tests {
     }
 
     #[test]
+    fn test_magnitude_path() {
+        let path = output().magnitude_path(&key_no_session());
+        assert!(path.to_str().unwrap().ends_with("_magnitude.nii"));
+    }
+
+    #[test]
     fn test_state_path() {
         let path = output().state_path(&key_no_session());
         assert!(path.to_str().unwrap().ends_with(".pipeline_state.json"));

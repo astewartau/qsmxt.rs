@@ -535,7 +535,7 @@ fn stage_unwrap(
 
     // Load first-echo magnitude for ROMEO weighting (matches reference implementation)
     let n_voxels = nx * ny * nz;
-    let first_echo_mag = if let Some(ref src) = ctx.run.echoes.first().and_then(|e| e.magnitude_nifti.as_ref()) {
+    let first_echo_mag = if let Some(src) = ctx.run.echoes.first().and_then(|e| e.magnitude_nifti.as_ref()) {
         let m_path = ctx.output.mag_path(&ctx.run.key, 1);
         if m_path.exists() {
             load_volume(&m_path)?
@@ -1220,9 +1220,7 @@ fn apply_reference(chi: &[f64], mask: &[u8], config: &PipelineConfig) -> Vec<f64
 mod tests {
     use super::*;
     fn config_with_reference(reference: QsmReference) -> PipelineConfig {
-        let mut c = PipelineConfig::default();
-        c.qsm_reference = reference;
-        c
+        PipelineConfig { qsm_reference: reference, ..PipelineConfig::default() }
     }
 
     #[test]

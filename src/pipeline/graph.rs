@@ -405,8 +405,10 @@ mod tests {
     #[test]
     fn test_config_change_invalidates() {
         let config1 = PipelineConfig::default();
-        let mut config2 = PipelineConfig::default();
-        config2.qsm_algorithm = crate::pipeline::config::QsmAlgorithm::Tkd;
+        let config2 = PipelineConfig {
+            qsm_algorithm: crate::pipeline::config::QsmAlgorithm::Tkd,
+            ..PipelineConfig::default()
+        };
 
         let key = AcquisitionKey {
             subject: "01".to_string(),

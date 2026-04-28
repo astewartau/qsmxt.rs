@@ -119,11 +119,10 @@ pub fn build_command_string(app: &App) -> String {
     push_if_changed(&mut parts, "--medi-tol", &ps.medi_tol, &defaults.medi_tol);
     push_if_changed(&mut parts, "--medi-percentage", &ps.medi_percentage, &defaults.medi_percentage);
     push_if_changed(&mut parts, "--medi-smv-radius", &ps.medi_smv_radius, &defaults.medi_smv_radius);
-    if ps.medi_smv != defaults.medi_smv {
-        if ps.medi_smv {
+    if ps.medi_smv != defaults.medi_smv
+        && ps.medi_smv {
             parts.push("--medi-smv".to_string());
         }
-    }
 
     // BG removal params
     push_if_changed(&mut parts, "--vsharp-threshold", &ps.vsharp_threshold, &defaults.vsharp_threshold);
@@ -741,5 +740,135 @@ mod tests {
         let mut parts = vec![];
         push_if_changed(&mut parts, "--flag", "new", "old");
         assert_eq!(parts, vec!["--flag new"]);
+    }
+
+    // --- SLURM command string ---
+
+    #[test]
+    fn test_command_string_slurm_mode() {
+        let mut app = default_app();
+        app.form.execution_mode = 1; // SLURM
+        app.form.bids_dir = "/bids".to_string();
+        app.form.slurm_account = "myacct".to_string();
+        let cmd = build_command_string(&app);
+        assert!(cmd.starts_with("qsmxt slurm"));
+        assert!(cmd.contains("--account myacct"));
+    }
+
+    #[test]
+    fn test_command_string_slurm_all_fields() {
+        let mut app = default_app();
+        app.form.execution_mode = 1;
+        app.form.bids_dir = "/bids".to_string();
+        app.form.slurm_account = "acct".to_string();
+        app.form.slurm_partition = "gpu".to_string();
+        app.form.slurm_time = "04:00:00".to_string();
+        app.form.slurm_mem = "64".to_string();
+        app.form.slurm_cpus = "8".to_string();
+        app.form.slurm_submit = true;
+        let cmd = build_command_string(&app);
+        assert!(cmd.contains("--account acct"));
+        assert!(cmd.contains("--partition gpu"));
+        assert!(cmd.contains("--time 04:00:00"));
+        assert!(cmd.contains("--mem 64"));
+        assert!(cmd.contains("--cpus-per-task 8"));
+        assert!(cmd.contains("--submit"));
+    }
+
+    #[test]
+    fn test_command_string_slurm_defaults_omitted() {
+        let mut app = default_app();
+        app.form.execution_mode = 1;
+        app.form.bids_dir = "/bids".to_string();
+        app.form.slurm_account = "acct".to_string();
+        // Default time/mem/cpus should not appear
+        let cmd = build_command_string(&app);
+        assert!(!cmd.contains("--time"));
+        assert!(!cmd.contains("--mem"));
+        assert!(!cmd.contains("--cpus-per-task"));
+        assert!(!cmd.contains("--submit"));
+        // Local-only flags should not appear
+        assert!(!cmd.contains("--dry"));
+        assert!(!cmd.contains("--n-procs"));
+    }
+
+    #[test]
+    fn test_command_string_slurm_no_account_placeholder() {
+        let mut app = default_app();
+        app.form.execution_mode = 1;
+        app.form.bids_dir = "/bids".to_string();
+        let cmd = build_command_string(&app);
+        assert!(cmd.contains("--account <account>"));
+    }
+
+    // --- build_slurm_args ---
+
+    #[test]
+    fn test_build_slurm_args_error_no_bids() {
+        let app = default_app();
+        assert!(build_slurm_args(&app).is_err());
+    }
+
+    #[test]
+    fn test_build_slurm_args_error_no_account() {
+        let mut app = default_app();
+        app.form.bids_dir = "/bids".to_string();
+        assert!(build_slurm_args(&app).is_err());
+    }
+
+    #[test]
+    fn test_build_slurm_args_minimal() {
+        let mut app = default_app();
+        app.form.bids_dir = "/bids".to_string();
+        app.form.slurm_account = "acct".to_string();
+        let args = build_slurm_args(&app).unwrap();
+        assert_eq!(args.bids_dir, PathBuf::from("/bids"));
+        assert_eq!(args.account, "acct");
+        assert_eq!(args.output_dir, None);
+        assert_eq!(args.partition, None);
+        assert_eq!(args.time, "02:00:00");
+        assert_eq!(args.mem, 32);
+        assert_eq!(args.cpus_per_task, 4);
+        assert!(!args.submit);
+    }
+
+    #[test]
+    fn test_build_slurm_args_full() {
+        let mut app = default_app();
+        app.form.bids_dir = "/bids".to_string();
+        app.form.output_dir = "/out".to_string();
+        app.form.slurm_account = "acct".to_string();
+        app.form.slurm_partition = "gpu".to_string();
+        app.form.slurm_time = "04:00:00".to_string();
+        app.form.slurm_mem = "64".to_string();
+        app.form.slurm_cpus = "8".to_string();
+        app.form.slurm_submit = true;
+        app.form.config_file = "config.toml".to_string();
+        let args = build_slurm_args(&app).unwrap();
+        assert_eq!(args.output_dir, Some(PathBuf::from("/out")));
+        assert_eq!(args.partition, Some("gpu".to_string()));
+        assert_eq!(args.time, "04:00:00");
+        assert_eq!(args.mem, 64);
+        assert_eq!(args.cpus_per_task, 8);
+        assert!(args.submit);
+        assert_eq!(args.config, Some(PathBuf::from("config.toml")));
+    }
+
+    // --- output_dir optional ---
+
+    #[test]
+    fn test_build_run_args_output_dir_empty() {
+        let mut app = default_app();
+        app.form.bids_dir = "/bids".to_string();
+        let args = build_run_args(&app).unwrap();
+        assert_eq!(args.output_dir, None);
+    }
+
+    #[test]
+    fn test_command_string_output_dir_omitted_when_empty() {
+        let mut app = default_app();
+        app.form.bids_dir = "/bids".to_string();
+        let cmd = build_command_string(&app);
+        assert_eq!(cmd.matches("/bids").count(), 1); // only bids_dir, no output_dir
     }
 }
