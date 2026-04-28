@@ -12,11 +12,14 @@ if [ ! -f "$BINARY" ]; then
     exit 0
 fi
 
-if [ -w "$BINARY" ]; then
+if [ -w "$INSTALL_DIR" ]; then
     rm "$BINARY"
-else
+elif command -v sudo >/dev/null 2>&1; then
     echo "Removing ${BINARY} (requires sudo)..."
     sudo rm "$BINARY"
+else
+    echo "Permission denied. Run manually: sudo rm ${BINARY}"
+    exit 1
 fi
 
 echo "qsmxt has been removed from ${INSTALL_DIR}"
