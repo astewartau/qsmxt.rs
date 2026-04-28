@@ -1518,8 +1518,13 @@ impl App {
                     self.active_field -= 1;
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    self.active_field += 1;
-                    // After IO fields, enter filter tree
+                    if self.active_field + 1 < Self::INPUT_IO_FIELDS {
+                        // Move within IO fields
+                        self.active_field += 1;
+                    } else if self.filter_state.tree.is_some() {
+                        // Enter filter tree (only if BIDS dir is loaded)
+                        self.active_field = Self::INPUT_IO_FIELDS;
+                    }
                 }
                 KeyCode::Enter | KeyCode::Char(' ') => self.interact_io_field(),
                 KeyCode::Left => self.adjust_io_select(-1),
