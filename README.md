@@ -32,6 +32,18 @@ curl -fsSL https://raw.githubusercontent.com/astewartau/qsmxt.rs/main/install.sh
 irm https://raw.githubusercontent.com/astewartau/qsmxt.rs/main/install.ps1 | iex
 ```
 
+### Uninstall
+
+```sh
+# Linux/macOS
+curl -fsSL https://raw.githubusercontent.com/astewartau/qsmxt.rs/main/uninstall.sh | sh
+```
+
+```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/astewartau/qsmxt.rs/main/uninstall.ps1 | iex
+```
+
 ### Manual download
 
 Download the latest binary for your platform from the [Releases](https://github.com/astewartau/qsmxt.rs/releases) page.
