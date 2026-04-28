@@ -1,7 +1,6 @@
 mod app;
 mod command;
 mod ui;
-mod widgets;
 
 use std::io;
 

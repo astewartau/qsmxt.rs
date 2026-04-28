@@ -261,9 +261,6 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         BfAlgorithmArg::Ismv,
         BfAlgorithmArg::Sharp,
     ];
-    let mask_algo_options = [MaskAlgorithmArg::Bet, MaskAlgorithmArg::Threshold];
-    let mask_input_options = [MaskInputArg::MagnitudeFirst, MaskInputArg::Magnitude, MaskInputArg::MagnitudeLast, MaskInputArg::PhaseQuality];
-
     Ok(RunArgs {
         bids_dir: PathBuf::from(&form.bids_dir),
         output_dir: PathBuf::from(&form.output_dir),
@@ -336,7 +333,12 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         no_romeo_phase_gradient_coherence: !ps.romeo_phase_gradient_coherence,
         no_romeo_mag_coherence: !ps.romeo_mag_coherence,
         no_romeo_mag_weight: !ps.romeo_mag_weight,
-        mcpc3ds_sigma: None,
+        mcpc3ds_sigma: {
+            let vals: Vec<f64> = ps.mcpc3ds_sigma.split_whitespace()
+                .filter_map(|w| w.parse().ok())
+                .collect();
+            if vals.is_empty() { None } else { Some(vals) }
+        },
         qsmart_ilsqr_tol: parse_optional_f64(&ps.qsmart_ilsqr_tol),
         qsmart_ilsqr_max_iter: parse_optional_usize(&ps.qsmart_ilsqr_max_iter),
         qsmart_vasc_sphere_radius: ps.qsmart_vasc_sphere_radius.trim().parse::<i32>().ok(),
@@ -425,18 +427,6 @@ fn parse_optional_usize(s: &str) -> Option<usize> {
     }
 }
 
-fn parse_optional_usize_vec(s: &str) -> Option<Vec<usize>> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        let parsed: Vec<usize> = trimmed
-            .split_whitespace()
-            .filter_map(|w| w.parse().ok())
-            .collect();
-        if parsed.is_empty() { None } else { Some(parsed) }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -752,27 +742,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_parse_optional_usize_vec_empty() {
-        assert_eq!(parse_optional_usize_vec(""), None);
-    }
-
-    #[test]
-    fn test_parse_optional_usize_vec_valid() {
-        assert_eq!(parse_optional_usize_vec("1 2 3"), Some(vec![1, 2, 3]));
-    }
-
-    #[test]
-    fn test_parse_optional_usize_vec_invalid_returns_none() {
-        assert_eq!(parse_optional_usize_vec("abc def"), None);
-    }
-
-    #[test]
-    fn test_parse_optional_usize_vec_mixed() {
-        assert_eq!(parse_optional_usize_vec("1 abc 3"), Some(vec![1, 3]));
-    }
-
-    #[test]
+#[test]
     fn test_push_if_changed_same() {
         let mut parts = vec![];
         push_if_changed(&mut parts, "--flag", "val", "val");

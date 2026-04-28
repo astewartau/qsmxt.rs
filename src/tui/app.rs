@@ -392,16 +392,6 @@ const BF_HELP: &[&str] = &[
     "Iterative Spherical Mean Value (iSMV) — https://doi.org/10.1002/mrm.24998",
     "SHARP (Sophisticated Harmonic Artifact Reduction) — https://doi.org/10.1016/j.neuroimage.2010.10.070",
 ];
-const MASK_ALGO_HELP: &[&str] = &[
-    "Brain Extraction Tool (BET) — Smith 2002, https://doi.org/10.1002/hbm.10062",
-    "Otsu thresholding (automatic intensity threshold)",
-];
-const MASK_INPUT_HELP: &[&str] = &[
-    "First echo magnitude image",
-    "RSS combination of all echo magnitudes",
-    "Last echo magnitude image",
-    "ROMEO phase quality map (spatial phase coherence)",
-];
 const PHASE_COMBO_HELP: &[&str] = &[
     "MCPC-3D-S: combine wrapped phase directly via phase offset estimation",
     "Linear fit: unwrap each echo, then magnitude-weighted linear fit of field vs TE",
@@ -521,7 +511,6 @@ pub struct PipelineFormState {
 
     // Pipeline tab UI state
     pub focus: usize,
-    pub expanded: HashSet<String>,
     pub editing: bool,
     pub cursor: usize,
     pub scroll_offset: usize,
@@ -530,7 +519,6 @@ pub struct PipelineFormState {
     pub mask_ops_adding: bool,      // true when "Add step..." selector is active
     pub mask_ops_add_idx: usize,    // index into available op types during add
     pub mask_ops_add_section: usize, // which section we're adding to
-    pub mask_ops_editing: Option<usize>, // index of mask op being edited (param text)
     pub mask_threshold_value_buf: String, // text buffer for editing threshold value
     pub mask_threshold_editing: bool, // true when editing threshold value
 }
@@ -619,14 +607,12 @@ impl Default for PipelineFormState {
             }],
             mask_preset: 0, // robust threshold
             focus: 0,
-            expanded: HashSet::new(),
             editing: false,
             cursor: 0,
             scroll_offset: 0,
             mask_ops_adding: false,
             mask_ops_add_idx: 0,
             mask_ops_add_section: 0,
-            mask_ops_editing: None,
             mask_threshold_value_buf: String::new(),
             mask_threshold_editing: false,
         }
@@ -636,8 +622,6 @@ impl Default for PipelineFormState {
 pub const QSM_ALGO_OPTIONS: &[&str] = &["rts", "tv", "tkd", "tsvd", "tgv", "tikhonov", "nltv", "medi", "ilsqr", "qsmart"];
 pub const UNWRAP_OPTIONS: &[&str] = &["romeo", "laplacian"];
 pub const BF_OPTIONS: &[&str] = &["vsharp", "pdf", "lbv", "ismv", "sharp"];
-pub const MASK_ALGO_OPTIONS: &[&str] = &["bet", "threshold"];
-pub const MASK_INPUT_OPTIONS: &[&str] = &["magnitude-first", "magnitude", "magnitude-last", "phase-quality"];
 pub const PHASE_COMBO_OPTIONS: &[&str] = &["mcpc3ds", "linear-fit"];
 pub const QSM_REF_OPTIONS: &[&str] = &["mean", "none"];
 
@@ -1817,6 +1801,11 @@ impl App {
         }
 
         match key.code {
+            // Escape from add mode before quit
+            KeyCode::Esc if self.pipeline_state.mask_ops_adding => {
+                self.pipeline_state.mask_ops_adding = false;
+            }
+
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
 
             KeyCode::Char(c @ '1'..='4') => {
@@ -1939,11 +1928,6 @@ impl App {
                     }
                     _ => {}
                 }
-            }
-
-            // Escape from add mode
-            KeyCode::Esc if self.pipeline_state.mask_ops_adding => {
-                self.pipeline_state.mask_ops_adding = false;
             }
 
             // Delete refinement step or entire section
