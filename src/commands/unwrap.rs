@@ -1,3 +1,4 @@
+use log::info;
 use super::common::{load_nifti, load_mask, save_nifti};
 use crate::cli::{UnwrapAlgorithmArg, UnwrapArgs};
 use crate::pipeline::phase;
@@ -13,7 +14,7 @@ pub fn execute(args: UnwrapArgs) -> crate::Result<()> {
     let mut phase_data = phase_nifti.data.clone();
     phase::scale_phase_to_pi(&mut phase_data);
 
-    println!("Unwrapping phase ({:?}, {}x{}x{})", args.algorithm, nx, ny, nz);
+    info!("Unwrapping phase ({:?}, {}x{}x{})", args.algorithm, nx, ny, nz);
 
     let unwrapped = match args.algorithm {
         UnwrapAlgorithmArg::Laplacian => {
@@ -43,6 +44,6 @@ pub fn execute(args: UnwrapArgs) -> crate::Result<()> {
     };
 
     save_nifti(&args.output, &unwrapped, &phase_nifti)?;
-    println!("Unwrapped phase saved to {}", args.output.display());
+    info!("Unwrapped phase saved to {}", args.output.display());
     Ok(())
 }

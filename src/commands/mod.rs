@@ -8,7 +8,6 @@ pub mod homogeneity;
 pub mod init;
 pub mod invert;
 pub mod mask;
-pub mod presets;
 pub mod quality_map;
 pub mod r2star;
 pub mod resample;
@@ -284,6 +283,25 @@ mod integration_tests {
             tkd_threshold: 0.15,
             tgv_iterations: 10,
             tgv_erosions: 1,
+            ilsqr_tol: 0.01,
+            ilsqr_max_iter: 50,
+            tikhonov_lambda: 0.01,
+            nltv_lambda: 1e-4,
+            nltv_mu: 1e2,
+            nltv_tol: 1e-4,
+            nltv_max_iter: 100,
+            nltv_newton_iter: 5,
+            magnitude: None,
+            medi_lambda: 1000.0,
+            medi_merit: true,
+            medi_smv: true,
+            medi_smv_radius: 5.0,
+            medi_data_weighting: 1,
+            medi_percentage: 0.9,
+            medi_cg_tol: 0.01,
+            medi_cg_max_iter: 100,
+            medi_max_iter: 10,
+            medi_tol: 0.001,
             field_strength: None,
             echo_time: None,
         }).unwrap();
@@ -318,6 +336,25 @@ mod integration_tests {
             tkd_threshold: 0.15,
             tgv_iterations: 10,
             tgv_erosions: 1,
+            ilsqr_tol: 0.01,
+            ilsqr_max_iter: 50,
+            tikhonov_lambda: 0.01,
+            nltv_lambda: 1e-4,
+            nltv_mu: 1e2,
+            nltv_tol: 1e-4,
+            nltv_max_iter: 100,
+            nltv_newton_iter: 5,
+            magnitude: None,
+            medi_lambda: 1000.0,
+            medi_merit: true,
+            medi_smv: true,
+            medi_smv_radius: 5.0,
+            medi_data_weighting: 1,
+            medi_percentage: 0.9,
+            medi_cg_tol: 0.01,
+            medi_cg_max_iter: 100,
+            medi_max_iter: 10,
+            medi_tol: 0.001,
             field_strength: None,
             echo_time: Some(0.02),
         });
@@ -470,7 +507,6 @@ mod integration_tests {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("config.toml");
         super::init::execute(InitArgs {
-            preset: Preset::Gre,
             output: Some(output.clone()),
         }).unwrap();
         assert!(output.exists());
@@ -481,26 +517,8 @@ mod integration_tests {
     #[test]
     fn test_init_to_stdout() {
         super::init::execute(InitArgs {
-            preset: Preset::Body,
             output: None,
         }).unwrap();
-    }
-
-    // --- Presets ---
-
-    #[test]
-    fn test_presets_list() {
-        super::presets::execute(PresetsArgs { name: None }).unwrap();
-    }
-
-    #[test]
-    fn test_presets_show_specific() {
-        super::presets::execute(PresetsArgs { name: Some("gre".to_string()) }).unwrap();
-    }
-
-    #[test]
-    fn test_presets_unknown() {
-        super::presets::execute(PresetsArgs { name: Some("nonexistent".to_string()) }).unwrap();
     }
 
     // --- Validate ---
@@ -551,8 +569,7 @@ mod integration_tests {
 
         super::run::execute(RunArgs {
             bids_dir: bids,
-            output_dir: out,
-            preset: Some(Preset::Gre),
+            output_dir: Some(out),
             config: None,
             subjects: None,
             sessions: None,
@@ -628,6 +645,7 @@ mod integration_tests {
             do_t2starmap: false,
             do_r2starmap: false,
             inhomogeneity_correction: false,
+            no_inhomogeneity_correction: false,
             obliquity_threshold: None,
             swi_hp_sigma: None,
             swi_scaling: None,
@@ -658,8 +676,7 @@ mod integration_tests {
 
         super::run::execute(RunArgs {
             bids_dir: bids,
-            output_dir: out,
-            preset: None,
+            output_dir: Some(out),
             config: None,
             subjects: None,
             sessions: None,
@@ -735,6 +752,7 @@ mod integration_tests {
             do_t2starmap: false,
             do_r2starmap: false,
             inhomogeneity_correction: false,
+            no_inhomogeneity_correction: false,
             obliquity_threshold: None,
             swi_hp_sigma: None,
             swi_scaling: None,
@@ -763,8 +781,7 @@ mod integration_tests {
         // Should not error, just log "no runs"
         super::run::execute(RunArgs {
             bids_dir: dir.path().to_path_buf(),
-            output_dir: dir.path().join("out"),
-            preset: Some(Preset::Gre),
+            output_dir: Some(dir.path().join("out")),
             config: None,
             subjects: None,
             sessions: None,
@@ -840,6 +857,7 @@ mod integration_tests {
             do_t2starmap: false,
             do_r2starmap: false,
             inhomogeneity_correction: false,
+            no_inhomogeneity_correction: false,
             obliquity_threshold: None,
             swi_hp_sigma: None,
             swi_scaling: None,
@@ -872,8 +890,7 @@ mod integration_tests {
 
         super::run::execute(RunArgs {
             bids_dir: bids,
-            output_dir: out.clone(),
-            preset: Some(Preset::Gre),
+            output_dir: Some(out.clone()),
             config: None,
             subjects: None,
             sessions: None,
@@ -949,6 +966,7 @@ mod integration_tests {
             do_t2starmap: false,
             do_r2starmap: false,
             inhomogeneity_correction: false,
+            no_inhomogeneity_correction: false,
             obliquity_threshold: None,
             swi_hp_sigma: None,
             swi_scaling: None,
@@ -970,10 +988,11 @@ mod integration_tests {
         }).unwrap();
 
         // Check that output QSM file was created
-        assert!(out.join("sub-1/anat/sub-1_Chimap.nii").exists());
-        assert!(out.join("sub-1/anat/sub-1_mask.nii").exists());
-        assert!(out.join("dataset_description.json").exists());
-        assert!(out.join("pipeline_config.toml").exists());
+        let deriv = out.join("derivatives/qsmxt.rs");
+        assert!(deriv.join("sub-1/anat/sub-1_Chimap.nii").exists());
+        assert!(deriv.join("sub-1/anat/sub-1_mask.nii").exists());
+        assert!(deriv.join("sub-1/anat/sub-1_magnitude.nii").exists());
+        assert!(deriv.join("pipeline_config.toml").exists());
     }
 
     #[test]
@@ -985,8 +1004,7 @@ mod integration_tests {
 
         super::run::execute(RunArgs {
             bids_dir: bids,
-            output_dir: out.clone(),
-            preset: Some(Preset::Gre),
+            output_dir: Some(out.clone()),
             config: None,
             subjects: None,
             sessions: None,
@@ -1062,6 +1080,7 @@ mod integration_tests {
             do_t2starmap: true,
             do_r2starmap: true,
             inhomogeneity_correction: false,
+            no_inhomogeneity_correction: false,
             obliquity_threshold: None,
             swi_hp_sigma: None,
             swi_scaling: None,
@@ -1082,10 +1101,11 @@ mod integration_tests {
             clean_intermediates: false,
         }).unwrap();
 
-        assert!(out.join("sub-1/anat/sub-1_Chimap.nii").exists());
-        assert!(out.join("sub-1/anat/sub-1_swi.nii").exists());
-        assert!(out.join("sub-1/anat/sub-1_T2starmap.nii").exists());
-        assert!(out.join("sub-1/anat/sub-1_R2starmap.nii").exists());
+        let deriv = out.join("derivatives/qsmxt.rs");
+        assert!(deriv.join("sub-1/anat/sub-1_Chimap.nii").exists());
+        assert!(deriv.join("sub-1/anat/sub-1_swi.nii").exists());
+        assert!(deriv.join("sub-1/anat/sub-1_T2starmap.nii").exists());
+        assert!(deriv.join("sub-1/anat/sub-1_R2starmap.nii").exists());
     }
 
     #[test]
@@ -1097,15 +1117,14 @@ mod integration_tests {
 
         super::run::execute(RunArgs {
             bids_dir: bids,
-            output_dir: out.clone(),
-            preset: Some(Preset::Body), // TGV preset
+            output_dir: Some(out.clone()),
             config: None,
             subjects: None,
             sessions: None,
             acquisitions: None,
             runs: None,
             num_echoes: None,
-            qsm_algorithm: None, // Body preset uses TGV
+            qsm_algorithm: Some(QsmAlgorithmArg::Tgv),
             unwrapping_algorithm: None,
             bf_algorithm: None,
             masking_algorithm: None,
@@ -1174,6 +1193,7 @@ mod integration_tests {
             do_t2starmap: false,
             do_r2starmap: false,
             inhomogeneity_correction: true,
+            no_inhomogeneity_correction: false,
             obliquity_threshold: None,
             swi_hp_sigma: None,
             swi_scaling: None,
@@ -1196,7 +1216,7 @@ mod integration_tests {
             clean_intermediates: false,
         }).unwrap();
 
-        assert!(out.join("sub-1/anat/sub-1_Chimap.nii").exists());
+        assert!(out.join("derivatives/qsmxt.rs/sub-1/anat/sub-1_Chimap.nii").exists());
     }
 
     #[test]
@@ -1208,8 +1228,7 @@ mod integration_tests {
 
         super::run::execute(RunArgs {
             bids_dir: bids,
-            output_dir: out.clone(),
-            preset: Some(Preset::Gre),
+            output_dir: Some(out.clone()),
             config: None,
             subjects: None,
             sessions: None,
@@ -1285,6 +1304,7 @@ mod integration_tests {
             do_t2starmap: false,
             do_r2starmap: false,
             inhomogeneity_correction: false,
+            no_inhomogeneity_correction: false,
             obliquity_threshold: None,
             swi_hp_sigma: None,
             swi_scaling: None,
@@ -1307,7 +1327,7 @@ mod integration_tests {
             clean_intermediates: true,
         }).unwrap();
 
-        assert!(out.join("sub-1/anat/sub-1_Chimap.nii").exists());
+        assert!(out.join("derivatives/qsmxt.rs/sub-1/anat/sub-1_Chimap.nii").exists());
     }
 
     // --- Invert algorithms ---
@@ -1340,6 +1360,25 @@ mod integration_tests {
             tkd_threshold: 0.15,
             tgv_iterations: 10,
             tgv_erosions: 1,
+            ilsqr_tol: 0.01,
+            ilsqr_max_iter: 50,
+            tikhonov_lambda: 0.01,
+            nltv_lambda: 1e-4,
+            nltv_mu: 1e2,
+            nltv_tol: 1e-4,
+            nltv_max_iter: 100,
+            nltv_newton_iter: 5,
+            magnitude: None,
+            medi_lambda: 1000.0,
+            medi_merit: true,
+            medi_smv: true,
+            medi_smv_radius: 5.0,
+            medi_data_weighting: 1,
+            medi_percentage: 0.9,
+            medi_cg_tol: 0.01,
+            medi_cg_max_iter: 100,
+            medi_max_iter: 10,
+            medi_tol: 0.001,
             field_strength: None,
             echo_time: None,
         }).unwrap();
@@ -1374,6 +1413,25 @@ mod integration_tests {
             tkd_threshold: 0.15,
             tgv_iterations: 10,
             tgv_erosions: 1,
+            ilsqr_tol: 0.01,
+            ilsqr_max_iter: 50,
+            tikhonov_lambda: 0.01,
+            nltv_lambda: 1e-4,
+            nltv_mu: 1e2,
+            nltv_tol: 1e-4,
+            nltv_max_iter: 100,
+            nltv_newton_iter: 5,
+            magnitude: None,
+            medi_lambda: 1000.0,
+            medi_merit: true,
+            medi_smv: true,
+            medi_smv_radius: 5.0,
+            medi_data_weighting: 1,
+            medi_percentage: 0.9,
+            medi_cg_tol: 0.01,
+            medi_cg_max_iter: 100,
+            medi_max_iter: 10,
+            medi_tol: 0.001,
             field_strength: None,
             echo_time: None,
         }).unwrap();
@@ -1408,6 +1466,25 @@ mod integration_tests {
             tkd_threshold: 0.15,
             tgv_iterations: 5, // minimal for speed
             tgv_erosions: 0, // 8×8×8 too small for erosion
+            ilsqr_tol: 0.01,
+            ilsqr_max_iter: 50,
+            tikhonov_lambda: 0.01,
+            nltv_lambda: 1e-4,
+            nltv_mu: 1e2,
+            nltv_tol: 1e-4,
+            nltv_max_iter: 100,
+            nltv_newton_iter: 5,
+            magnitude: None,
+            medi_lambda: 1000.0,
+            medi_merit: true,
+            medi_smv: true,
+            medi_smv_radius: 5.0,
+            medi_data_weighting: 1,
+            medi_percentage: 0.9,
+            medi_cg_tol: 0.01,
+            medi_cg_max_iter: 100,
+            medi_max_iter: 10,
+            medi_tol: 0.001,
             field_strength: Some(3.0),
             echo_time: Some(0.02),
         }).unwrap();
@@ -1517,10 +1594,9 @@ mod integration_tests {
 
         super::slurm::execute(SlurmArgs {
             bids_dir: bids,
-            output_dir: out.clone(),
+            output_dir: Some(out.clone()),
             account: "testacct".to_string(),
             partition: Some("gpu".to_string()),
-            preset: Some(Preset::Gre),
             config: None,
             time: "01:00:00".to_string(),
             mem: 16,
@@ -1528,7 +1604,7 @@ mod integration_tests {
             submit: false,
         }).unwrap();
 
-        assert!(out.join("slurm").exists());
+        assert!(out.join("derivatives/qsmxt.rs/slurm").exists());
     }
 
     #[test]

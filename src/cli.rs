@@ -21,8 +21,6 @@ pub enum Command {
     Init(InitArgs),
     /// Validate BIDS dataset structure for QSM processing
     Validate(ValidateArgs),
-    /// List or show pipeline presets
-    Presets(PresetsArgs),
     /// Generate SLURM job scripts for HPC execution
     Slurm(SlurmArgs),
     /// Brain extraction (NIfTI in/out)
@@ -67,12 +65,8 @@ pub struct RunArgs {
     /// Input BIDS directory
     pub bids_dir: PathBuf,
 
-    /// Output derivatives directory
-    pub output_dir: PathBuf,
-
-    /// Use a premade pipeline preset
-    #[arg(long, value_enum)]
-    pub preset: Option<Preset>,
+    /// Output directory (defaults to bids_dir; outputs go into <dir>/derivatives/qsmxt.rs/)
+    pub output_dir: Option<PathBuf>,
 
     /// Pipeline configuration file (TOML)
     #[arg(long)]
@@ -414,6 +408,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub inhomogeneity_correction: bool,
 
+    /// Disable inhomogeneity correction
+    #[arg(long)]
+    pub no_inhomogeneity_correction: bool,
+
     /// Resample oblique acquisitions to axial if obliquity exceeds threshold (degrees, -1 to disable)
     #[arg(long)]
     pub obliquity_threshold: Option<f64>,
@@ -456,10 +454,6 @@ pub struct RunArgs {
 
 #[derive(Parser, Debug)]
 pub struct InitArgs {
-    /// Base preset for the configuration
-    #[arg(long, value_enum, default_value = "gre")]
-    pub preset: Preset,
-
     /// Output file path (prints to stdout if not specified)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
@@ -480,18 +474,12 @@ pub struct ValidateArgs {
 }
 
 #[derive(Parser, Debug)]
-pub struct PresetsArgs {
-    /// Show details for a specific preset
-    pub name: Option<String>,
-}
-
-#[derive(Parser, Debug)]
 pub struct SlurmArgs {
     /// Input BIDS directory
     pub bids_dir: PathBuf,
 
-    /// Output derivatives directory
-    pub output_dir: PathBuf,
+    /// Output directory (defaults to bids_dir; outputs go into <dir>/derivatives/qsmxt.rs/)
+    pub output_dir: Option<PathBuf>,
 
     /// SLURM account name
     #[arg(long)]
@@ -500,10 +488,6 @@ pub struct SlurmArgs {
     /// SLURM partition
     #[arg(long)]
     pub partition: Option<String>,
-
-    /// Use a pipeline preset
-    #[arg(long, value_enum)]
-    pub preset: Option<Preset>,
 
     /// Pipeline configuration file (TOML)
     #[arg(long)]
@@ -676,6 +660,56 @@ pub struct InvertArgs {
     // TKD parameters
     #[arg(long, default_value_t = 0.15)]
     pub tkd_threshold: f64,
+
+    // iLSQR parameters
+    #[arg(long, default_value_t = 0.01)]
+    pub ilsqr_tol: f64,
+    #[arg(long, default_value_t = 50)]
+    pub ilsqr_max_iter: usize,
+
+    // Tikhonov parameters
+    #[arg(long, default_value_t = 0.01)]
+    pub tikhonov_lambda: f64,
+
+    // NLTV parameters
+    #[arg(long, default_value_t = 1e-4)]
+    pub nltv_lambda: f64,
+    #[arg(long, default_value_t = 1e2)]
+    pub nltv_mu: f64,
+    #[arg(long, default_value_t = 1e-4)]
+    pub nltv_tol: f64,
+    #[arg(long, default_value_t = 100)]
+    pub nltv_max_iter: usize,
+    #[arg(long, default_value_t = 5)]
+    pub nltv_newton_iter: usize,
+
+    // MEDI parameters
+    /// Magnitude NIfTI file (recommended for MEDI)
+    #[arg(long)]
+    pub magnitude: Option<PathBuf>,
+    #[arg(long, default_value_t = 1000.0)]
+    pub medi_lambda: f64,
+    /// MEDI: enable MERIT weighting
+    #[arg(long, default_value_t = true)]
+    pub medi_merit: bool,
+    /// MEDI: enable SMV deconvolution
+    #[arg(long, default_value_t = true)]
+    pub medi_smv: bool,
+    #[arg(long, default_value_t = 5.0)]
+    pub medi_smv_radius: f64,
+    /// MEDI: data weighting mode (0=uniform, 1=SNR)
+    #[arg(long, default_value_t = 1)]
+    pub medi_data_weighting: i32,
+    #[arg(long, default_value_t = 0.9)]
+    pub medi_percentage: f64,
+    #[arg(long, default_value_t = 0.01)]
+    pub medi_cg_tol: f64,
+    #[arg(long, default_value_t = 100)]
+    pub medi_cg_max_iter: usize,
+    #[arg(long, default_value_t = 10)]
+    pub medi_max_iter: usize,
+    #[arg(long, default_value_t = 0.001)]
+    pub medi_tol: f64,
 
     // TGV parameters
     #[arg(long, default_value_t = 1000)]
@@ -866,15 +900,6 @@ pub struct QualityMapArgs {
 }
 
 // ─── Shared enums ───
-
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
-pub enum Preset {
-    Gre,
-    Epi,
-    Bet,
-    Fast,
-    Body,
-}
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum QsmAlgorithmArg {

@@ -137,7 +137,12 @@ pub fn discover_runs(bids_dir: &Path, filter: &DiscoveryFilter) -> crate::Result
             let echo_num = ent.echo.unwrap_or(1);
 
             // Find corresponding files
-            let json_path = entities::sidecar_path(phase_path);
+            let json_path = entities::sidecar_path(phase_path).ok_or_else(|| {
+                QsmxtError::BidsDiscovery(format!(
+                    "Cannot determine sidecar path for non-NIfTI file: {}",
+                    phase_path.display()
+                ))
+            })?;
             let mag_path = entities::phase_to_magnitude_path(phase_path);
 
             // Read sidecar
@@ -154,6 +159,11 @@ pub fn discover_runs(bids_dir: &Path, filter: &DiscoveryFilter) -> crate::Result
             if let Some(ref dir) = sc.b0_dir {
                 if dir.len() == 3 {
                     b0_dir = (dir[0], dir[1], dir[2]);
+                } else {
+                    warn!(
+                        "B0 direction has {} components (expected 3), defaulting to (0,0,1): {}",
+                        dir.len(), json_path.display()
+                    );
                 }
             }
 
@@ -167,7 +177,7 @@ pub fn discover_runs(bids_dir: &Path, filter: &DiscoveryFilter) -> crate::Result
                 None
             };
 
-            let mag_json = mag_nifti.as_ref().map(|p| entities::sidecar_path(p));
+            let mag_json = mag_nifti.as_ref().and_then(|p| entities::sidecar_path(p));
 
             echoes.push(EchoFiles {
                 echo_number: echo_num,
@@ -397,4 +407,92 @@ fn build_run_display(key: &AcquisitionKey) -> String {
     }
     parts.push(key.suffix.clone());
     parts.join("_")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutils;
+
+    #[test]
+    fn test_discover_single_echo() {
+        let dir = tempfile::tempdir().unwrap();
+        testutils::create_single_echo_bids(dir.path());
+        let runs = discover_runs(dir.path(), &DiscoveryFilter::default()).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].key.subject, "1");
+        assert_eq!(runs[0].echoes.len(), 1);
+        assert!(runs[0].has_magnitude);
+        assert!((runs[0].echo_times[0] - 0.02).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_discover_multi_echo() {
+        let dir = tempfile::tempdir().unwrap();
+        testutils::create_multi_echo_bids(dir.path());
+        let runs = discover_runs(dir.path(), &DiscoveryFilter::default()).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].echoes.len(), 3);
+        assert_eq!(runs[0].echo_times.len(), 3);
+    }
+
+    #[test]
+    fn test_discover_with_subject_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        testutils::create_single_echo_bids(dir.path());
+        let filter = DiscoveryFilter {
+            subjects: Some(vec!["99".to_string()]),
+            ..Default::default()
+        };
+        let runs = discover_runs(dir.path(), &filter).unwrap();
+        assert_eq!(runs.len(), 0, "Filter should exclude sub-1");
+    }
+
+    #[test]
+    fn test_discover_multi_session() {
+        let dir = tempfile::tempdir().unwrap();
+        testutils::create_multi_session_bids(dir.path());
+        let runs = discover_runs(dir.path(), &DiscoveryFilter::default()).unwrap();
+        assert_eq!(runs.len(), 2);
+        let sessions: Vec<_> = runs.iter().map(|r| r.key.session.as_deref().unwrap_or("")).collect();
+        assert!(sessions.contains(&"pre"));
+        assert!(sessions.contains(&"post"));
+    }
+
+    #[test]
+    fn test_discover_with_session_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        testutils::create_multi_session_bids(dir.path());
+        let filter = DiscoveryFilter {
+            sessions: Some(vec!["pre".to_string()]),
+            ..Default::default()
+        };
+        let runs = discover_runs(dir.path(), &filter).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].key.session.as_deref(), Some("pre"));
+    }
+
+    #[test]
+    fn test_scan_bids_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        testutils::create_multi_session_bids(dir.path());
+        let tree = scan_bids_tree(dir.path()).unwrap();
+        assert_eq!(tree.subjects.len(), 1);
+        assert_eq!(tree.subjects[0].name, "1");
+        assert_eq!(tree.subjects[0].sessions.len(), 2);
+        assert_eq!(tree.total_runs(), 2);
+        assert_eq!(tree.selected_runs(), 2);
+    }
+
+    #[test]
+    fn test_discover_num_echoes_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        testutils::create_multi_echo_bids(dir.path());
+        let filter = DiscoveryFilter {
+            num_echoes: Some(2),
+            ..Default::default()
+        };
+        let runs = discover_runs(dir.path(), &filter).unwrap();
+        assert_eq!(runs[0].echoes.len(), 2, "Should truncate to 2 echoes");
+    }
 }

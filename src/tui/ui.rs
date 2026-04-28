@@ -88,7 +88,10 @@ fn draw_tabs(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .collect();
 
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title(" QSMxT "))
+        .block(Block::default().borders(Borders::ALL).title(format!(
+            " QSMxT.rs ({}) / QSM.rs ({}) ",
+            env!("CARGO_PKG_VERSION"), env!("QSM_CORE_VERSION")
+        )))
         .select(app.active_tab)
         .highlight_style(
             Style::default()
@@ -127,7 +130,13 @@ fn draw_form(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let fields = &app.tab_fields[app.active_tab];
 
     let mut lines: Vec<Line> = Vec::new();
+    let mut field_to_line: Vec<usize> = Vec::new(); // maps field index -> line index
     for (i, field) in fields.iter().enumerate() {
+        if !app.is_field_visible(app.active_tab, i) {
+            field_to_line.push(0); // placeholder, won't be used
+            continue;
+        }
+        field_to_line.push(lines.len());
         let focused = i == app.active_field;
         let editing = focused && app.editing;
 
@@ -189,7 +198,8 @@ fn draw_form(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         lines.push(line);
     }
 
-    render_scrollable(f, form_area, lines, &mut app.form_scroll_offset, Some(app.active_field));
+    let focused_line = field_to_line.get(app.active_field).copied();
+    render_scrollable(f, form_area, lines, &mut app.form_scroll_offset, focused_line);
 
     // Help text for focused field
     if app.active_field < fields.len() {
@@ -205,11 +215,13 @@ fn draw_form(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 
     // Set cursor if editing
     if app.editing {
-        let scroll = app.form_scroll_offset;
-        if app.active_field >= scroll && app.active_field < scroll + form_area.height as usize {
-            let y = form_area.y + (app.active_field - scroll) as u16;
-            let x = form_area.x + 24 + app.cursor_pos as u16;
-            f.set_cursor_position((x, y));
+        if let Some(line_idx) = focused_line {
+            let scroll = app.form_scroll_offset;
+            if line_idx >= scroll && line_idx < scroll + form_area.height as usize {
+                let y = form_area.y + (line_idx - scroll) as u16;
+                let x = form_area.x + 24 + app.cursor_pos as u16;
+                f.set_cursor_position((x, y));
+            }
         }
     }
 }
@@ -226,8 +238,7 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 
     // Build lines for IO fields
     let mut lines: Vec<Line> = Vec::new();
-    let io_labels = ["BIDS Directory", "Output Directory", "Preset", "Config File"];
-    let preset_options = ["(none)", "gre", "epi", "bet", "fast", "body"];
+    let io_labels = ["BIDS Directory", "Output Directory", "Config File"];
 
     for i in 0..io_field_count {
         let focused = in_io && i == app.active_field;
@@ -237,41 +248,26 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
             Style::default().fg(Color::White)
         };
 
-        let line = if i == 2 {
-            // Preset select
-            let val = preset_options.get(app.form.preset).unwrap_or(&"?");
-            if focused {
-                Line::from(vec![
-                    Span::styled(format!("  {:22}", format!("{}:", io_labels[i])), label_style),
-                    Span::styled("◀ ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(*val, Style::default().fg(Color::Cyan)),
-                    Span::styled(" ▶", Style::default().fg(Color::DarkGray)),
-                ])
-            } else {
-                Line::from(vec![
-                    Span::styled(format!("  {:22}", format!("{}:", io_labels[i])), label_style),
-                    Span::styled(*val, Style::default().fg(Color::Gray)),
-                ])
-            }
-        } else {
-            // Text field
-            let value = match i {
-                0 => &app.form.bids_dir,
-                1 => &app.form.output_dir,
-                3 => &app.form.config_file,
-                _ => "",
-            };
-            let val_style = if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::Gray) };
-            let display_val = if value.is_empty() && !(focused && app.editing) {
-                Span::styled("(empty)", Style::default().fg(Color::DarkGray))
-            } else {
-                Span::styled(value.to_string(), val_style)
-            };
-            Line::from(vec![
-                Span::styled(format!("  {:22}", format!("{}:", io_labels[i])), label_style),
-                display_val,
-            ])
+        // Text field
+        let value = match i {
+            0 => &app.form.bids_dir,
+            1 => &app.form.output_dir,
+            2 => &app.form.config_file,
+            _ => "",
         };
+        let val_style = if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::Gray) };
+        // For output_dir, show bids_dir as placeholder when empty
+        let display_val = if i == 1 && value.is_empty() && !app.form.bids_dir.is_empty() && !(focused && app.editing) {
+            Span::styled(&app.form.bids_dir, Style::default().fg(Color::DarkGray))
+        } else if value.is_empty() && !(focused && app.editing) {
+            Span::styled("(empty)", Style::default().fg(Color::DarkGray))
+        } else {
+            Span::styled(value.to_string(), val_style)
+        };
+        let line = Line::from(vec![
+            Span::styled(format!("  {:22}", format!("{}:", io_labels[i])), label_style),
+            display_val,
+        ]);
         lines.push(line);
     }
 
@@ -865,7 +861,6 @@ mod tests {
         let mut app = App::new();
         app.form.bids_dir = "/data/bids".to_string();
         app.form.output_dir = "/data/out".to_string();
-        app.form.preset = 1;
         let _ = render_app(&mut app);
     }
 

@@ -1,3 +1,4 @@
+use log::info;
 use super::common::{load_nifti, save_mask};
 use crate::cli::{MaskArgs, ThresholdMethod};
 use crate::error::QsmxtError;
@@ -10,7 +11,7 @@ pub fn execute(args: MaskArgs) -> crate::Result<()> {
     let threshold = match args.method {
         ThresholdMethod::Otsu => {
             let t = qsm_core::utils::otsu_threshold(&nifti.data, 256);
-            println!("Otsu threshold: {:.4}", t);
+            info!("Otsu threshold: {:.4}", t);
             t
         }
         ThresholdMethod::Value => {
@@ -31,7 +32,7 @@ pub fn execute(args: MaskArgs) -> crate::Result<()> {
     save_mask(&args.output, &mask, &nifti)?;
 
     let count: usize = mask.iter().map(|&m| m as usize).sum();
-    println!(
+    info!(
         "Mask saved to {} ({} voxels, {:.1}%)",
         args.output.display(), count, 100.0 * count as f64 / mask.len() as f64
     );

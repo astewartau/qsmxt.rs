@@ -1,3 +1,4 @@
+use log::{info, warn};
 use super::common::{load_nifti, load_mask, save_nifti};
 use crate::cli::{InvertArgs, QsmAlgorithmArg};
 use crate::error::QsmxtError;
@@ -10,7 +11,7 @@ pub fn execute(args: InvertArgs) -> crate::Result<()> {
     let (vsx, vsy, vsz) = field_nifti.voxel_size;
     let bdir = (args.b0_direction[0], args.b0_direction[1], args.b0_direction[2]);
 
-    println!("Dipole inversion ({:?}, {}x{}x{})", args.algorithm, nx, ny, nz);
+    info!("Dipole inversion ({:?}, {}x{}x{})", args.algorithm, nx, ny, nz);
 
     let chi: Vec<f64> = match args.algorithm {
         QsmAlgorithmArg::Rts => qsm_core::inversion::rts(
@@ -33,33 +34,39 @@ pub fn execute(args: InvertArgs) -> crate::Result<()> {
         QsmAlgorithmArg::Ilsqr => {
             qsm_core::inversion::ilsqr_simple(
                 &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
-                bdir, 0.01, 50,
+                bdir, args.ilsqr_tol, args.ilsqr_max_iter,
             )
         }
         QsmAlgorithmArg::Tikhonov => {
             let p = qsm_core::inversion::TikhonovParams::default();
             qsm_core::inversion::tikhonov(
                 &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
-                bdir, p.lambda, p.reg,
+                bdir, args.tikhonov_lambda, p.reg,
             )
         }
         QsmAlgorithmArg::Nltv => {
-            let p = qsm_core::inversion::NltvParams::default();
             qsm_core::inversion::nltv(
                 &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
-                bdir, p.lambda, p.mu, p.tol, p.max_iter, p.newton_iter,
+                bdir, args.nltv_lambda, args.nltv_mu, args.nltv_tol,
+                args.nltv_max_iter, args.nltv_newton_iter,
             )
         }
         QsmAlgorithmArg::Medi => {
-            let p = qsm_core::inversion::MediParams::default();
-            let n_std = vec![1.0f64; field_nifti.data.len()];
-            let magnitude = vec![1.0f64; field_nifti.data.len()];
+            let n_voxels = field_nifti.data.len();
+            let (n_std, magnitude) = if let Some(ref mag_path) = args.magnitude {
+                let mag_nifti = load_nifti(mag_path)?;
+                let n_std = vec![1.0f64; n_voxels]; // noise std estimate placeholder
+                (n_std, mag_nifti.data)
+            } else {
+                warn!("No --magnitude provided for MEDI; using uniform magnitude (results may be suboptimal)");
+                (vec![1.0f64; n_voxels], vec![1.0f64; n_voxels])
+            };
             qsm_core::inversion::medi_l1(
                 &field_nifti.data, &n_std, &magnitude, &mask,
                 nx, ny, nz, vsx, vsy, vsz,
-                p.lambda, bdir, p.merit, p.smv, p.smv_radius,
-                p.data_weighting, p.percentage, p.cg_tol, p.cg_max_iter,
-                p.max_iter, p.tol,
+                args.medi_lambda, bdir, args.medi_merit, args.medi_smv,
+                args.medi_smv_radius, args.medi_data_weighting, args.medi_percentage,
+                args.medi_cg_tol, args.medi_cg_max_iter, args.medi_max_iter, args.medi_tol,
             )
         }
         QsmAlgorithmArg::Tgv => {
@@ -89,6 +96,6 @@ pub fn execute(args: InvertArgs) -> crate::Result<()> {
     };
 
     save_nifti(&args.output, &chi, &field_nifti)?;
-    println!("Susceptibility map saved to {}", args.output.display());
+    info!("Susceptibility map saved to {}", args.output.display());
     Ok(())
 }

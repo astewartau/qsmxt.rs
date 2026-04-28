@@ -141,13 +141,13 @@ pub fn parse_entities(filename: &str) -> Option<BidsEntities> {
 }
 
 /// Get the JSON sidecar path for a NIfTI file.
-pub fn sidecar_path(nifti_path: &Path) -> std::path::PathBuf {
+/// Returns `None` if the path does not have a `.nii` or `.nii.gz` extension.
+pub fn sidecar_path(nifti_path: &Path) -> Option<std::path::PathBuf> {
     let s = nifti_path.to_string_lossy();
-    let json = s
+    let stem = s
         .strip_suffix(".nii.gz")
-        .or_else(|| s.strip_suffix(".nii"))
-        .unwrap_or(&s);
-    std::path::PathBuf::from(format!("{}.json", json))
+        .or_else(|| s.strip_suffix(".nii"))?;
+    Some(std::path::PathBuf::from(format!("{}.json", stem)))
 }
 
 /// Replace the `part-phase` entity with `part-mag` in a filename.
@@ -192,8 +192,19 @@ mod tests {
         let p = sidecar_path(Path::new("/data/sub-1_echo-1_part-phase_MEGRE.nii.gz"));
         assert_eq!(
             p,
-            std::path::PathBuf::from("/data/sub-1_echo-1_part-phase_MEGRE.json")
+            Some(std::path::PathBuf::from("/data/sub-1_echo-1_part-phase_MEGRE.json"))
         );
+    }
+
+    #[test]
+    fn test_sidecar_path_nii() {
+        let p = sidecar_path(Path::new("/data/sub-1_MEGRE.nii"));
+        assert_eq!(p, Some(std::path::PathBuf::from("/data/sub-1_MEGRE.json")));
+    }
+
+    #[test]
+    fn test_sidecar_path_non_nifti() {
+        assert_eq!(sidecar_path(Path::new("/data/file.json")), None);
     }
 
     #[test]

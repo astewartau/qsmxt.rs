@@ -16,13 +16,11 @@ use cli::{Cli, Command};
 fn main() {
     let cli = Cli::parse();
 
-    // TUI defers logger init until after the terminal is restored
-    if !matches!(cli.command, Command::Tui) {
+    // Run and TUI init their own loggers (to write to log files).
+    // All other commands use a simple stderr logger.
+    if !matches!(cli.command, Command::Run(_) | Command::Tui) {
         env_logger::Builder::new()
-            .filter_level(match &cli.command {
-                Command::Run(args) if args.debug => log::LevelFilter::Debug,
-                _ => log::LevelFilter::Info,
-            })
+            .filter_level(log::LevelFilter::Info)
             .format_timestamp(None)
             .init();
     }
@@ -31,7 +29,6 @@ fn main() {
         Command::Run(args) => commands::run::execute(args),
         Command::Init(args) => commands::init::execute(args),
         Command::Validate(args) => commands::validate::execute(args),
-        Command::Presets(args) => commands::presets::execute(args),
         Command::Slurm(args) => commands::slurm::execute(args),
         Command::Bet(args) => commands::bet::execute(args),
         Command::Mask(args) => commands::mask::execute(args),

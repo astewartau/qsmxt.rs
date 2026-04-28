@@ -5,8 +5,6 @@ use crate::pipeline::config::PipelineConfig;
 pub fn execute(args: SlurmArgs) -> crate::Result<()> {
     let config = if let Some(ref path) = args.config {
         PipelineConfig::from_file(path)?
-    } else if let Some(preset) = args.preset {
-        PipelineConfig::from_preset(preset)
     } else {
         PipelineConfig::default()
     };
@@ -19,10 +17,12 @@ pub fn execute(args: SlurmArgs) -> crate::Result<()> {
         return Ok(());
     }
 
+    let base_dir = args.output_dir.as_deref().unwrap_or(&args.bids_dir);
+
     let scripts = crate::executor::slurm::generate_all_slurm(
         &runs,
         &args.bids_dir,
-        &args.output_dir,
+        base_dir,
         &config,
         &args.account,
         args.partition.as_deref(),

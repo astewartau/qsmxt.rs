@@ -230,10 +230,10 @@ pub fn format_bytes(bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli;
+    use crate::pipeline::config::QsmAlgorithm;
 
     fn default_config() -> PipelineConfig {
-        PipelineConfig::from_preset(cli::Preset::Gre)
+        PipelineConfig::default()
     }
 
     #[test]
@@ -303,7 +303,11 @@ mod tests {
 
     #[test]
     fn test_tgv_path() {
-        let config = PipelineConfig::from_preset(cli::Preset::Body);
+        let mut config = PipelineConfig::default();
+        config.qsm_algorithm = QsmAlgorithm::Tgv;
+        config.unwrapping_algorithm = None;
+        config.bf_algorithm = None;
+        config.combine_phase = false;
         let est = estimate_peak_memory_bytes(128, 128, 128, 1, true, &config);
         assert!(est > 0, "TGV estimate should be positive");
     }

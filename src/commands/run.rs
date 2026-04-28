@@ -1,3 +1,6 @@
+use std::io::Write;
+use std::sync::Mutex;
+
 use log::{error, info};
 
 use crate::bids::discovery::{self, DiscoveryFilter};
@@ -8,11 +11,9 @@ use crate::pipeline::config::PipelineConfig;
 use crate::pipeline::memory;
 
 pub fn execute(args: RunArgs) -> crate::Result<()> {
-    // Build config: preset -> file -> CLI overrides
+    // Build config: file -> CLI overrides
     let mut config = if let Some(ref path) = args.config {
         PipelineConfig::from_file(path)?
-    } else if let Some(preset) = args.preset {
-        PipelineConfig::from_preset(preset)
     } else {
         PipelineConfig::default()
     };
@@ -32,7 +33,7 @@ pub fn execute(args: RunArgs) -> crate::Result<()> {
     let runs = discovery::discover_runs(&args.bids_dir, &filter)?;
 
     if runs.is_empty() {
-        error!("No QSM-compatible runs found in {}", args.bids_dir.display());
+        eprintln!("No QSM-compatible runs found in {}", args.bids_dir.display());
         return Ok(());
     }
 
@@ -107,12 +108,49 @@ pub fn execute(args: RunArgs) -> crate::Result<()> {
         return Ok(());
     }
 
-    // Create output directory
-    let output = DerivativeOutputs::new(&args.output_dir);
-    output.write_dataset_description()?;
+    // Resolve output: <dir>/derivatives/qsmxt.rs/
+    let base_dir = args.output_dir.as_deref().unwrap_or(&args.bids_dir);
+    let derivatives_dir = base_dir.join("derivatives").join("qsmxt.rs");
+    std::fs::create_dir_all(&derivatives_dir)?;
 
-    // Save config to output
-    let config_path = args.output_dir.join("pipeline_config.toml");
+    // Set up logger: write to both stderr and a log file
+    let log_path = derivatives_dir.join("qsmxt.log");
+    let log_file = std::fs::File::create(&log_path)?;
+    let log_file = Mutex::new(log_file);
+    let log_level = if args.debug { log::LevelFilter::Debug } else { log::LevelFilter::Info };
+    env_logger::Builder::new()
+        .filter_level(log_level)
+        .format_timestamp(None)
+        .format(move |buf, record| {
+            use env_logger::fmt::style::{AnsiColor, Style};
+            let level = record.level();
+            let style = match level {
+                log::Level::Error => Style::new().fg_color(Some(AnsiColor::Red.into())),
+                log::Level::Warn  => Style::new().fg_color(Some(AnsiColor::Yellow.into())),
+                log::Level::Info  => Style::new().fg_color(Some(AnsiColor::Green.into())),
+                log::Level::Debug => Style::new().fg_color(Some(AnsiColor::Blue.into())),
+                log::Level::Trace => Style::new().fg_color(Some(AnsiColor::Cyan.into())),
+            };
+            // Colored output to stderr
+            writeln!(buf, "[{style}{level:5}{style:#} {}] {}",
+                record.target(), record.args())?;
+            // Plain text to log file
+            if let Ok(mut f) = log_file.lock() {
+                let _ = writeln!(f, "[{level:5} {}] {}", record.target(), record.args());
+            }
+            Ok(())
+        })
+        .try_init()
+        .ok();
+
+    // Log version info
+    info!("qsmxt.rs {}", env!("CARGO_PKG_VERSION"));
+    info!("QSM.rs {} ({})", env!("QSM_CORE_VERSION"), env!("QSM_CORE_GIT_HASH"));
+
+    let output = DerivativeOutputs::new(&derivatives_dir);
+
+    // Save config to derivatives dir
+    let config_path = derivatives_dir.join("pipeline_config.toml");
     std::fs::write(&config_path, config.to_annotated_toml())?;
 
     // Execute

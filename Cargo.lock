@@ -873,7 +873,7 @@ dependencies = [
 [[package]]
 name = "qsm-core"
 version = "0.0.0"
-source = "git+https://github.com/astewartau/QSM.rs.git#352195da228171ea38a83fcd4a5d1922c607083f"
+source = "git+https://github.com/astewartau/QSM.rs.git?tag=v0.10.0#352195da228171ea38a83fcd4a5d1922c607083f"
 dependencies = [
  "bytemuck",
  "delaunator",
@@ -888,7 +888,7 @@ dependencies = [
 
 [[package]]
 name = "qsmxt"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "chrono",
  "clap",

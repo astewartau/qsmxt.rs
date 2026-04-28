@@ -1,3 +1,4 @@
+use log::info;
 use super::common::{load_nifti, save_nifti};
 use crate::cli::ResampleArgs;
 use crate::pipeline::phase;
@@ -7,14 +8,14 @@ pub fn execute(args: ResampleArgs) -> crate::Result<()> {
     let (nx, ny, nz) = nifti.dims;
     let obliquity = phase::obliquity_from_affine(&nifti.affine);
 
-    println!(
+    info!(
         "Resampling {} to axial ({}x{}x{}, obliquity={:.1}°)",
         args.input.display(), nx, ny, nz, obliquity
     );
 
     let resampled = phase::resample_to_axial(&nifti.data, nx, ny, nz, &nifti.affine);
 
-    println!(
+    info!(
         "New dimensions: {}x{}x{}",
         resampled.dims.0, resampled.dims.1, resampled.dims.2
     );
@@ -29,6 +30,6 @@ pub fn execute(args: ResampleArgs) -> crate::Result<()> {
         scl_inter: 0.0,
     };
     save_nifti(&args.output, &resampled.data, &ref_nifti)?;
-    println!("Resampled volume saved to {}", args.output.display());
+    info!("Resampled volume saved to {}", args.output.display());
     Ok(())
 }

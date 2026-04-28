@@ -1,6 +1,6 @@
 [package]
 name = "qsmxt"
-version = "0.1.0"
+version = "0.0.0"  # set automatically by release CI from git tag
 edition = "2021"
 description = "QSMxT: Quantitative Susceptibility Mapping processing tool"
 
@@ -9,7 +9,7 @@ name = "qsmxt"
 path = "src/main.rs"
 
 [dependencies]
-qsm-core = { git = "https://github.com/astewartau/QSM.rs.git", features = ["parallel"] }
+qsm-core = { git = "https://github.com/astewartau/QSM.rs.git", tag = "v0.10.0", features = ["parallel"] }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

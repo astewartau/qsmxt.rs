@@ -58,22 +58,22 @@ pub fn run_tui() -> crate::Result<()> {
         if app.should_run {
             restore_terminal(&mut terminal);
 
-            // Now that the terminal is restored, init the logger
-            let args = command::build_run_args(&app)?;
-            let log_level = if args.debug {
-                log::LevelFilter::Debug
-            } else {
-                log::LevelFilter::Info
-            };
-            env_logger::Builder::new()
-                .filter_level(log_level)
-                .format_timestamp(None)
-                .init();
-
             let cmd_string = command::build_command_string(&app);
             println!("\n  Running: {}\n", cmd_string);
 
-            return crate::commands::run::execute(args);
+            if app.form.execution_mode == 1 {
+                // SLURM mode — init a simple logger for slurm output
+                env_logger::Builder::new()
+                    .filter_level(log::LevelFilter::Info)
+                    .format_timestamp(None)
+                    .init();
+                let args = command::build_slurm_args(&app)?;
+                return crate::commands::slurm::execute(args);
+            } else {
+                // Local mode — run::execute sets up its own tee logger
+                let args = command::build_run_args(&app)?;
+                return crate::commands::run::execute(args);
+            }
         }
     }
 }

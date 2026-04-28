@@ -31,6 +31,7 @@ impl DerivativeOutputs {
     // Final outputs
     pub fn qsm_path(&self, key: &AcquisitionKey) -> PathBuf { self.nifti_path(key, "Chimap") }
     pub fn mask_path(&self, key: &AcquisitionKey) -> PathBuf { self.nifti_path(key, "mask") }
+    pub fn magnitude_path(&self, key: &AcquisitionKey) -> PathBuf { self.nifti_path(key, "magnitude") }
     pub fn swi_path(&self, key: &AcquisitionKey) -> PathBuf { self.nifti_path(key, "swi") }
     pub fn swi_mip_path(&self, key: &AcquisitionKey) -> PathBuf { self.nifti_path(key, "minIP") }
     pub fn t2star_path(&self, key: &AcquisitionKey) -> PathBuf { self.nifti_path(key, "T2starmap") }
@@ -53,29 +54,6 @@ impl DerivativeOutputs {
     // Pipeline state
     pub fn state_path(&self, key: &AcquisitionKey) -> PathBuf {
         self.anat_dir(key).join(".pipeline_state.json")
-    }
-
-    /// Write the BIDS dataset_description.json for this derivative.
-    pub fn write_dataset_description(&self) -> crate::Result<()> {
-        std::fs::create_dir_all(&self.output_dir)?;
-
-        let desc = serde_json::json!({
-            "Name": "qsmxt",
-            "BIDSVersion": "1.9.0",
-            "GeneratedBy": [{
-                "Name": "qsmxt.rs",
-                "Version": env!("CARGO_PKG_VERSION"),
-            }],
-            "PipelineDescription": {
-                "Name": "QSMxT",
-                "Description": "Quantitative Susceptibility Mapping pipeline"
-            }
-        });
-
-        let path = self.output_dir.join("dataset_description.json");
-        let json = serde_json::to_string_pretty(&desc).unwrap();
-        std::fs::write(path, json)?;
-        Ok(())
     }
 }
 
@@ -189,18 +167,6 @@ mod tests {
     fn test_state_path() {
         let path = output().state_path(&key_no_session());
         assert!(path.to_str().unwrap().ends_with(".pipeline_state.json"));
-    }
-
-    #[test]
-    fn test_write_dataset_description() {
-        let dir = tempfile::tempdir().unwrap();
-        let o = DerivativeOutputs::new(dir.path());
-        o.write_dataset_description().unwrap();
-        let desc_path = dir.path().join("dataset_description.json");
-        assert!(desc_path.exists());
-        let content = std::fs::read_to_string(desc_path).unwrap();
-        assert!(content.contains("qsmxt"));
-        assert!(content.contains("BIDSVersion"));
     }
 
     #[test]

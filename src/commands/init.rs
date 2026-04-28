@@ -2,7 +2,7 @@ use crate::cli::InitArgs;
 use crate::pipeline::config::PipelineConfig;
 
 pub fn execute(args: InitArgs) -> crate::Result<()> {
-    let config = PipelineConfig::from_preset(args.preset);
+    let config = PipelineConfig::default();
     let toml_str = config.to_annotated_toml();
 
     match args.output {

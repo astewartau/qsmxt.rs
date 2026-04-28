@@ -1,3 +1,4 @@
+use log::info;
 use super::common::{load_nifti, save_nifti};
 use crate::cli::HomogeneityArgs;
 
@@ -6,7 +7,7 @@ pub fn execute(args: HomogeneityArgs) -> crate::Result<()> {
     let (nx, ny, nz) = nifti.dims;
     let (vsx, vsy, vsz) = nifti.voxel_size;
 
-    println!(
+    info!(
         "Applying inhomogeneity correction to {} ({}x{}x{}, sigma={:.1}mm)",
         args.input.display(), nx, ny, nz, args.sigma
     );
@@ -16,6 +17,6 @@ pub fn execute(args: HomogeneityArgs) -> crate::Result<()> {
     );
 
     save_nifti(&args.output, &corrected, &nifti)?;
-    println!("Corrected magnitude saved to {}", args.output.display());
+    info!("Corrected magnitude saved to {}", args.output.display());
     Ok(())
 }

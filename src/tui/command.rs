@@ -7,7 +7,11 @@ pub fn build_command_string(app: &App) -> String {
     let form = &app.form;
     let ps = &app.pipeline_state;
     let defaults = super::app::PipelineFormState::default();
-    let mut parts = vec!["qsmxt".to_string(), "run".to_string()];
+    let is_slurm = form.execution_mode == 1;
+    let mut parts = vec![
+        "qsmxt".to_string(),
+        if is_slurm { "slurm".to_string() } else { "run".to_string() },
+    ];
 
     // Positional args
     if form.bids_dir.is_empty() {
@@ -15,16 +19,8 @@ pub fn build_command_string(app: &App) -> String {
     } else {
         parts.push(form.bids_dir.clone());
     }
-    if form.output_dir.is_empty() {
-        parts.push("<output_dir>".to_string());
-    } else {
+    if !form.output_dir.is_empty() {
         parts.push(form.output_dir.clone());
-    }
-
-    // Preset
-    const PRESET_NAMES: [&str; 6] = ["", "gre", "epi", "bet", "fast", "body"];
-    if form.preset > 0 {
-        parts.push(format!("--preset {}", PRESET_NAMES[form.preset]));
     }
 
     // Config file
@@ -203,16 +199,37 @@ pub fn build_command_string(app: &App) -> String {
     if ps.inhomogeneity_correction != defaults.inhomogeneity_correction {
         if ps.inhomogeneity_correction {
             parts.push("--inhomogeneity-correction".to_string());
+        } else {
+            parts.push("--no-inhomogeneity-correction".to_string());
         }
     }
-    if form.dry_run {
-        parts.push("--dry".to_string());
-    }
-    if form.debug {
-        parts.push("--debug".to_string());
-    }
-    if !form.n_procs.trim().is_empty() {
-        parts.push(format!("--n-procs {}", form.n_procs.trim()));
+    if is_slurm {
+        // SLURM-specific flags
+        if !form.slurm_account.trim().is_empty() {
+            parts.push(format!("--account {}", form.slurm_account.trim()));
+        } else {
+            parts.push("--account <account>".to_string());
+        }
+        let slurm_defaults = super::app::RunForm::default();
+        if !form.slurm_partition.trim().is_empty() {
+            parts.push(format!("--partition {}", form.slurm_partition.trim()));
+        }
+        push_if_changed(&mut parts, "--time", &form.slurm_time, &slurm_defaults.slurm_time);
+        push_if_changed(&mut parts, "--mem", &form.slurm_mem, &slurm_defaults.slurm_mem);
+        push_if_changed(&mut parts, "--cpus-per-task", &form.slurm_cpus, &slurm_defaults.slurm_cpus);
+        if form.slurm_submit {
+            parts.push("--submit".to_string());
+        }
+    } else {
+        if form.dry_run {
+            parts.push("--dry".to_string());
+        }
+        if form.debug {
+            parts.push("--debug".to_string());
+        }
+        if !form.n_procs.trim().is_empty() {
+            parts.push(format!("--n-procs {}", form.n_procs.trim()));
+        }
     }
 
     parts.join(" ")
@@ -227,20 +244,12 @@ fn push_if_changed(parts: &mut Vec<String>, flag: &str, current: &str, default: 
 pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
     let form = &app.form;
     let ps = &app.pipeline_state;
-    if form.bids_dir.is_empty() || form.output_dir.is_empty() {
+    if form.bids_dir.is_empty() {
         return Err(crate::error::QsmxtError::Config(
-            "BIDS directory and output directory are required".to_string(),
+            "BIDS directory is required".to_string(),
         ));
     }
 
-    let preset_options = [
-        None,
-        Some(Preset::Gre),
-        Some(Preset::Epi),
-        Some(Preset::Bet),
-        Some(Preset::Fast),
-        Some(Preset::Body),
-    ];
     let qsm_options = [
         QsmAlgorithmArg::Rts,
         QsmAlgorithmArg::Tv,
@@ -263,8 +272,7 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
     ];
     Ok(RunArgs {
         bids_dir: PathBuf::from(&form.bids_dir),
-        output_dir: PathBuf::from(&form.output_dir),
-        preset: preset_options[form.preset],
+        output_dir: if form.output_dir.is_empty() { None } else { Some(PathBuf::from(&form.output_dir)) },
         config: parse_optional_path(&form.config_file),
         subjects: app.filter_state.selected_filters().0,
         sessions: app.filter_state.selected_filters().1,
@@ -349,6 +357,7 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         do_t2starmap: form.do_t2starmap,
         do_r2starmap: form.do_r2starmap,
         inhomogeneity_correction: ps.inhomogeneity_correction,
+        no_inhomogeneity_correction: !ps.inhomogeneity_correction,
         obliquity_threshold: parse_optional_f64(&ps.obliquity_threshold),
         swi_hp_sigma: {
             let x: Option<f64> = form.swi_hp_sigma_x.trim().parse().ok();
@@ -427,6 +436,32 @@ fn parse_optional_usize(s: &str) -> Option<usize> {
     }
 }
 
+pub fn build_slurm_args(app: &App) -> crate::Result<SlurmArgs> {
+    let form = &app.form;
+    if form.bids_dir.is_empty() {
+        return Err(crate::error::QsmxtError::Config(
+            "BIDS directory is required".to_string(),
+        ));
+    }
+    if form.slurm_account.trim().is_empty() {
+        return Err(crate::error::QsmxtError::Config(
+            "SLURM account is required".to_string(),
+        ));
+    }
+
+    let defaults = super::app::RunForm::default();
+    Ok(SlurmArgs {
+        bids_dir: PathBuf::from(&form.bids_dir),
+        output_dir: if form.output_dir.is_empty() { None } else { Some(PathBuf::from(&form.output_dir)) },
+        account: form.slurm_account.trim().to_string(),
+        partition: if form.slurm_partition.trim().is_empty() { None } else { Some(form.slurm_partition.trim().to_string()) },
+        config: parse_optional_path(&form.config_file),
+        time: if form.slurm_time.trim().is_empty() { defaults.slurm_time.clone() } else { form.slurm_time.trim().to_string() },
+        mem: form.slurm_mem.trim().parse().unwrap_or(32),
+        cpus_per_task: form.slurm_cpus.trim().parse().unwrap_or(4),
+        submit: form.slurm_submit,
+    })
+}
 
 #[cfg(test)]
 mod tests {
@@ -445,7 +480,7 @@ mod tests {
         let cmd = build_command_string(&app);
         assert!(cmd.starts_with("qsmxt run"));
         assert!(cmd.contains("<bids_dir>"));
-        assert!(cmd.contains("<output_dir>"));
+        assert!(!cmd.contains("<output_dir>"));
     }
 
     #[test]
@@ -457,23 +492,6 @@ mod tests {
         assert!(cmd.contains("/data/bids"));
         assert!(cmd.contains("/data/out"));
         assert!(!cmd.contains("<bids_dir>"));
-    }
-
-    #[test]
-    fn test_command_string_with_preset() {
-        let mut app = default_app();
-        app.form.bids_dir = "/b".to_string();
-        app.form.output_dir = "/o".to_string();
-        app.form.preset = 1; // gre
-        let cmd = build_command_string(&app);
-        assert!(cmd.contains("--preset gre"));
-    }
-
-    #[test]
-    fn test_command_string_no_preset_when_zero() {
-        let app = default_app();
-        let cmd = build_command_string(&app);
-        assert!(!cmd.contains("--preset"));
     }
 
     #[test]
@@ -509,8 +527,8 @@ mod tests {
     fn test_command_string_no_defaults_shown() {
         let app = default_app();
         let cmd = build_command_string(&app);
-        // With no changes, only positional args should appear
-        assert!(cmd.starts_with("qsmxt run <bids_dir> <output_dir>"));
+        // With no changes, only positional bids_dir should appear (output_dir is optional)
+        assert!(cmd.starts_with("qsmxt run <bids_dir>"));
         assert!(!cmd.contains("--rts-delta"));
         assert!(!cmd.contains("--qsm-algorithm"));
         assert!(!cmd.contains("--n-procs"));
@@ -562,40 +580,9 @@ mod tests {
         app.form.output_dir = "/out".to_string();
         let args = build_run_args(&app).unwrap();
         assert_eq!(args.bids_dir, PathBuf::from("/bids"));
-        assert_eq!(args.output_dir, PathBuf::from("/out"));
-        assert_eq!(args.preset, None);
+        assert_eq!(args.output_dir, Some(PathBuf::from("/out")));
         assert_eq!(args.qsm_algorithm, Some(crate::cli::QsmAlgorithmArg::Rts));
     }
-
-    #[test]
-    fn test_build_run_args_with_preset() {
-        let mut app = default_app();
-        app.form.bids_dir = "/b".to_string();
-        app.form.output_dir = "/o".to_string();
-        app.form.preset = 2; // epi
-        let args = build_run_args(&app).unwrap();
-        assert_eq!(args.preset, Some(crate::cli::Preset::Epi));
-    }
-
-    #[test]
-    fn test_build_run_args_all_presets() {
-        for (idx, expected) in [
-            (0, None),
-            (1, Some(crate::cli::Preset::Gre)),
-            (2, Some(crate::cli::Preset::Epi)),
-            (3, Some(crate::cli::Preset::Bet)),
-            (4, Some(crate::cli::Preset::Fast)),
-            (5, Some(crate::cli::Preset::Body)),
-        ] {
-            let mut app = default_app();
-            app.form.bids_dir = "/b".to_string();
-            app.form.output_dir = "/o".to_string();
-            app.form.preset = idx;
-            let args = build_run_args(&app).unwrap();
-            assert_eq!(args.preset, expected);
-        }
-    }
-
 
     #[test]
     fn test_build_run_args_num_echoes() {

@@ -29,6 +29,61 @@ pub fn save_mask(path: &Path, mask: &[u8], reference: &NiftiData) -> crate::Resu
     save_nifti(path, &data, reference)
 }
 
+/// Run a mask-to-mask operation: load → apply op → save.
+pub fn run_mask_operation(
+    input: &Path,
+    output: &Path,
+    op_name: &str,
+    op: impl FnOnce(&[u8], usize, usize, usize) -> Vec<u8>,
+) -> crate::Result<()> {
+    let (mask, nifti) = load_mask(input)?;
+    let (nx, ny, nz) = nifti.dims;
+    log::info!("{} ({}x{}x{})", op_name, nx, ny, nz);
+    let result = op(&mask, nx, ny, nz);
+    save_mask(output, &result, &nifti)?;
+    log::info!("{} saved to {}", op_name, output.display());
+    Ok(())
+}
+
+/// Load multiple NIfTI files, validate against echo times, interleave, and compute R2* via ARLO.
+/// Returns the R2* map and the first magnitude NiftiData as geometry reference.
+pub fn compute_r2star(
+    inputs: &[std::path::PathBuf],
+    mask_path: &Path,
+    echo_times: &[f64],
+) -> crate::Result<(Vec<f64>, NiftiData)> {
+    if inputs.len() != echo_times.len() {
+        return Err(QsmxtError::Config(format!(
+            "Number of inputs ({}) must match number of echo times ({})",
+            inputs.len(), echo_times.len()
+        )));
+    }
+
+    let mut magnitudes = Vec::new();
+    for path in inputs {
+        magnitudes.push(load_nifti(path)?);
+    }
+
+    let (nx, ny, nz) = magnitudes[0].dims;
+    let n_voxels = nx * ny * nz;
+    let n_echoes = magnitudes.len();
+    let (mask, _) = load_mask(mask_path)?;
+
+    let mut interleaved = vec![0.0f64; n_voxels * n_echoes];
+    for (echo_idx, mag) in magnitudes.iter().enumerate() {
+        for vox in 0..n_voxels {
+            interleaved[vox * n_echoes + echo_idx] = mag.data[vox];
+        }
+    }
+
+    let (r2star_map, _s0_map) = qsm_core::utils::r2star_arlo(
+        &interleaved, &mask, echo_times, nx, ny, nz,
+    );
+
+    let reference = magnitudes.swap_remove(0);
+    Ok((r2star_map, reference))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

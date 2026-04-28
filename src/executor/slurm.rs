@@ -6,6 +6,12 @@ use log::info;
 use crate::bids::discovery::QsmRun;
 use crate::pipeline::config::PipelineConfig;
 
+/// Shell-quote a string for safe interpolation into bash scripts.
+/// Uses single quotes and escapes any embedded single quotes.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// Generate SLURM job scripts for all runs.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_all_slurm(
@@ -19,11 +25,12 @@ pub fn generate_all_slurm(
     mem_gb: usize,
     cpus: usize,
 ) -> crate::Result<Vec<PathBuf>> {
-    let slurm_dir = output_dir.join("slurm");
+    let derivatives_dir = output_dir.join("derivatives").join("qsmxt.rs");
+    let slurm_dir = derivatives_dir.join("slurm");
     std::fs::create_dir_all(&slurm_dir)?;
 
     // Save config for SLURM jobs to reference
-    let config_path = output_dir.join("pipeline_config.toml");
+    let config_path = derivatives_dir.join("pipeline_config.toml");
     std::fs::write(&config_path, _config.to_annotated_toml())?;
 
     let qsmxt_bin = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("qsmxt"));
@@ -40,17 +47,17 @@ pub fn generate_all_slurm(
         };
 
         let session_flag = match &run.key.session {
-            Some(ses) => format!("--sessions {}", ses),
+            Some(ses) => format!("--sessions {}", shell_quote(ses)),
             None => String::new(),
         };
 
         let run_flag = match &run.key.run {
-            Some(r) => format!("--runs {}", r),
+            Some(r) => format!("--runs {}", shell_quote(r)),
             None => String::new(),
         };
 
         let acq_flag = match &run.key.acquisition {
-            Some(a) => format!("--acquisitions {}", a),
+            Some(a) => format!("--acquisitions {}", shell_quote(a)),
             None => String::new(),
         };
 
@@ -79,11 +86,11 @@ pub fn generate_all_slurm(
             time = time,
             mem = mem_gb,
             cpus = cpus,
-            binary = qsmxt_bin.display(),
-            bids_dir = bids_dir.display(),
-            output_dir = output_dir.display(),
-            config = config_path.display(),
-            subject = run.key.subject,
+            binary = shell_quote(&qsmxt_bin.display().to_string()),
+            bids_dir = shell_quote(&bids_dir.display().to_string()),
+            output_dir = shell_quote(&output_dir.display().to_string()),
+            config = shell_quote(&config_path.display().to_string()),
+            subject = shell_quote(&run.key.subject),
             session_flag = session_flag,
             run_flag = run_flag,
             acq_flag = acq_flag,
@@ -219,6 +226,43 @@ mod tests {
         .unwrap();
 
         let content = std::fs::read_to_string(&scripts[0]).unwrap();
-        assert!(content.contains("--sessions pre"), "Should contain session flag");
+        assert!(content.contains("--sessions 'pre'"), "Should contain quoted session flag");
+    }
+
+    #[test]
+    fn test_shell_quote_simple() {
+        assert_eq!(shell_quote("hello"), "'hello'");
+    }
+
+    #[test]
+    fn test_shell_quote_with_spaces() {
+        assert_eq!(shell_quote("/path/with spaces/dir"), "'/path/with spaces/dir'");
+    }
+
+    #[test]
+    fn test_shell_quote_with_single_quotes() {
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn test_slurm_script_paths_with_spaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let runs = vec![dummy_run_with_key("01", None)];
+        let config = PipelineConfig::default();
+        let scripts = generate_all_slurm(
+            &runs,
+            Path::new("/bids/my data"),
+            dir.path(),
+            &config,
+            "acct",
+            None,
+            "01:00:00",
+            16,
+            2,
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(&scripts[0]).unwrap();
+        assert!(content.contains("'/bids/my data'"), "Paths with spaces should be quoted");
     }
 }

@@ -810,6 +810,23 @@ impl PipelineFormState {
         rows
     }
 
+    /// All valid parameter field names, for testing that string dispatch is complete.
+    #[cfg(test)]
+    pub const ALL_PARAM_FIELDS: &[&str] = &[
+        "obliquity_threshold",
+        "rts_delta", "rts_mu", "rts_tol", "rts_rho", "rts_max_iter", "rts_lsmr_iter",
+        "tv_lambda", "tv_rho", "tv_tol", "tv_max_iter",
+        "tkd_threshold", "tsvd_threshold",
+        "ilsqr_tol", "ilsqr_max_iter",
+        "tgv_iterations", "tgv_erosions", "tgv_alpha1", "tgv_alpha0",
+        "tikhonov_lambda",
+        "nltv_lambda", "nltv_mu", "nltv_tol", "nltv_max_iter", "nltv_newton_iter",
+        "medi_lambda", "medi_max_iter", "medi_cg_max_iter", "medi_cg_tol", "medi_tol", "medi_percentage", "medi_smv_radius",
+        "vsharp_threshold", "pdf_tol", "lbv_tol", "ismv_tol", "ismv_max_iter", "sharp_threshold",
+        "qsmart_ilsqr_tol", "qsmart_ilsqr_max_iter", "qsmart_vasc_sphere_radius", "qsmart_sdf_spatial_radius",
+        "bet_fractional_intensity", "bet_smoothness", "bet_gradient_threshold", "bet_iterations", "bet_subdivisions",
+    ];
+
     /// Get a string parameter value by field name.
     pub fn get_param(&self, field: &str) -> &str {
         match field {
@@ -1204,7 +1221,6 @@ pub struct RunForm {
     // Tab 0: Input/Output
     pub bids_dir: String,
     pub output_dir: String,
-    pub preset: usize,
     pub config_file: String,
 
     // Tab 3: Supplementary
@@ -1219,9 +1235,17 @@ pub struct RunForm {
     pub do_r2starmap: bool,
 
     // Tab 4: Execution
+    pub execution_mode: usize, // 0=Local, 1=SLURM
     pub dry_run: bool,
     pub debug: bool,
     pub n_procs: String,
+    // SLURM fields
+    pub slurm_account: String,
+    pub slurm_partition: String,
+    pub slurm_time: String,
+    pub slurm_mem: String,
+    pub slurm_cpus: String,
+    pub slurm_submit: bool,
 }
 
 impl Default for RunForm {
@@ -1230,7 +1254,6 @@ impl Default for RunForm {
         Self {
             bids_dir: String::new(),
             output_dir: String::new(),
-            preset: 0,
             config_file: String::new(),
             do_swi: false,
             swi_scaling: 0,
@@ -1241,9 +1264,16 @@ impl Default for RunForm {
             swi_mip_window: format!("{}", swi.mip_window),
             do_t2starmap: false,
             do_r2starmap: false,
+            execution_mode: 0,
             dry_run: false,
             debug: false,
             n_procs: String::new(),
+            slurm_account: String::new(),
+            slurm_partition: String::new(),
+            slurm_time: "02:00:00".to_string(),
+            slurm_mem: "32".to_string(),
+            slurm_cpus: "4".to_string(),
+            slurm_submit: false,
         }
     }
 }
@@ -1303,8 +1333,13 @@ impl App {
                     help: "Compute R2* decay rate map (requires 3+ echoes with magnitude)",
                 },
             ],
-            // Tab 4: Execution
+            // Tab 3: Execution
             vec![
+                FieldDef {
+                    label: "Execution Mode",
+                    kind: FieldKind::Select { options: vec!["Local", "SLURM"] },
+                    help: "Local execution or generate SLURM job scripts",
+                },
                 FieldDef {
                     label: "Dry Run",
                     kind: FieldKind::Checkbox,
@@ -1319,6 +1354,37 @@ impl App {
                     label: "Num Processes",
                     kind: FieldKind::Text,
                     help: "Number of parallel threads (empty = auto)",
+                },
+                // SLURM-specific fields
+                FieldDef {
+                    label: "SLURM Account",
+                    kind: FieldKind::Text,
+                    help: "SLURM account name (required for SLURM mode)",
+                },
+                FieldDef {
+                    label: "SLURM Partition",
+                    kind: FieldKind::Text,
+                    help: "SLURM partition (optional)",
+                },
+                FieldDef {
+                    label: "SLURM Time Limit",
+                    kind: FieldKind::Text,
+                    help: "Wall time limit per job (e.g. 02:00:00)",
+                },
+                FieldDef {
+                    label: "SLURM Memory (GB)",
+                    kind: FieldKind::Text,
+                    help: "Memory per job in GB",
+                },
+                FieldDef {
+                    label: "SLURM CPUs/Task",
+                    kind: FieldKind::Text,
+                    help: "CPUs per SLURM task",
+                },
+                FieldDef {
+                    label: "Auto-Submit",
+                    kind: FieldKind::Checkbox,
+                    help: "Automatically submit generated scripts via sbatch",
                 },
             ],
         ];
@@ -1380,15 +1446,25 @@ impl App {
                 self.active_field = 0;
             }
 
-            // Field navigation
+            // Field navigation (skip hidden fields)
             KeyCode::Up | KeyCode::Char('k')
                 if self.active_field > 0 => {
-                    self.active_field -= 1;
+                    let mut f = self.active_field - 1;
+                    while f > 0 && !self.is_field_visible(self.active_tab, f) {
+                        f -= 1;
+                    }
+                    if self.is_field_visible(self.active_tab, f) {
+                        self.active_field = f;
+                    }
                 }
             KeyCode::Down | KeyCode::Char('j') => {
                 let max = self.field_count().saturating_sub(1);
-                if self.active_field < max {
-                    self.active_field += 1;
+                let mut f = self.active_field + 1;
+                while f <= max && !self.is_field_visible(self.active_tab, f) {
+                    f += 1;
+                }
+                if f <= max && self.is_field_visible(self.active_tab, f) {
+                    self.active_field = f;
                 }
             }
 
@@ -1412,7 +1488,7 @@ impl App {
     // ─── Filter tab key handling ───
 
     /// Number of IO fields at the top of the Input tab
-    pub const INPUT_IO_FIELDS: usize = 4; // bids_dir, output_dir, preset, config_file
+    pub const INPUT_IO_FIELDS: usize = 3; // bids_dir, output_dir, config_file
 
     fn handle_input_tab_key(&mut self, key: KeyEvent) {
         // IO fields are at active_field 0-3, filter tree starts at 4+
@@ -1477,27 +1553,21 @@ impl App {
 
     fn interact_io_field(&mut self) {
         match self.active_field {
-            0 | 1 | 3 => { // Text fields: bids_dir, output_dir, config_file
+            0 | 1 | 2 => { // Text fields: bids_dir, output_dir, config_file
                 self.editing = true;
                 self.cursor_pos = match self.active_field {
                     0 => self.form.bids_dir.len(),
                     1 => self.form.output_dir.len(),
-                    3 => self.form.config_file.len(),
+                    2 => self.form.config_file.len(),
                     _ => 0,
                 };
-            }
-            2 => { // Preset select: cycle
-                self.form.preset = (self.form.preset + 1) % 6;
             }
             _ => {}
         }
     }
 
-    fn adjust_io_select(&mut self, delta: isize) {
-        if self.active_field == 2 {
-            let n = 6isize; // preset options count
-            self.form.preset = (self.form.preset as isize + delta).rem_euclid(n) as usize;
-        }
+    fn adjust_io_select(&mut self, _delta: isize) {
+        // No select fields in IO section
     }
 
     /// Reset the focused field on a generic form tab to its default.
@@ -1507,8 +1577,7 @@ impl App {
             // Tab 0 (Input) IO fields
             (0, 0) => self.form.bids_dir = defaults.bids_dir.clone(),
             (0, 1) => self.form.output_dir = defaults.output_dir.clone(),
-            (0, 2) => self.form.preset = defaults.preset,
-            (0, 3) => self.form.config_file = defaults.config_file.clone(),
+            (0, 2) => self.form.config_file = defaults.config_file.clone(),
             // Tab 2 (Supplementary)
             (2, 0) => self.form.do_swi = defaults.do_swi,
             (2, 1) => self.form.swi_scaling = defaults.swi_scaling,
@@ -1520,9 +1589,16 @@ impl App {
             (2, 7) => self.form.do_t2starmap = defaults.do_t2starmap,
             (2, 8) => self.form.do_r2starmap = defaults.do_r2starmap,
             // Tab 3 (Execution)
-            (3, 0) => self.form.dry_run = defaults.dry_run,
-            (3, 1) => self.form.debug = defaults.debug,
-            (3, 2) => self.form.n_procs = defaults.n_procs.clone(),
+            (3, 0) => self.form.execution_mode = defaults.execution_mode,
+            (3, 1) => self.form.dry_run = defaults.dry_run,
+            (3, 2) => self.form.debug = defaults.debug,
+            (3, 3) => self.form.n_procs = defaults.n_procs.clone(),
+            (3, 4) => self.form.slurm_account = defaults.slurm_account.clone(),
+            (3, 5) => self.form.slurm_partition = defaults.slurm_partition.clone(),
+            (3, 6) => self.form.slurm_time = defaults.slurm_time.clone(),
+            (3, 7) => self.form.slurm_mem = defaults.slurm_mem.clone(),
+            (3, 8) => self.form.slurm_cpus = defaults.slurm_cpus.clone(),
+            (3, 9) => self.form.slurm_submit = defaults.slurm_submit,
             _ => {}
         }
     }
@@ -1534,7 +1610,6 @@ impl App {
             0 => {
                 self.form.bids_dir = defaults.bids_dir.clone();
                 self.form.output_dir = defaults.output_dir.clone();
-                self.form.preset = defaults.preset;
                 self.form.config_file = defaults.config_file.clone();
             }
             2 => {
@@ -1549,9 +1624,16 @@ impl App {
                 self.form.do_r2starmap = defaults.do_r2starmap;
             }
             3 => {
+                self.form.execution_mode = defaults.execution_mode;
                 self.form.dry_run = defaults.dry_run;
                 self.form.debug = defaults.debug;
                 self.form.n_procs = defaults.n_procs.clone();
+                self.form.slurm_account = defaults.slurm_account.clone();
+                self.form.slurm_partition = defaults.slurm_partition.clone();
+                self.form.slurm_time = defaults.slurm_time.clone();
+                self.form.slurm_mem = defaults.slurm_mem.clone();
+                self.form.slurm_cpus = defaults.slurm_cpus.clone();
+                self.form.slurm_submit = defaults.slurm_submit;
             }
             _ => {}
         }
@@ -2085,13 +2167,18 @@ impl App {
         match (self.active_tab, self.active_field) {
             (0, 0) => &self.form.bids_dir,
             (0, 1) => &self.form.output_dir,
-            (0, 3) => &self.form.config_file,
+            (0, 2) => &self.form.config_file,
             (2, 2) => &self.form.swi_strength,
             (2, 3) => &self.form.swi_hp_sigma_x,
             (2, 4) => &self.form.swi_hp_sigma_y,
             (2, 5) => &self.form.swi_hp_sigma_z,
             (2, 6) => &self.form.swi_mip_window,
-            (3, 2) => &self.form.n_procs,
+            (3, 3) => &self.form.n_procs,
+            (3, 4) => &self.form.slurm_account,
+            (3, 5) => &self.form.slurm_partition,
+            (3, 6) => &self.form.slurm_time,
+            (3, 7) => &self.form.slurm_mem,
+            (3, 8) => &self.form.slurm_cpus,
             _ => "",
         }
     }
@@ -2100,13 +2187,18 @@ impl App {
         match (self.active_tab, self.active_field) {
             (0, 0) => &mut self.form.bids_dir,
             (0, 1) => &mut self.form.output_dir,
-            (0, 3) => &mut self.form.config_file,
+            (0, 2) => &mut self.form.config_file,
             (2, 2) => &mut self.form.swi_strength,
             (2, 3) => &mut self.form.swi_hp_sigma_x,
             (2, 4) => &mut self.form.swi_hp_sigma_y,
             (2, 5) => &mut self.form.swi_hp_sigma_z,
             (2, 6) => &mut self.form.swi_mip_window,
-            (3, 2) => &mut self.form.n_procs,
+            (3, 3) => &mut self.form.n_procs,
+            (3, 4) => &mut self.form.slurm_account,
+            (3, 5) => &mut self.form.slurm_partition,
+            (3, 6) => &mut self.form.slurm_time,
+            (3, 7) => &mut self.form.slurm_mem,
+            (3, 8) => &mut self.form.slurm_cpus,
             _ => unreachable!("text_value_mut called on non-text field"),
         }
     }
@@ -2114,6 +2206,7 @@ impl App {
     pub fn select_value(&self) -> usize {
         match (self.active_tab, self.active_field) {
             (2, 1) => self.form.swi_scaling,
+            (3, 0) => self.form.execution_mode,
             _ => 0,
         }
     }
@@ -2121,6 +2214,13 @@ impl App {
     fn set_select_value(&mut self, val: usize) {
         match (self.active_tab, self.active_field) {
             (2, 1) => self.form.swi_scaling = val,
+            (3, 0) => {
+                self.form.execution_mode = val;
+                // Clamp active_field if it landed on a now-hidden field
+                if !self.is_field_visible(self.active_tab, self.active_field) {
+                    self.active_field = 0;
+                }
+            }
             _ => {}
         }
     }
@@ -2131,8 +2231,9 @@ impl App {
             (2, 0) => self.form.do_swi,
             (2, 7) => self.form.do_t2starmap,
             (2, 8) => self.form.do_r2starmap,
-            (3, 0) => self.form.dry_run,
-            (3, 1) => self.form.debug,
+            (3, 1) => self.form.dry_run,
+            (3, 2) => self.form.debug,
+            (3, 9) => self.form.slurm_submit,
             _ => false,
         }
     }
@@ -2142,13 +2243,25 @@ impl App {
             (2, 0) => self.form.do_swi = !self.form.do_swi,
             (2, 7) => self.form.do_t2starmap = !self.form.do_t2starmap,
             (2, 8) => self.form.do_r2starmap = !self.form.do_r2starmap,
-            (3, 0) => self.form.dry_run = !self.form.dry_run,
-            (3, 1) => self.form.debug = !self.form.debug,
+            (3, 1) => self.form.dry_run = !self.form.dry_run,
+            (3, 2) => self.form.debug = !self.form.debug,
+            (3, 9) => self.form.slurm_submit = !self.form.slurm_submit,
             _ => {}
         }
     }
 
     // Generalized accessors for rendering arbitrary (tab, field) pairs
+    /// Whether a field is visible (used to hide SLURM fields in Local mode and vice versa).
+    pub fn is_field_visible(&self, tab: usize, field: usize) -> bool {
+        match (tab, field) {
+            // SLURM fields (4-9) only visible in SLURM mode
+            (3, 4..=9) => self.form.execution_mode == 1,
+            // Dry Run and Num Processes only in Local mode
+            (3, 1) | (3, 3) => self.form.execution_mode == 0,
+            _ => true,
+        }
+    }
+
     pub fn get_text_value(&self, tab: usize, field: usize) -> &str {
         match (tab, field) {
             (2, 2) => &self.form.swi_strength,
@@ -2156,7 +2269,12 @@ impl App {
             (2, 4) => &self.form.swi_hp_sigma_y,
             (2, 5) => &self.form.swi_hp_sigma_z,
             (2, 6) => &self.form.swi_mip_window,
-            (3, 2) => &self.form.n_procs,
+            (3, 3) => &self.form.n_procs,
+            (3, 4) => &self.form.slurm_account,
+            (3, 5) => &self.form.slurm_partition,
+            (3, 6) => &self.form.slurm_time,
+            (3, 7) => &self.form.slurm_mem,
+            (3, 8) => &self.form.slurm_cpus,
             _ => "",
         }
     }
@@ -2164,6 +2282,7 @@ impl App {
     pub fn get_select_value(&self, tab: usize, field: usize) -> usize {
         match (tab, field) {
             (2, 1) => self.form.swi_scaling,
+            (3, 0) => self.form.execution_mode,
             _ => 0,
         }
     }
@@ -2173,8 +2292,9 @@ impl App {
             (2, 0) => self.form.do_swi,
             (2, 7) => self.form.do_t2starmap,
             (2, 8) => self.form.do_r2starmap,
-            (3, 0) => self.form.dry_run,
-            (3, 1) => self.form.debug,
+            (3, 1) => self.form.dry_run,
+            (3, 2) => self.form.debug,
+            (3, 9) => self.form.slurm_submit,
             _ => false,
         }
     }
@@ -2355,38 +2475,6 @@ mod tests {
         assert!(!app.editing);
     }
 
-    // --- Select fields ---
-
-    #[test]
-    fn test_select_left_right() {
-        let mut app = App::new();
-        // Tab 0, field 2 is Preset (Select)
-        app.active_field = 2;
-        assert_eq!(app.select_value(), 0);
-        app.handle_key(key(KeyCode::Right));
-        assert_eq!(app.form.preset, 1);
-        app.handle_key(key(KeyCode::Left));
-        assert_eq!(app.form.preset, 0);
-    }
-
-    #[test]
-    fn test_select_wraps_around() {
-        let mut app = App::new();
-        app.active_field = 2; // Preset with 6 options
-        app.handle_key(key(KeyCode::Left));
-        assert_eq!(app.form.preset, 5); // wraps to last
-    }
-
-    #[test]
-    fn test_select_enter_cycles() {
-        let mut app = App::new();
-        app.active_field = 2;
-        app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.form.preset, 1);
-        // Not editing — selects don't enter edit mode
-        assert!(!app.editing);
-    }
-
     // --- Checkbox fields ---
 
 
@@ -2466,7 +2554,6 @@ mod tests {
     #[test]
     fn test_get_select_value_defaults() {
         let app = App::new();
-        assert_eq!(app.get_select_value(0, 2), 0); // preset
         assert_eq!(app.get_select_value(99, 99), 0); // unknown returns 0
         // Algorithm selects are now in pipeline_state, not tab-indexed
         assert_eq!(app.pipeline_state.get_select("qsm_algorithm"), 0);
@@ -2490,7 +2577,6 @@ mod tests {
         let form = RunForm::default();
         assert!(form.bids_dir.is_empty());
         assert!(form.output_dir.is_empty());
-        assert_eq!(form.preset, 0);
         assert!(!form.do_swi);
     }
 
@@ -2514,7 +2600,7 @@ mod tests {
     #[test]
     fn test_edit_config_file() {
         let mut app = App::new();
-        app.active_field = 3; // config_file
+        app.active_field = 2; // config_file
         app.handle_key(key(KeyCode::Enter));
         app.handle_key(key(KeyCode::Char('c')));
         assert_eq!(app.form.config_file, "c");
@@ -2677,5 +2763,25 @@ mod tests {
         app.handle_key(key(KeyCode::Right));
         // No crash, no state change
         assert_eq!(app.active_field, 0);
+    }
+
+    #[test]
+    fn test_all_param_fields_are_valid() {
+        let state = PipelineFormState::default();
+        for &field_name in PipelineFormState::ALL_PARAM_FIELDS {
+            let val = state.get_param(field_name);
+            assert_ne!(val, "", "get_param returned empty for field: {}", field_name);
+        }
+    }
+
+    #[test]
+    fn test_all_param_fields_are_mutable() {
+        let mut state = PipelineFormState::default();
+        for &field_name in PipelineFormState::ALL_PARAM_FIELDS {
+            assert!(
+                state.get_param_mut(field_name).is_some(),
+                "get_param_mut returned None for field: {}", field_name,
+            );
+        }
     }
 }

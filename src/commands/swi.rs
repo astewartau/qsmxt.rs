@@ -1,3 +1,4 @@
+use log::info;
 use super::common::{load_nifti, load_mask, save_nifti};
 use crate::cli::SwiArgs;
 use crate::pipeline::phase;
@@ -17,20 +18,20 @@ pub fn execute(args: SwiArgs) -> crate::Result<()> {
         &phase_data, &mask, nx, ny, nz, vsx, vsy, vsz,
     );
 
-    println!("Computing SWI ({}x{}x{})", nx, ny, nz);
+    info!("Computing SWI ({}x{}x{})", nx, ny, nz);
 
     let swi = qsm_core::swi::calculate_swi_default(
         &unwrapped, &mag_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
     );
 
     save_nifti(&args.output, &swi, &phase_nifti)?;
-    println!("SWI saved to {}", args.output.display());
+    info!("SWI saved to {}", args.output.display());
 
     if args.mip {
         let mip = qsm_core::swi::create_mip_default(&swi, nx, ny, nz);
         let mip_path = args.mip_output.unwrap_or_else(|| args.output.with_extension("mip.nii"));
         save_nifti(&mip_path, &mip, &phase_nifti)?;
-        println!("MIP saved to {}", mip_path.display());
+        info!("MIP saved to {}", mip_path.display());
     }
 
     Ok(())

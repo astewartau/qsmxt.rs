@@ -563,135 +563,88 @@ fn default_qsmart_sdf_spatial_radius() -> i32 { qsm_core::utils::QsmartParams::d
 
 impl Default for PipelineConfig {
     fn default() -> Self {
-        Self::from_preset(cli::Preset::Gre)
+        Self {
+            description: String::new(),
+            do_qsm: true,
+            do_swi: false,
+            do_t2starmap: false,
+            do_r2starmap: false,
+            inhomogeneity_correction: true,
+            obliquity_threshold: -1.0,
+            mask_sections: default_mask_sections(),
+            qsm_algorithm: QsmAlgorithm::Rts,
+            unwrapping_algorithm: Some(UnwrappingAlgorithm::Romeo),
+            bf_algorithm: Some(BfAlgorithm::Vsharp),
+            combine_phase: true,
+            qsm_reference: QsmReference::Mean,
+            bet_fractional_intensity: default_bet_fi(),
+            bet_smoothness: default_bet_smoothness(),
+            bet_gradient_threshold: default_bet_gradient(),
+            bet_iterations: default_bet_iterations(),
+            bet_subdivisions: default_bet_subdivisions(),
+            rts_delta: default_rts_delta(),
+            rts_mu: default_rts_mu(),
+            rts_tol: default_rts_tol(),
+            rts_rho: default_rts_rho(),
+            rts_max_iter: default_rts_max_iter(),
+            rts_lsmr_iter: default_rts_lsmr_iter(),
+            tv_lambda: default_tv_lambda(),
+            tv_rho: default_tv_rho(),
+            tv_tol: default_tv_tol(),
+            tv_max_iter: default_tv_max_iter(),
+            tkd_threshold: default_tkd_threshold(),
+            tsvd_threshold: default_tsvd_threshold(),
+            ilsqr_tol: default_ilsqr_tol(),
+            ilsqr_max_iter: default_ilsqr_max_iter(),
+            tikhonov_lambda: default_tikhonov_lambda(),
+            nltv_lambda: default_nltv_lambda(),
+            nltv_mu: default_nltv_mu(),
+            nltv_tol: default_nltv_tol(),
+            nltv_max_iter: default_nltv_max_iter(),
+            nltv_newton_iter: default_nltv_newton_iter(),
+            medi_lambda: default_medi_lambda(),
+            medi_max_iter: default_medi_max_iter(),
+            medi_cg_max_iter: default_medi_cg_max_iter(),
+            medi_cg_tol: default_medi_cg_tol(),
+            medi_tol: default_medi_tol(),
+            medi_percentage: default_medi_percentage(),
+            medi_smv_radius: default_medi_smv_radius(),
+            medi_smv: default_medi_smv(),
+            vsharp_threshold: default_vsharp_threshold(),
+            vsharp_max_radius_factor: default_vsharp_max_radius_factor(),
+            vsharp_min_radius_factor: default_vsharp_min_radius_factor(),
+            pdf_tol: default_pdf_tol(),
+            lbv_tol: default_lbv_tol(),
+            ismv_tol: default_ismv_tol(),
+            ismv_max_iter: default_ismv_max_iter(),
+            ismv_radius_factor: default_ismv_radius_factor(),
+            sharp_threshold: default_sharp_threshold(),
+            sharp_radius_factor: default_sharp_radius_factor(),
+            romeo_phase_gradient_coherence: default_romeo_phase_gradient_coherence(),
+            romeo_mag_coherence: default_romeo_mag_coherence(),
+            romeo_mag_weight: default_romeo_mag_weight(),
+            mcpc3ds_sigma: default_mcpc3ds_sigma(),
+            swi_hp_sigma: default_swi_hp_sigma(),
+            swi_scaling: default_swi_scaling(),
+            swi_strength: default_swi_strength(),
+            swi_mip_window: default_swi_mip_window(),
+            homogeneity_sigma_mm: default_homogeneity_sigma_mm(),
+            homogeneity_nbox: default_homogeneity_nbox(),
+            linear_fit_reliability_threshold: default_linear_fit_reliability_threshold(),
+            tgv_iterations: default_tgv_iterations(),
+            tgv_alphas: default_tgv_alphas(),
+            tgv_erosions: default_tgv_erosions(),
+            tgv_step_size: default_tgv_step_size(),
+            tgv_tol: default_tgv_tol(),
+            qsmart_ilsqr_tol: default_qsmart_ilsqr_tol(),
+            qsmart_ilsqr_max_iter: default_qsmart_ilsqr_max_iter(),
+            qsmart_vasc_sphere_radius: default_qsmart_vasc_sphere_radius(),
+            qsmart_sdf_spatial_radius: default_qsmart_sdf_spatial_radius(),
+        }
     }
 }
 
 impl PipelineConfig {
-    /// Create a config from a named preset.
-    pub fn from_preset(preset: cli::Preset) -> Self {
-        match preset {
-            cli::Preset::Gre => Self {
-                description: "3D-GRE images (human brain)".to_string(),
-                do_qsm: true,
-                do_swi: false,
-                do_t2starmap: false,
-                do_r2starmap: false,
-                inhomogeneity_correction: true,
-                obliquity_threshold: -1.0,
-                mask_sections: default_mask_sections(),
-                qsm_algorithm: QsmAlgorithm::Rts,
-                unwrapping_algorithm: Some(UnwrappingAlgorithm::Romeo),
-                bf_algorithm: Some(BfAlgorithm::Vsharp),
-                combine_phase: true,
-                qsm_reference: QsmReference::Mean,
-                bet_fractional_intensity: default_bet_fi(),
-                bet_smoothness: default_bet_smoothness(),
-                bet_gradient_threshold: default_bet_gradient(),
-                bet_iterations: default_bet_iterations(),
-                bet_subdivisions: default_bet_subdivisions(),
-                rts_delta: default_rts_delta(),
-                rts_mu: default_rts_mu(),
-                rts_tol: default_rts_tol(),
-                rts_rho: default_rts_rho(),
-                rts_max_iter: default_rts_max_iter(),
-                rts_lsmr_iter: default_rts_lsmr_iter(),
-                tv_lambda: default_tv_lambda(),
-                tv_rho: default_tv_rho(),
-                tv_tol: default_tv_tol(),
-                tv_max_iter: default_tv_max_iter(),
-                tkd_threshold: default_tkd_threshold(),
-                tsvd_threshold: default_tsvd_threshold(),
-                ilsqr_tol: default_ilsqr_tol(),
-                ilsqr_max_iter: default_ilsqr_max_iter(),
-                tikhonov_lambda: default_tikhonov_lambda(),
-                nltv_lambda: default_nltv_lambda(),
-                nltv_mu: default_nltv_mu(),
-                nltv_tol: default_nltv_tol(),
-                nltv_max_iter: default_nltv_max_iter(),
-                nltv_newton_iter: default_nltv_newton_iter(),
-                medi_lambda: default_medi_lambda(),
-                medi_max_iter: default_medi_max_iter(),
-                medi_cg_max_iter: default_medi_cg_max_iter(),
-                medi_cg_tol: default_medi_cg_tol(),
-                medi_tol: default_medi_tol(),
-                medi_percentage: default_medi_percentage(),
-                medi_smv_radius: default_medi_smv_radius(),
-                medi_smv: default_medi_smv(),
-                vsharp_threshold: default_vsharp_threshold(),
-                vsharp_max_radius_factor: default_vsharp_max_radius_factor(),
-                vsharp_min_radius_factor: default_vsharp_min_radius_factor(),
-                pdf_tol: default_pdf_tol(),
-                lbv_tol: default_lbv_tol(),
-                ismv_tol: default_ismv_tol(),
-                ismv_max_iter: default_ismv_max_iter(),
-                ismv_radius_factor: default_ismv_radius_factor(),
-                sharp_threshold: default_sharp_threshold(),
-                sharp_radius_factor: default_sharp_radius_factor(),
-                romeo_phase_gradient_coherence: default_romeo_phase_gradient_coherence(),
-                romeo_mag_coherence: default_romeo_mag_coherence(),
-                romeo_mag_weight: default_romeo_mag_weight(),
-                mcpc3ds_sigma: default_mcpc3ds_sigma(),
-                swi_hp_sigma: default_swi_hp_sigma(),
-                swi_scaling: default_swi_scaling(),
-                swi_strength: default_swi_strength(),
-                swi_mip_window: default_swi_mip_window(),
-                homogeneity_sigma_mm: default_homogeneity_sigma_mm(),
-                homogeneity_nbox: default_homogeneity_nbox(),
-                linear_fit_reliability_threshold: default_linear_fit_reliability_threshold(),
-                tgv_iterations: default_tgv_iterations(),
-                tgv_alphas: default_tgv_alphas(),
-                tgv_erosions: default_tgv_erosions(),
-                tgv_step_size: default_tgv_step_size(),
-                tgv_tol: default_tgv_tol(),
-                qsmart_ilsqr_tol: default_qsmart_ilsqr_tol(),
-                qsmart_ilsqr_max_iter: default_qsmart_ilsqr_max_iter(),
-                qsmart_vasc_sphere_radius: default_qsmart_vasc_sphere_radius(),
-                qsmart_sdf_spatial_radius: default_qsmart_sdf_spatial_radius(),
-            },
-            cli::Preset::Epi => Self {
-                description: "3D-EPI images (human brain)".to_string(),
-                ..Self::from_preset(cli::Preset::Gre)
-            },
-            cli::Preset::Bet => Self {
-                description: "Traditional BET masking (human brain)".to_string(),
-                mask_sections: vec![MaskSection {
-                    input: MaskingInput::Magnitude,
-                    generator: MaskOp::Bet { fractional_intensity: 0.5 },
-                    refinements: vec![MaskOp::Erode { iterations: 3 }],
-                }],
-                ..Self::from_preset(cli::Preset::Gre)
-            },
-            cli::Preset::Fast => Self {
-                description: "Fast algorithms".to_string(),
-                bf_algorithm: Some(BfAlgorithm::Vsharp),
-                mask_sections: vec![MaskSection {
-                    input: MaskingInput::Magnitude,
-                    generator: MaskOp::Bet { fractional_intensity: 0.5 },
-                    refinements: vec![MaskOp::Erode { iterations: 3 }],
-                }],
-                ..Self::from_preset(cli::Preset::Gre)
-            },
-            cli::Preset::Body => Self {
-                description: "Non-brain applications".to_string(),
-                qsm_algorithm: QsmAlgorithm::Tgv,
-                unwrapping_algorithm: None,
-                bf_algorithm: None,
-                combine_phase: false,
-                mask_sections: vec![MaskSection {
-                    input: MaskingInput::Magnitude,
-                    generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
-                    refinements: vec![
-                        MaskOp::Dilate { iterations: 2 },
-                        MaskOp::FillHoles { max_size: 0 },
-                        MaskOp::Erode { iterations: 3 },
-                    ],
-                }],
-                ..Self::from_preset(cli::Preset::Gre)
-            },
-        }
-    }
-
     /// Load config from a TOML file.
     pub fn from_file(path: &Path) -> crate::Result<Self> {
         let text = std::fs::read_to_string(path)?;
@@ -700,6 +653,10 @@ impl PipelineConfig {
 
     /// Apply CLI overrides onto this config.
     pub fn apply_run_overrides(&mut self, args: &cli::RunArgs) {
+        macro_rules! override_field {
+            ($field:ident) => { if let Some(v) = args.$field { self.$field = v; } };
+            ($cli:ident => $config:ident) => { if let Some(v) = args.$cli { self.$config = v; } };
+        }
         if let Some(a) = args.qsm_algorithm {
             self.qsm_algorithm = match a {
                 cli::QsmAlgorithmArg::Rts => QsmAlgorithm::Rts,
@@ -732,21 +689,11 @@ impl PipelineConfig {
         if let Some(v) = args.combine_phase {
             self.combine_phase = v;
         }
-        if let Some(v) = args.bet_fractional_intensity {
-            self.bet_fractional_intensity = v;
-        }
-        if let Some(v) = args.bet_smoothness {
-            self.bet_smoothness = v;
-        }
-        if let Some(v) = args.bet_gradient_threshold {
-            self.bet_gradient_threshold = v;
-        }
-        if let Some(v) = args.bet_iterations {
-            self.bet_iterations = v;
-        }
-        if let Some(v) = args.bet_subdivisions {
-            self.bet_subdivisions = v;
-        }
+        override_field!(bet_fractional_intensity);
+        override_field!(bet_smoothness);
+        override_field!(bet_gradient_threshold);
+        override_field!(bet_iterations);
+        override_field!(bet_subdivisions);
         if let Some(a) = args.qsm_reference {
             self.qsm_reference = match a {
                 cli::QsmReferenceArg::Mean => QsmReference::Mean,
@@ -759,120 +706,46 @@ impl PipelineConfig {
         if let Some(v) = args.tgv_alpha0 {
             self.tgv_alphas[1] = v;
         }
-        if let Some(v) = args.rts_delta {
-            self.rts_delta = v;
-        }
-        if let Some(v) = args.rts_mu {
-            self.rts_mu = v;
-        }
-        if let Some(v) = args.rts_tol {
-            self.rts_tol = v;
-        }
-        if let Some(v) = args.rts_rho {
-            self.rts_rho = v;
-        }
-        if let Some(v) = args.rts_max_iter {
-            self.rts_max_iter = v;
-        }
-        if let Some(v) = args.rts_lsmr_iter {
-            self.rts_lsmr_iter = v;
-        }
-        if let Some(v) = args.tv_lambda {
-            self.tv_lambda = v;
-        }
-        if let Some(v) = args.tv_rho {
-            self.tv_rho = v;
-        }
-        if let Some(v) = args.tv_tol {
-            self.tv_tol = v;
-        }
-        if let Some(v) = args.tv_max_iter {
-            self.tv_max_iter = v;
-        }
-        if let Some(v) = args.tkd_threshold {
-            self.tkd_threshold = v;
-        }
-        if let Some(v) = args.tsvd_threshold {
-            self.tsvd_threshold = v;
-        }
-        if let Some(v) = args.ilsqr_tol {
-            self.ilsqr_tol = v;
-        }
-        if let Some(v) = args.ilsqr_max_iter {
-            self.ilsqr_max_iter = v;
-        }
-        if let Some(v) = args.tikhonov_lambda {
-            self.tikhonov_lambda = v;
-        }
-        if let Some(v) = args.nltv_lambda {
-            self.nltv_lambda = v;
-        }
-        if let Some(v) = args.nltv_mu {
-            self.nltv_mu = v;
-        }
-        if let Some(v) = args.nltv_tol {
-            self.nltv_tol = v;
-        }
-        if let Some(v) = args.nltv_max_iter {
-            self.nltv_max_iter = v;
-        }
-        if let Some(v) = args.nltv_newton_iter {
-            self.nltv_newton_iter = v;
-        }
-        if let Some(v) = args.medi_lambda {
-            self.medi_lambda = v;
-        }
-        if let Some(v) = args.medi_max_iter {
-            self.medi_max_iter = v;
-        }
-        if let Some(v) = args.medi_cg_max_iter {
-            self.medi_cg_max_iter = v;
-        }
-        if let Some(v) = args.medi_cg_tol {
-            self.medi_cg_tol = v;
-        }
-        if let Some(v) = args.medi_tol {
-            self.medi_tol = v;
-        }
-        if let Some(v) = args.medi_percentage {
-            self.medi_percentage = v;
-        }
-        if let Some(v) = args.medi_smv_radius {
-            self.medi_smv_radius = v;
-        }
-        if args.medi_smv {
-            self.medi_smv = true;
-        }
-        if let Some(v) = args.vsharp_threshold {
-            self.vsharp_threshold = v;
-        }
-        if let Some(v) = args.pdf_tol {
-            self.pdf_tol = v;
-        }
-        if let Some(v) = args.lbv_tol {
-            self.lbv_tol = v;
-        }
-        if let Some(v) = args.ismv_tol {
-            self.ismv_tol = v;
-        }
-        if let Some(v) = args.ismv_max_iter {
-            self.ismv_max_iter = v;
-        }
-        if let Some(v) = args.sharp_threshold {
-            self.sharp_threshold = v;
-        }
-        if let Some(v) = args.sharp_radius_factor {
-            self.sharp_radius_factor = v;
-        }
-        if let Some(v) = args.vsharp_max_radius_factor {
-            self.vsharp_max_radius_factor = v;
-        }
-        if let Some(v) = args.vsharp_min_radius_factor {
-            self.vsharp_min_radius_factor = v;
-        }
-        if let Some(v) = args.ismv_radius_factor {
-            self.ismv_radius_factor = v;
-        }
+        // Algorithm parameters
+        override_field!(rts_delta);
+        override_field!(rts_mu);
+        override_field!(rts_tol);
+        override_field!(rts_rho);
+        override_field!(rts_max_iter);
+        override_field!(rts_lsmr_iter);
+        override_field!(tv_lambda);
+        override_field!(tv_rho);
+        override_field!(tv_tol);
+        override_field!(tv_max_iter);
+        override_field!(tkd_threshold);
+        override_field!(tsvd_threshold);
+        override_field!(ilsqr_tol);
+        override_field!(ilsqr_max_iter);
+        override_field!(tikhonov_lambda);
+        override_field!(nltv_lambda);
+        override_field!(nltv_mu);
+        override_field!(nltv_tol);
+        override_field!(nltv_max_iter);
+        override_field!(nltv_newton_iter);
+        override_field!(medi_lambda);
+        override_field!(medi_max_iter);
+        override_field!(medi_cg_max_iter);
+        override_field!(medi_cg_tol);
+        override_field!(medi_tol);
+        override_field!(medi_percentage);
+        override_field!(medi_smv_radius);
+        if args.medi_smv { self.medi_smv = true; }
+        // Background removal parameters
+        override_field!(vsharp_threshold);
+        override_field!(pdf_tol);
+        override_field!(lbv_tol);
+        override_field!(ismv_tol);
+        override_field!(ismv_max_iter);
+        override_field!(sharp_threshold);
+        override_field!(sharp_radius_factor);
+        override_field!(vsharp_max_radius_factor);
+        override_field!(vsharp_min_radius_factor);
+        override_field!(ismv_radius_factor);
         if args.no_romeo_phase_gradient_coherence {
             self.romeo_phase_gradient_coherence = false;
         }
@@ -887,51 +760,25 @@ impl PipelineConfig {
                 self.mcpc3ds_sigma = [s[0], s[1], s[2]];
             }
         }
-        if let Some(v) = args.tgv_iterations {
-            self.tgv_iterations = v;
-        }
-        if let Some(v) = args.tgv_erosions {
-            self.tgv_erosions = v;
-        }
-        if let Some(v) = args.qsmart_ilsqr_tol {
-            self.qsmart_ilsqr_tol = v;
-        }
-        if let Some(v) = args.qsmart_ilsqr_max_iter {
-            self.qsmart_ilsqr_max_iter = v;
-        }
-        if let Some(v) = args.qsmart_vasc_sphere_radius {
-            self.qsmart_vasc_sphere_radius = v;
-        }
-        if let Some(v) = args.qsmart_sdf_spatial_radius {
-            self.qsmart_sdf_spatial_radius = v;
-        }
+        override_field!(tgv_iterations);
+        override_field!(tgv_erosions);
+        override_field!(qsmart_ilsqr_tol);
+        override_field!(qsmart_ilsqr_max_iter);
+        override_field!(qsmart_vasc_sphere_radius);
+        override_field!(qsmart_sdf_spatial_radius);
         if let Some(ref s) = args.swi_hp_sigma {
             if s.len() == 3 { self.swi_hp_sigma = [s[0], s[1], s[2]]; }
         }
         if let Some(ref v) = args.swi_scaling {
             self.swi_scaling = v.clone();
         }
-        if let Some(v) = args.swi_strength {
-            self.swi_strength = v;
-        }
-        if let Some(v) = args.swi_mip_window {
-            self.swi_mip_window = v;
-        }
-        if let Some(v) = args.homogeneity_sigma_mm {
-            self.homogeneity_sigma_mm = v;
-        }
-        if let Some(v) = args.homogeneity_nbox {
-            self.homogeneity_nbox = v;
-        }
-        if let Some(v) = args.linear_fit_reliability_threshold {
-            self.linear_fit_reliability_threshold = v;
-        }
-        if let Some(v) = args.tgv_step_size {
-            self.tgv_step_size = v;
-        }
-        if let Some(v) = args.tgv_tol {
-            self.tgv_tol = v;
-        }
+        override_field!(swi_strength);
+        override_field!(swi_mip_window);
+        override_field!(homogeneity_sigma_mm);
+        override_field!(homogeneity_nbox);
+        override_field!(linear_fit_reliability_threshold);
+        override_field!(tgv_step_size);
+        override_field!(tgv_tol);
         if args.no_qsm {
             self.do_qsm = false;
         }
@@ -944,12 +791,12 @@ impl PipelineConfig {
         if args.do_r2starmap {
             self.do_r2starmap = true;
         }
-        if args.inhomogeneity_correction {
+        if args.no_inhomogeneity_correction {
+            self.inhomogeneity_correction = false;
+        } else if args.inhomogeneity_correction {
             self.inhomogeneity_correction = true;
         }
-        if let Some(v) = args.obliquity_threshold {
-            self.obliquity_threshold = v;
-        }
+        override_field!(obliquity_threshold);
         // Handle --mask-preset
         if let Some(preset) = args.mask_preset {
             self.mask_sections = match preset {
@@ -1073,6 +920,24 @@ impl PipelineConfig {
                 }
             }
         }
+
+        // Numeric range checks
+        if self.bet_fractional_intensity < 0.0 || self.bet_fractional_intensity > 1.0 {
+            return Err(QsmxtError::Config("bet_fractional_intensity must be 0.0-1.0".into()));
+        }
+        if self.tgv_iterations == 0 {
+            return Err(QsmxtError::Config("tgv_iterations must be > 0".into()));
+        }
+        if self.rts_max_iter == 0 {
+            return Err(QsmxtError::Config("rts_max_iter must be > 0".into()));
+        }
+        if self.tv_max_iter == 0 {
+            return Err(QsmxtError::Config("tv_max_iter must be > 0".into()));
+        }
+        if self.tkd_threshold <= 0.0 {
+            return Err(QsmxtError::Config("tkd_threshold must be > 0".into()));
+        }
+
         Ok(())
     }
 
@@ -1081,7 +946,7 @@ impl PipelineConfig {
         let mut s = String::new();
         s.push_str("# QSMxT Pipeline Configuration\n");
         if !self.description.is_empty() {
-            s.push_str(&format!("# Preset: {}\n", self.description));
+            s.push_str(&format!("# Description: {}\n", self.description));
         }
         s.push('\n');
 
@@ -1141,16 +1006,6 @@ impl PipelineConfig {
     }
 }
 
-/// List of all available presets with descriptions.
-pub fn list_presets() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("gre", "3D-GRE images (human brain) — default"),
-        ("epi", "3D-EPI images (human brain)"),
-        ("bet", "Traditional BET masking (human brain)"),
-        ("fast", "Fast algorithms"),
-        ("body", "Non-brain applications (TGV single-step)"),
-    ]
-}
 
 #[cfg(test)]
 mod tests {
@@ -1161,8 +1016,7 @@ mod tests {
     fn default_run_args() -> cli::RunArgs {
         cli::RunArgs {
             bids_dir: PathBuf::from("/tmp/fake"),
-            output_dir: PathBuf::from("/tmp/fake_out"),
-            preset: None,
+            output_dir: Some(PathBuf::from("/tmp/fake_out")),
             config: None,
             subjects: None,
             sessions: None,
@@ -1238,6 +1092,7 @@ mod tests {
             do_t2starmap: false,
             do_r2starmap: false,
             inhomogeneity_correction: false,
+            no_inhomogeneity_correction: false,
             obliquity_threshold: None,
             swi_hp_sigma: None,
             swi_scaling: None,
@@ -1259,20 +1114,7 @@ mod tests {
         }
     }
 
-    // --- from_preset ---
 
-
-
-
-
-    #[test]
-    fn test_from_preset_body_is_tgv() {
-        let c = PipelineConfig::from_preset(cli::Preset::Body);
-        assert_eq!(c.qsm_algorithm, QsmAlgorithm::Tgv);
-        assert_eq!(c.unwrapping_algorithm, None);
-        assert_eq!(c.bf_algorithm, None);
-        assert!(!c.combine_phase);
-    }
 
     // --- apply_run_overrides ---
 
@@ -1281,7 +1123,7 @@ mod tests {
 
     #[test]
     fn test_apply_run_overrides_flags() {
-        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let mut config = PipelineConfig::default();
         let mut args = default_run_args();
         args.do_swi = true;
         args.do_t2starmap = true;
@@ -1296,19 +1138,23 @@ mod tests {
 
     #[test]
     fn test_validate_gre_passes() {
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         assert!(config.validate().is_ok());
     }
 
     #[test]
     fn test_validate_tgv_accepts_none_bf_and_unwrap() {
-        let config = PipelineConfig::from_preset(cli::Preset::Body);
+        let mut config = PipelineConfig::default();
+        config.qsm_algorithm = QsmAlgorithm::Tgv;
+        config.unwrapping_algorithm = None;
+        config.bf_algorithm = None;
+        config.combine_phase = false;
         assert!(config.validate().is_ok());
     }
 
     #[test]
     fn test_validate_non_tgv_requires_bf() {
-        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let mut config = PipelineConfig::default();
         config.bf_algorithm = None;
         let result = config.validate();
         assert!(result.is_err());
@@ -1319,7 +1165,11 @@ mod tests {
 
     #[test]
     fn test_to_annotated_toml_body_comments_out_bf() {
-        let config = PipelineConfig::from_preset(cli::Preset::Body);
+        let mut config = PipelineConfig::default();
+        config.qsm_algorithm = QsmAlgorithm::Tgv;
+        config.unwrapping_algorithm = None;
+        config.bf_algorithm = None;
+        config.combine_phase = false;
         let toml = config.to_annotated_toml();
         assert!(toml.contains("# bf_algorithm"), "BF should be commented out for Body/TGV");
     }
@@ -1332,13 +1182,13 @@ mod tests {
 
     #[test]
     fn test_default_obliquity_threshold_disabled() {
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         assert!(config.obliquity_threshold < 0.0, "Default should be disabled (-1)");
     }
 
     #[test]
     fn test_apply_run_overrides_obliquity_threshold() {
-        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let mut config = PipelineConfig::default();
         let mut args = default_run_args();
         args.obliquity_threshold = Some(5.0);
         config.apply_run_overrides(&args);
@@ -1447,7 +1297,7 @@ mod tests {
     fn test_from_file_valid_toml() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         let toml_str = config.to_annotated_toml();
         std::fs::write(&path, &toml_str).unwrap();
         // Should parse without error (not all fields need to match since
@@ -1464,7 +1314,11 @@ mod tests {
 
     #[test]
     fn test_to_annotated_toml_body_preset() {
-        let config = PipelineConfig::from_preset(cli::Preset::Body);
+        let mut config = PipelineConfig::default();
+        config.qsm_algorithm = QsmAlgorithm::Tgv;
+        config.unwrapping_algorithm = None;
+        config.bf_algorithm = None;
+        config.combine_phase = false;
         let toml = config.to_annotated_toml();
         assert!(toml.contains("qsm_algorithm = \"tgv\""));
         assert!(toml.contains("# unwrapping_algorithm")); // commented out
@@ -1479,7 +1333,7 @@ mod tests {
 
     #[test]
     fn test_to_annotated_toml_with_features_enabled() {
-        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let mut config = PipelineConfig::default();
         config.do_swi = true;
         config.do_t2starmap = true;
         config.do_r2starmap = true;
@@ -1490,21 +1344,12 @@ mod tests {
         assert!(toml.contains("do_t2starmap = true"));
         assert!(toml.contains("do_r2starmap = true"));
         assert!(toml.contains("inhomogeneity_correction = true"));
-        assert!(!toml.contains("# Preset:")); // empty description not printed
+        assert!(!toml.contains("# Description:")); // empty description not printed
     }
-
-    #[test]
-    fn test_list_presets() {
-        let presets = list_presets();
-        assert_eq!(presets.len(), 5);
-        assert_eq!(presets[0].0, "gre");
-        assert_eq!(presets[4].0, "body");
-    }
-
 
     #[test]
     fn test_apply_run_overrides_numeric_params() {
-        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let mut config = PipelineConfig::default();
         let mut args = default_run_args();
         args.rts_mu = Some(2e5);
         args.rts_tol = Some(1e-6);
@@ -1529,12 +1374,12 @@ mod tests {
     fn test_default_config_is_gre() {
         let config = PipelineConfig::default();
         assert_eq!(config.qsm_algorithm, QsmAlgorithm::Rts);
-        assert_eq!(config.description, "3D-GRE images (human brain)");
+        assert_eq!(config.description, "");
     }
 
     #[test]
     fn test_validate_tgv_with_bf_set() {
-        let mut config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let mut config = PipelineConfig::default();
         config.qsm_algorithm = QsmAlgorithm::Tgv;
         config.bf_algorithm = Some(BfAlgorithm::Vsharp);
         // Should still pass — TGV ignores bf/unwrap but doesn't error

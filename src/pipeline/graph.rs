@@ -285,7 +285,7 @@ pub fn intermediate_path(
 /// Remove intermediate files, keeping only final outputs.
 pub fn clean_intermediates(state: &PipelineState, output_dir: &Path, key: &AcquisitionKey) {
     let final_steps: HashSet<&str> =
-        ["mask", "reference", "swi", "t2star_r2star"].iter().copied().collect();
+        ["mask", "magnitude", "reference", "swi", "t2star_r2star"].iter().copied().collect();
 
     for (step_name, record) in &state.completed_steps {
         if !final_steps.contains(step_name.as_str()) {
@@ -306,11 +306,9 @@ pub fn clean_intermediates(state: &PipelineState, output_dir: &Path, key: &Acqui
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli;
-
     #[test]
     fn test_new_state() {
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         let key = AcquisitionKey {
             subject: "01".to_string(),
             session: None,
@@ -328,7 +326,7 @@ mod tests {
 
     #[test]
     fn test_mark_completed_and_cached() {
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         let key = AcquisitionKey {
             subject: "01".to_string(),
             session: None,
@@ -354,7 +352,7 @@ mod tests {
 
     #[test]
     fn test_invalidate_downstream() {
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         let key = AcquisitionKey {
             subject: "01".to_string(),
             session: None,
@@ -380,7 +378,7 @@ mod tests {
 
     #[test]
     fn test_state_json_roundtrip() {
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         let key = AcquisitionKey {
             subject: "01".to_string(),
             session: None,
@@ -406,8 +404,8 @@ mod tests {
 
     #[test]
     fn test_config_change_invalidates() {
-        let config1 = PipelineConfig::from_preset(cli::Preset::Gre);
-        let mut config2 = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config1 = PipelineConfig::default();
+        let mut config2 = PipelineConfig::default();
         config2.qsm_algorithm = crate::pipeline::config::QsmAlgorithm::Tkd;
 
         let key = AcquisitionKey {
@@ -434,7 +432,7 @@ mod tests {
 
     #[test]
     fn test_set_current() {
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         let key = AcquisitionKey {
             subject: "01".to_string(),
             session: None,
@@ -452,7 +450,7 @@ mod tests {
 
     #[test]
     fn test_mark_completed_with_metadata() {
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         let key = AcquisitionKey {
             subject: "01".to_string(),
             session: None,
@@ -471,7 +469,7 @@ mod tests {
 
     #[test]
     fn test_step_outputs() {
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         let key = AcquisitionKey {
             subject: "01".to_string(),
             session: None,
@@ -491,7 +489,7 @@ mod tests {
 
     #[test]
     fn test_completed_step_names() {
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         let key = AcquisitionKey {
             subject: "01".to_string(),
             session: None,
@@ -512,7 +510,7 @@ mod tests {
 
     #[test]
     fn test_mark_run_complete() {
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         let key = AcquisitionKey {
             subject: "01".to_string(),
             session: None,
@@ -605,7 +603,7 @@ mod tests {
             run: None,
             suffix: "MEGRE".to_string(),
         };
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         let mut state = PipelineState::new(&config, &key);
 
         // Create a fake intermediate file
@@ -630,7 +628,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state.json");
         std::fs::write(&path, "not valid json").unwrap();
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         let key = AcquisitionKey {
             subject: "01".to_string(),
             session: None,
@@ -648,7 +646,7 @@ mod tests {
 
     #[test]
     fn test_force_ignores_cache() {
-        let config = PipelineConfig::from_preset(cli::Preset::Gre);
+        let config = PipelineConfig::default();
         let key = AcquisitionKey {
             subject: "01".to_string(),
             session: None,
