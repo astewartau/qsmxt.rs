@@ -20,7 +20,19 @@ All algorithms are provided by [QSM.rs](https://github.com/astewartau/QSM.rs).
 
 ## Installation
 
-### From release binaries
+### Quick install (Linux/macOS)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/astewartau/qsmxt.rs/main/install.sh | sh
+```
+
+### Quick install (Windows PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/astewartau/qsmxt.rs/main/install.ps1 | iex
+```
+
+### Manual download
 
 Download the latest binary for your platform from the [Releases](https://github.com/astewartau/qsmxt.rs/releases) page.
 
