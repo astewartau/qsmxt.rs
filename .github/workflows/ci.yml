@@ -42,7 +42,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin
+        uses: taiki-e/install-action@cargo-tarpaulin
 
       - name: Run coverage
         run: cargo tarpaulin --out json --output-dir target/tarpaulin --exclude-files src/main.rs --exclude-files src/tui/mod.rs --exclude-files src/tui/ui.rs -- --test-threads=1
