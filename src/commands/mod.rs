@@ -151,6 +151,61 @@ mod integration_tests {
         assert!(output.exists());
     }
 
+    // --- Mask: percentile, robust, erode ---
+
+    #[test]
+    fn test_mask_percentile() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("mag.nii");
+        let output = dir.path().join("mask.nii");
+        testutils::write_magnitude(&input);
+
+        super::mask::execute(MaskCommand::Percentile(MaskPercentileArgs {
+            common: common_mask(input, output.clone()),
+            percentile: 50.0,
+        })).unwrap();
+        assert!(output.exists());
+    }
+
+    #[test]
+    fn test_mask_robust() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("mag.nii");
+        let output = dir.path().join("mask.nii");
+        testutils::write_magnitude(&input);
+
+        super::mask::execute(MaskCommand::Robust(MaskRobustArgs {
+            input, output: output.clone(),
+        })).unwrap();
+        assert!(output.exists());
+    }
+
+    #[test]
+    fn test_mask_otsu_with_ops() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("mag.nii");
+        let output = dir.path().join("mask.nii");
+        testutils::write_magnitude(&input);
+
+        let mut c = common_mask(input, output.clone());
+        c.ops = vec!["dilate:1".to_string(), "fill-holes:0".to_string(), "erode:1".to_string()];
+        super::mask::execute(MaskCommand::Otsu(MaskOtsuArgs { common: c })).unwrap();
+        assert!(output.exists());
+    }
+
+    #[test]
+    fn test_mask_erode() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("mask.nii");
+        let output = dir.path().join("eroded.nii");
+        testutils::write_mask(&input);
+
+        super::mask::execute(MaskCommand::Erode(MaskErodeArgs {
+            input, output: output.clone(), iterations: 1,
+        })).unwrap();
+        assert!(output.exists());
+    }
+
     // --- Mask morphological operations ---
 
     #[test]
@@ -758,6 +813,22 @@ mod integration_tests {
         super::bgremove::execute(BgremoveCommand::Ismv(BgremoveIsmvArgs {
             common: common_bgremove(input, mask, output.clone()),
             tol: None, max_iter: None, radius_factor: None,
+        })).unwrap();
+        assert!(output.exists());
+    }
+
+    #[test]
+    fn test_bgremove_sharp() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("field.nii");
+        let mask = dir.path().join("mask.nii");
+        let output = dir.path().join("local.nii");
+        testutils::write_field(&input);
+        testutils::write_mask(&mask);
+
+        super::bgremove::execute(BgremoveCommand::Sharp(BgremoveSharpArgs {
+            common: common_bgremove(input, mask, output.clone()),
+            threshold: None, radius_factor: None,
         })).unwrap();
         assert!(output.exists());
     }
