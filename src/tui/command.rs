@@ -294,63 +294,119 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
             1 => Some(crate::cli::QsmReferenceArg::None),
             _ => None,
         },
-        tgv_alpha1: parse_optional_f64(&ps.tgv_alpha1),
-        tgv_alpha0: parse_optional_f64(&ps.tgv_alpha0),
         mask_erosions: None,
-        rts_delta: parse_optional_f64(&ps.rts_delta),
-        rts_mu: parse_optional_f64(&ps.rts_mu),
-        rts_tol: parse_optional_f64(&ps.rts_tol),
-        rts_rho: parse_optional_f64(&ps.rts_rho),
-        rts_max_iter: parse_optional_usize(&ps.rts_max_iter),
-        rts_lsmr_iter: parse_optional_usize(&ps.rts_lsmr_iter),
-        tgv_iterations: parse_optional_usize(&ps.tgv_iterations),
-        tgv_erosions: parse_optional_usize(&ps.tgv_erosions),
-        tv_lambda: parse_optional_f64(&ps.tv_lambda),
-        tv_rho: parse_optional_f64(&ps.tv_rho),
-        tv_tol: parse_optional_f64(&ps.tv_tol),
-        tv_max_iter: parse_optional_usize(&ps.tv_max_iter),
-        tkd_threshold: parse_optional_f64(&ps.tkd_threshold),
-        tsvd_threshold: parse_optional_f64(&ps.tsvd_threshold),
-        ilsqr_tol: parse_optional_f64(&ps.ilsqr_tol),
-        ilsqr_max_iter: parse_optional_usize(&ps.ilsqr_max_iter),
-        tikhonov_lambda: parse_optional_f64(&ps.tikhonov_lambda),
-        nltv_lambda: parse_optional_f64(&ps.nltv_lambda),
-        nltv_mu: parse_optional_f64(&ps.nltv_mu),
-        nltv_tol: parse_optional_f64(&ps.nltv_tol),
-        nltv_max_iter: parse_optional_usize(&ps.nltv_max_iter),
-        nltv_newton_iter: parse_optional_usize(&ps.nltv_newton_iter),
-        medi_lambda: parse_optional_f64(&ps.medi_lambda),
-        medi_max_iter: parse_optional_usize(&ps.medi_max_iter),
-        medi_cg_max_iter: parse_optional_usize(&ps.medi_cg_max_iter),
-        medi_cg_tol: parse_optional_f64(&ps.medi_cg_tol),
-        medi_tol: parse_optional_f64(&ps.medi_tol),
-        medi_percentage: parse_optional_f64(&ps.medi_percentage),
-        medi_smv_radius: parse_optional_f64(&ps.medi_smv_radius),
-        medi_smv: ps.medi_smv,
-        vsharp_threshold: parse_optional_f64(&ps.vsharp_threshold),
-        pdf_tol: parse_optional_f64(&ps.pdf_tol),
-        lbv_tol: parse_optional_f64(&ps.lbv_tol),
-        ismv_tol: parse_optional_f64(&ps.ismv_tol),
-        ismv_max_iter: parse_optional_usize(&ps.ismv_max_iter),
-        sharp_threshold: parse_optional_f64(&ps.sharp_threshold),
-        sharp_radius_factor: None,
-        vsharp_max_radius_factor: None,
-        vsharp_min_radius_factor: None,
-        ismv_radius_factor: None,
-        no_romeo_phase_gradient_coherence: !ps.romeo_phase_gradient_coherence,
-        no_romeo_mag_coherence: !ps.romeo_mag_coherence,
-        no_romeo_mag_weight: !ps.romeo_mag_weight,
+        rts_params: crate::cli::RtsParamArgs {
+            rts_delta: parse_optional_f64(&ps.rts_delta),
+            rts_mu: parse_optional_f64(&ps.rts_mu),
+            rts_tol: parse_optional_f64(&ps.rts_tol),
+            rts_rho: parse_optional_f64(&ps.rts_rho),
+            rts_max_iter: parse_optional_usize(&ps.rts_max_iter),
+            rts_lsmr_iter: parse_optional_usize(&ps.rts_lsmr_iter),
+        },
+        tv_params: crate::cli::TvParamArgs {
+            tv_lambda: parse_optional_f64(&ps.tv_lambda),
+            tv_rho: parse_optional_f64(&ps.tv_rho),
+            tv_tol: parse_optional_f64(&ps.tv_tol),
+            tv_max_iter: parse_optional_usize(&ps.tv_max_iter),
+        },
+        tkd_params: crate::cli::TkdParamArgs {
+            tkd_threshold: parse_optional_f64(&ps.tkd_threshold),
+        },
+        tsvd_params: crate::cli::TsvdParamArgs {
+            tsvd_threshold: parse_optional_f64(&ps.tsvd_threshold),
+        },
+        tgv_params: crate::cli::TgvParamArgs {
+            tgv_iterations: parse_optional_usize(&ps.tgv_iterations),
+            tgv_erosions: parse_optional_usize(&ps.tgv_erosions),
+            tgv_alpha1: parse_optional_f64(&ps.tgv_alpha1),
+            tgv_alpha0: parse_optional_f64(&ps.tgv_alpha0),
+            tgv_step_size: None,
+            tgv_tol: None,
+        },
+        tikhonov_params: crate::cli::TikhonovParamArgs {
+            tikhonov_lambda: parse_optional_f64(&ps.tikhonov_lambda),
+        },
+        nltv_params: crate::cli::NltvParamArgs {
+            nltv_lambda: parse_optional_f64(&ps.nltv_lambda),
+            nltv_mu: parse_optional_f64(&ps.nltv_mu),
+            nltv_tol: parse_optional_f64(&ps.nltv_tol),
+            nltv_max_iter: parse_optional_usize(&ps.nltv_max_iter),
+            nltv_newton_iter: parse_optional_usize(&ps.nltv_newton_iter),
+        },
+        medi_params: crate::cli::MediParamArgs {
+            medi_lambda: parse_optional_f64(&ps.medi_lambda),
+            medi_merit: None,
+            medi_smv: ps.medi_smv,
+            medi_smv_radius: parse_optional_f64(&ps.medi_smv_radius),
+            medi_data_weighting: None,
+            medi_percentage: parse_optional_f64(&ps.medi_percentage),
+            medi_cg_tol: parse_optional_f64(&ps.medi_cg_tol),
+            medi_cg_max_iter: parse_optional_usize(&ps.medi_cg_max_iter),
+            medi_max_iter: parse_optional_usize(&ps.medi_max_iter),
+            medi_tol: parse_optional_f64(&ps.medi_tol),
+        },
+        ilsqr_params: crate::cli::IlsqrParamArgs {
+            ilsqr_tol: parse_optional_f64(&ps.ilsqr_tol),
+            ilsqr_max_iter: parse_optional_usize(&ps.ilsqr_max_iter),
+        },
+        qsmart_params: crate::cli::QsmartParamArgs {
+            qsmart_ilsqr_tol: parse_optional_f64(&ps.qsmart_ilsqr_tol),
+            qsmart_ilsqr_max_iter: parse_optional_usize(&ps.qsmart_ilsqr_max_iter),
+            qsmart_vasc_sphere_radius: ps.qsmart_vasc_sphere_radius.trim().parse::<i32>().ok(),
+            qsmart_sdf_spatial_radius: ps.qsmart_sdf_spatial_radius.trim().parse::<i32>().ok(),
+        },
+        vsharp_params: crate::cli::VsharpParamArgs {
+            vsharp_threshold: parse_optional_f64(&ps.vsharp_threshold),
+            vsharp_max_radius_factor: None,
+            vsharp_min_radius_factor: None,
+        },
+        pdf_params: crate::cli::PdfParamArgs {
+            pdf_tol: parse_optional_f64(&ps.pdf_tol),
+        },
+        lbv_params: crate::cli::LbvParamArgs {
+            lbv_tol: parse_optional_f64(&ps.lbv_tol),
+        },
+        ismv_params: crate::cli::IsmvParamArgs {
+            ismv_tol: parse_optional_f64(&ps.ismv_tol),
+            ismv_max_iter: parse_optional_usize(&ps.ismv_max_iter),
+            ismv_radius_factor: None,
+        },
+        sharp_params: crate::cli::SharpParamArgs {
+            sharp_threshold: parse_optional_f64(&ps.sharp_threshold),
+            sharp_radius_factor: None,
+        },
+        romeo_params: crate::cli::RomeoParamArgs {
+            no_romeo_phase_gradient_coherence: !ps.romeo_phase_gradient_coherence,
+            no_romeo_mag_coherence: !ps.romeo_mag_coherence,
+            no_romeo_mag_weight: !ps.romeo_mag_weight,
+        },
+        swi_params: crate::cli::SwiParamArgs {
+            swi_hp_sigma: {
+                let x: Option<f64> = form.swi_hp_sigma_x.trim().parse().ok();
+                let y: Option<f64> = form.swi_hp_sigma_y.trim().parse().ok();
+                let z: Option<f64> = form.swi_hp_sigma_z.trim().parse().ok();
+                match (x, y, z) {
+                    (Some(a), Some(b), Some(c)) => Some(vec![a, b, c]),
+                    _ => None,
+                }
+            },
+            swi_scaling: {
+                let scaling_options = ["tanh", "negative-tanh", "positive", "negative", "triangular"];
+                Some(scaling_options.get(form.swi_scaling).unwrap_or(&"tanh").to_string())
+            },
+            swi_strength: parse_optional_f64(&form.swi_strength),
+            swi_mip_window: parse_optional_usize(&form.swi_mip_window),
+        },
         mcpc3ds_sigma: {
             let vals: Vec<f64> = ps.mcpc3ds_sigma.split_whitespace()
                 .filter_map(|w| w.parse().ok())
                 .collect();
             if vals.is_empty() { None } else { Some(vals) }
         },
-        qsmart_ilsqr_tol: parse_optional_f64(&ps.qsmart_ilsqr_tol),
-        qsmart_ilsqr_max_iter: parse_optional_usize(&ps.qsmart_ilsqr_max_iter),
-        qsmart_vasc_sphere_radius: ps.qsmart_vasc_sphere_radius.trim().parse::<i32>().ok(),
-        qsmart_sdf_spatial_radius: ps.qsmart_sdf_spatial_radius.trim().parse::<i32>().ok(),
         n_procs: parse_optional_usize(&form.n_procs),
+        homogeneity_sigma_mm: None,
+        homogeneity_nbox: None,
+        linear_fit_reliability_threshold: None,
         no_qsm: !ps.do_qsm,
         do_swi: form.do_swi,
         do_t2starmap: form.do_t2starmap,
@@ -358,26 +414,6 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         inhomogeneity_correction: ps.inhomogeneity_correction,
         no_inhomogeneity_correction: !ps.inhomogeneity_correction,
         obliquity_threshold: parse_optional_f64(&ps.obliquity_threshold),
-        swi_hp_sigma: {
-            let x: Option<f64> = form.swi_hp_sigma_x.trim().parse().ok();
-            let y: Option<f64> = form.swi_hp_sigma_y.trim().parse().ok();
-            let z: Option<f64> = form.swi_hp_sigma_z.trim().parse().ok();
-            match (x, y, z) {
-                (Some(a), Some(b), Some(c)) => Some(vec![a, b, c]),
-                _ => None,
-            }
-        },
-        swi_scaling: {
-            let scaling_options = ["tanh", "negative-tanh", "positive", "negative", "triangular"];
-            Some(scaling_options.get(form.swi_scaling).unwrap_or(&"tanh").to_string())
-        },
-        swi_strength: parse_optional_f64(&form.swi_strength),
-        swi_mip_window: parse_optional_usize(&form.swi_mip_window),
-        homogeneity_sigma_mm: None,
-        homogeneity_nbox: None,
-        linear_fit_reliability_threshold: None,
-        tgv_step_size: None,
-        tgv_tol: None,
         mask_preset: None,
         mask_sections_cli: {
             let secs: Vec<String> = ps.mask_sections.iter().map(|section| {
@@ -609,8 +645,8 @@ mod tests {
         app.form.n_procs = "8".to_string();
         let args = build_run_args(&app).unwrap();
         assert_eq!(args.bet_fractional_intensity, Some(0.3));
-        assert_eq!(args.rts_delta, Some(0.2));
-        assert_eq!(args.tgv_iterations, Some(500));
+        assert_eq!(args.rts_params.rts_delta, Some(0.2));
+        assert_eq!(args.tgv_params.tgv_iterations, Some(500));
         assert_eq!(args.n_procs, Some(8));
     }
 

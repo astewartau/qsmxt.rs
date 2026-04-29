@@ -20,15 +20,32 @@ pub fn execute(args: SwiArgs) -> crate::Result<()> {
 
     info!("Computing SWI ({}x{}x{})", nx, ny, nz);
 
-    let swi = qsm_core::swi::calculate_swi_default(
+    let d = qsm_core::swi::SwiParams::default();
+    let hp_sigma = match args.swi_params.swi_hp_sigma {
+        Some(ref s) if s.len() == 3 => [s[0], s[1], s[2]],
+        _ => d.hp_sigma,
+    };
+    let scaling = match args.swi_params.swi_scaling.as_deref() {
+        Some("negative-tanh" | "negative_tanh") => qsm_core::swi::PhaseScaling::NegativeTanh,
+        Some("positive") => qsm_core::swi::PhaseScaling::Positive,
+        Some("negative") => qsm_core::swi::PhaseScaling::Negative,
+        Some("triangular") => qsm_core::swi::PhaseScaling::Triangular,
+        Some("tanh") => qsm_core::swi::PhaseScaling::Tanh,
+        _ => d.scaling,
+    };
+    let strength = args.swi_params.swi_strength.unwrap_or(d.strength);
+
+    let swi = qsm_core::swi::calculate_swi(
         &unwrapped, &mag_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
+        hp_sigma, scaling, strength,
     );
 
     save_nifti(&args.output, &swi, &phase_nifti)?;
     info!("SWI saved to {}", args.output.display());
 
     if args.mip {
-        let mip = qsm_core::swi::create_mip_default(&swi, nx, ny, nz);
+        let mip_window = args.swi_params.swi_mip_window.unwrap_or(d.mip_window);
+        let mip = qsm_core::swi::create_mip(&swi, nx, ny, nz, mip_window);
         let mip_path = args.mip_output.unwrap_or_else(|| args.output.with_extension("mip.nii"));
         save_nifti(&mip_path, &mip, &phase_nifti)?;
         info!("MIP saved to {}", mip_path.display());

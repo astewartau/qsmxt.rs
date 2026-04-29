@@ -1,9 +1,5 @@
 pub mod common;
-pub mod bet;
 pub mod bgremove;
-pub mod close;
-pub mod dilate;
-pub mod fill_holes;
 pub mod homogeneity;
 pub mod init;
 pub mod invert;
@@ -13,7 +9,6 @@ pub mod r2star;
 pub mod resample;
 pub mod run;
 pub mod slurm;
-pub mod smooth_mask;
 pub mod swi;
 pub mod t2star;
 pub mod unwrap;
@@ -25,6 +20,92 @@ mod integration_tests {
     use crate::testutils;
     use std::path::PathBuf;
 
+    fn default_run_args(bids_dir: PathBuf, output_dir: PathBuf) -> RunArgs {
+        RunArgs {
+            bids_dir,
+            output_dir: Some(output_dir),
+            config: None,
+            subjects: None,
+            sessions: None,
+            acquisitions: None,
+            runs: None,
+            num_echoes: None,
+            qsm_algorithm: None,
+            unwrapping_algorithm: None,
+            bf_algorithm: None,
+            masking_algorithm: None,
+            masking_input: None,
+            combine_phase: None,
+            bet_fractional_intensity: None,
+            bet_smoothness: None,
+            bet_gradient_threshold: None,
+            bet_iterations: None,
+            bet_subdivisions: None,
+            qsm_reference: None,
+            mask_erosions: None,
+            rts_params: Default::default(),
+            tv_params: Default::default(),
+            tkd_params: Default::default(),
+            tsvd_params: Default::default(),
+            tgv_params: Default::default(),
+            tikhonov_params: Default::default(),
+            nltv_params: Default::default(),
+            medi_params: Default::default(),
+            ilsqr_params: Default::default(),
+            qsmart_params: Default::default(),
+            vsharp_params: Default::default(),
+            pdf_params: Default::default(),
+            lbv_params: Default::default(),
+            ismv_params: Default::default(),
+            sharp_params: Default::default(),
+            romeo_params: Default::default(),
+            swi_params: Default::default(),
+            mcpc3ds_sigma: None,
+            n_procs: Some(1),
+            homogeneity_sigma_mm: None,
+            homogeneity_nbox: None,
+            linear_fit_reliability_threshold: None,
+            no_qsm: false,
+            do_swi: false,
+            do_t2starmap: false,
+            do_r2starmap: false,
+            inhomogeneity_correction: false,
+            no_inhomogeneity_correction: false,
+            obliquity_threshold: None,
+            mask_preset: None,
+            mask_sections_cli: None,
+            dry: true,
+            debug: false,
+            mem_limit_gb: None,
+            no_mem_limit: false,
+            force: false,
+            clean_intermediates: false,
+        }
+    }
+
+    fn common_mask(input: PathBuf, output: PathBuf) -> MaskCommonArgs {
+        MaskCommonArgs { input, output, ops: vec![] }
+    }
+
+    fn common_bgremove(input: PathBuf, mask: PathBuf, output: PathBuf) -> BgremoveCommonArgs {
+        BgremoveCommonArgs {
+            input, mask, output,
+            b0_direction: vec![0.0, 0.0, 1.0],
+            output_mask: None,
+        }
+    }
+
+    fn common_invert(input: PathBuf, mask: PathBuf, output: PathBuf) -> InvertCommonArgs {
+        InvertCommonArgs {
+            input, mask, output,
+            b0_direction: vec![0.0, 0.0, 1.0],
+        }
+    }
+
+    fn common_unwrap(input: PathBuf, mask: PathBuf, output: PathBuf) -> UnwrapCommonArgs {
+        UnwrapCommonArgs { input, mask, output }
+    }
+
     // --- Mask ---
 
     #[test]
@@ -34,13 +115,9 @@ mod integration_tests {
         let output = dir.path().join("mask.nii");
         testutils::write_magnitude(&input);
 
-        super::mask::execute(MaskArgs {
-            input,
-            output: output.clone(),
-            method: ThresholdMethod::Otsu,
-            threshold: None,
-            erosions: 0,
-        }).unwrap();
+        super::mask::execute(MaskCommand::Otsu(MaskOtsuArgs {
+            common: common_mask(input, output.clone()),
+        })).unwrap();
         assert!(output.exists());
     }
 
@@ -51,119 +128,80 @@ mod integration_tests {
         let output = dir.path().join("mask.nii");
         testutils::write_magnitude(&input);
 
-        super::mask::execute(MaskArgs {
-            input,
-            output: output.clone(),
-            method: ThresholdMethod::Value,
-            threshold: Some(500.0),
-            erosions: 1,
-        }).unwrap();
+        let mut c = common_mask(input, output.clone());
+        c.ops = vec!["erode:1".to_string()];
+        super::mask::execute(MaskCommand::Value(MaskValueArgs {
+            common: c,
+            threshold: 500.0,
+        })).unwrap();
         assert!(output.exists());
     }
 
     #[test]
-    fn test_mask_value_requires_threshold() {
+    fn test_mask_bet() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("mag.nii");
         let output = dir.path().join("mask.nii");
         testutils::write_magnitude(&input);
 
-        let result = super::mask::execute(MaskArgs {
-            input,
-            output,
-            method: ThresholdMethod::Value,
-            threshold: None,
-            erosions: 0,
-        });
-        assert!(result.is_err());
-    }
-
-    // --- BET ---
-
-    #[test]
-    fn test_bet() {
-        let dir = tempfile::tempdir().unwrap();
-        let input = dir.path().join("mag.nii");
-        let output = dir.path().join("mask.nii");
-        testutils::write_magnitude(&input);
-
-        super::bet::execute(BetArgs {
-            input,
-            output: output.clone(),
+        super::mask::execute(MaskCommand::Bet(MaskBetArgs {
+            common: common_mask(input, output.clone()),
             fractional_intensity: 0.5,
-            smoothness: 1.0,
-            gradient_threshold: 0.0,
-            iterations: 100, // fewer for speed
-            subdivisions: 2, // fewer for speed
-        }).unwrap();
+        })).unwrap();
         assert!(output.exists());
     }
 
-    // --- Dilate ---
+    // --- Mask morphological operations ---
 
     #[test]
-    fn test_dilate() {
+    fn test_mask_dilate() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("mask.nii");
         let output = dir.path().join("dilated.nii");
         testutils::write_mask(&input);
 
-        super::dilate::execute(DilateArgs {
-            input,
-            output: output.clone(),
-            iterations: 1,
-        }).unwrap();
+        super::mask::execute(MaskCommand::Dilate(MaskDilateArgs {
+            input, output: output.clone(), iterations: 1,
+        })).unwrap();
         assert!(output.exists());
     }
 
-    // --- Close ---
-
     #[test]
-    fn test_close() {
+    fn test_mask_close() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("mask.nii");
         let output = dir.path().join("closed.nii");
         testutils::write_mask(&input);
 
-        super::close::execute(CloseArgs {
-            input,
-            output: output.clone(),
-            radius: 1,
-        }).unwrap();
+        super::mask::execute(MaskCommand::Close(MaskCloseArgs {
+            input, output: output.clone(), radius: 1,
+        })).unwrap();
         assert!(output.exists());
     }
 
-    // --- Fill Holes ---
-
     #[test]
-    fn test_fill_holes() {
+    fn test_mask_fill_holes() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("mask.nii");
         let output = dir.path().join("filled.nii");
         testutils::write_mask(&input);
 
-        super::fill_holes::execute(FillHolesArgs {
-            input,
-            output: output.clone(),
-            max_size: 1000,
-        }).unwrap();
+        super::mask::execute(MaskCommand::FillHoles(MaskFillHolesArgs {
+            input, output: output.clone(), max_size: 1000,
+        })).unwrap();
         assert!(output.exists());
     }
 
-    // --- Smooth Mask ---
-
     #[test]
-    fn test_smooth_mask() {
+    fn test_mask_smooth() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("mask.nii");
         let output = dir.path().join("smoothed.nii");
         testutils::write_mask(&input);
 
-        super::smooth_mask::execute(SmoothMaskArgs {
-            input,
-            output: output.clone(),
-            sigma: 2.0,
-        }).unwrap();
+        super::mask::execute(MaskCommand::Smooth(MaskSmoothArgs {
+            input, output: output.clone(), sigma: 2.0,
+        })).unwrap();
         assert!(output.exists());
     }
 
@@ -178,13 +216,9 @@ mod integration_tests {
         testutils::write_phase(&phase);
         testutils::write_mask(&mask);
 
-        super::unwrap::execute(UnwrapArgs {
-            input: phase,
-            mask,
-            output: output.clone(),
-            algorithm: UnwrapAlgorithmArg::Laplacian,
-            magnitude: None,
-        }).unwrap();
+        super::unwrap::execute(UnwrapCommand::Laplacian(UnwrapLaplacianArgs {
+            common: common_unwrap(phase, mask, output.clone()),
+        })).unwrap();
         assert!(output.exists());
     }
 
@@ -199,13 +233,13 @@ mod integration_tests {
         testutils::write_mask(&mask);
         testutils::write_magnitude(&mag);
 
-        super::unwrap::execute(UnwrapArgs {
-            input: phase,
-            mask,
-            output: output.clone(),
-            algorithm: UnwrapAlgorithmArg::Romeo,
+        super::unwrap::execute(UnwrapCommand::Romeo(UnwrapRomeoArgs {
+            common: common_unwrap(phase, mask, output.clone()),
             magnitude: Some(mag),
-        }).unwrap();
+            no_phase_gradient_coherence: false,
+            no_mag_coherence: false,
+            no_mag_weight: false,
+        })).unwrap();
         assert!(output.exists());
     }
 
@@ -221,14 +255,12 @@ mod integration_tests {
         testutils::write_field(&input);
         testutils::write_mask(&mask);
 
-        super::bgremove::execute(BgremoveArgs {
-            input,
-            mask,
-            output: output.clone(),
-            algorithm: BfAlgorithmArg::Vsharp,
-            b0_direction: vec![0.0, 0.0, 1.0],
-            output_mask: Some(output_mask.clone()),
-        }).unwrap();
+        let mut c = common_bgremove(input, mask, output.clone());
+        c.output_mask = Some(output_mask.clone());
+        super::bgremove::execute(BgremoveCommand::Vsharp(BgremoveVsharpArgs {
+            common: c,
+            threshold: None, max_radius_factor: None, min_radius_factor: None,
+        })).unwrap();
         assert!(output.exists());
         assert!(output_mask.exists());
     }
@@ -242,14 +274,10 @@ mod integration_tests {
         testutils::write_field(&input);
         testutils::write_mask(&mask);
 
-        super::bgremove::execute(BgremoveArgs {
-            input,
-            mask,
-            output: output.clone(),
-            algorithm: BfAlgorithmArg::Pdf,
-            b0_direction: vec![0.0, 0.0, 1.0],
-            output_mask: None,
-        }).unwrap();
+        super::bgremove::execute(BgremoveCommand::Pdf(BgremovePdfArgs {
+            common: common_bgremove(input, mask, output.clone()),
+            tol: None,
+        })).unwrap();
         assert!(output.exists());
     }
 
@@ -264,52 +292,19 @@ mod integration_tests {
         testutils::write_field(&input);
         testutils::write_mask(&mask);
 
-        super::invert::execute(InvertArgs {
-            input,
-            mask,
-            output: output.clone(),
-            algorithm: QsmAlgorithmArg::Tkd,
-            b0_direction: vec![0.0, 0.0, 1.0],
-            rts_delta: 0.15,
-            rts_mu: 1e5,
-            rts_tol: 1e-4,
-            rts_rho: 10.0,
-            rts_max_iter: 20,
-            rts_lsmr_iter: 4,
-            tv_lambda: 1e-3,
-            tv_rho: 0.02,
-            tv_tol: 1e-3,
-            tv_max_iter: 250,
-            tkd_threshold: 0.15,
-            tgv_iterations: 10,
-            tgv_erosions: 1,
-            ilsqr_tol: 0.01,
-            ilsqr_max_iter: 50,
-            tikhonov_lambda: 0.01,
-            nltv_lambda: 1e-4,
-            nltv_mu: 1e2,
-            nltv_tol: 1e-4,
-            nltv_max_iter: 100,
-            nltv_newton_iter: 5,
-            magnitude: None,
-            medi_lambda: 1000.0,
-            medi_merit: true,
-            medi_smv: true,
-            medi_smv_radius: 5.0,
-            medi_data_weighting: 1,
-            medi_percentage: 0.9,
-            medi_cg_tol: 0.01,
-            medi_cg_max_iter: 100,
-            medi_max_iter: 10,
-            medi_tol: 0.001,
-            field_strength: None,
-            echo_time: None,
-        }).unwrap();
+        super::invert::execute(InvertCommand::Tkd(InvertTkdArgs {
+            common: common_invert(input, mask, output.clone()),
+            threshold: None,
+        })).unwrap();
         assert!(output.exists());
     }
 
     #[test]
     fn test_invert_tgv_requires_field_strength() {
+        // TGV has required field_strength and echo_time — this test verifies
+        // the struct requires them (they're not Option)
+        // Since they're required args in InvertTgvArgs, this is enforced at parse time.
+        // We just test that TGV runs with valid params.
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("field.nii");
         let mask = dir.path().join("mask.nii");
@@ -317,48 +312,16 @@ mod integration_tests {
         testutils::write_field(&input);
         testutils::write_mask(&mask);
 
-        let result = super::invert::execute(InvertArgs {
-            input,
-            mask,
-            output,
-            algorithm: QsmAlgorithmArg::Tgv,
-            b0_direction: vec![0.0, 0.0, 1.0],
-            rts_delta: 0.15,
-            rts_mu: 1e5,
-            rts_tol: 1e-4,
-            rts_rho: 10.0,
-            rts_max_iter: 20,
-            rts_lsmr_iter: 4,
-            tv_lambda: 1e-3,
-            tv_rho: 0.02,
-            tv_tol: 1e-3,
-            tv_max_iter: 250,
-            tkd_threshold: 0.15,
-            tgv_iterations: 10,
-            tgv_erosions: 1,
-            ilsqr_tol: 0.01,
-            ilsqr_max_iter: 50,
-            tikhonov_lambda: 0.01,
-            nltv_lambda: 1e-4,
-            nltv_mu: 1e2,
-            nltv_tol: 1e-4,
-            nltv_max_iter: 100,
-            nltv_newton_iter: 5,
-            magnitude: None,
-            medi_lambda: 1000.0,
-            medi_merit: true,
-            medi_smv: true,
-            medi_smv_radius: 5.0,
-            medi_data_weighting: 1,
-            medi_percentage: 0.9,
-            medi_cg_tol: 0.01,
-            medi_cg_max_iter: 100,
-            medi_max_iter: 10,
-            medi_tol: 0.001,
-            field_strength: None,
-            echo_time: Some(0.02),
-        });
-        assert!(result.is_err());
+        super::invert::execute(InvertCommand::Tgv(InvertTgvArgs {
+            common: common_invert(input, mask, output.clone()),
+            field_strength: 3.0,
+            echo_time: 0.02,
+            iterations: Some(5),
+            erosions: Some(0),
+            alpha1: None, alpha0: None,
+            step_size: None, tol: None,
+        })).unwrap();
+        assert!(output.exists());
     }
 
     // --- Homogeneity ---
@@ -371,10 +334,7 @@ mod integration_tests {
         testutils::write_magnitude(&input);
 
         super::homogeneity::execute(HomogeneityArgs {
-            input,
-            output: output.clone(),
-            sigma: 4.0,
-            nbox: 2,
+            input, output: output.clone(), sigma: 4.0, nbox: 2,
         }).unwrap();
         assert!(output.exists());
     }
@@ -389,8 +349,7 @@ mod integration_tests {
         testutils::write_magnitude(&input);
 
         super::resample::execute(ResampleArgs {
-            input,
-            output: output.clone(),
+            input, output: output.clone(),
         }).unwrap();
         assert!(output.exists());
     }
@@ -405,12 +364,8 @@ mod integration_tests {
         testutils::write_phase(&phase);
 
         super::quality_map::execute(QualityMapArgs {
-            phase,
-            output: output.clone(),
-            magnitude: None,
-            phase2: None,
-            te1: 0.02,
-            te2: 0.04,
+            phase, output: output.clone(),
+            magnitude: None, phase2: None, te1: 0.02, te2: 0.04,
         }).unwrap();
         assert!(output.exists());
     }
@@ -429,12 +384,10 @@ mod integration_tests {
         testutils::write_mask(&mask);
 
         super::swi::execute(SwiArgs {
-            phase,
-            magnitude: mag,
-            mask,
+            phase, magnitude: mag, mask,
             output: output.clone(),
-            mip: false,
-            mip_output: None,
+            mip: false, mip_output: None,
+            swi_params: Default::default(),
         }).unwrap();
         assert!(output.exists());
     }
@@ -456,9 +409,7 @@ mod integration_tests {
         }
 
         super::r2star::execute(R2starArgs {
-            inputs,
-            mask,
-            output: output.clone(),
+            inputs, mask, output: output.clone(),
             echo_times: vec![0.004, 0.008, 0.012],
         }).unwrap();
         assert!(output.exists());
@@ -470,7 +421,7 @@ mod integration_tests {
             inputs: vec![PathBuf::from("a.nii"), PathBuf::from("b.nii"), PathBuf::from("c.nii")],
             mask: PathBuf::from("mask.nii"),
             output: PathBuf::from("out.nii"),
-            echo_times: vec![0.004, 0.008], // only 2 times for 3 inputs
+            echo_times: vec![0.004, 0.008],
         });
         assert!(result.is_err());
     }
@@ -492,9 +443,7 @@ mod integration_tests {
         }
 
         super::t2star::execute(T2starArgs {
-            inputs,
-            mask,
-            output: output.clone(),
+            inputs, mask, output: output.clone(),
             echo_times: vec![0.004, 0.008, 0.012],
         }).unwrap();
         assert!(output.exists());
@@ -506,9 +455,7 @@ mod integration_tests {
     fn test_init_to_file() {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("config.toml");
-        super::init::execute(InitArgs {
-            output: Some(output.clone()),
-        }).unwrap();
+        super::init::execute(InitArgs { output: Some(output.clone()) }).unwrap();
         assert!(output.exists());
         let content = std::fs::read_to_string(&output).unwrap();
         assert!(content.contains("qsm_algorithm"));
@@ -516,9 +463,7 @@ mod integration_tests {
 
     #[test]
     fn test_init_to_stdout() {
-        super::init::execute(InitArgs {
-            output: None,
-        }).unwrap();
+        super::init::execute(InitArgs { output: None }).unwrap();
     }
 
     // --- Validate ---
@@ -527,11 +472,8 @@ mod integration_tests {
     fn test_validate_single_echo() {
         let dir = tempfile::tempdir().unwrap();
         testutils::create_single_echo_bids(dir.path());
-
         super::validate::execute(ValidateArgs {
-            bids_dir: dir.path().to_path_buf(),
-            subjects: None,
-            sessions: None,
+            bids_dir: dir.path().to_path_buf(), subjects: None, sessions: None,
         }).unwrap();
     }
 
@@ -539,23 +481,17 @@ mod integration_tests {
     fn test_validate_multi_echo() {
         let dir = tempfile::tempdir().unwrap();
         testutils::create_multi_echo_bids(dir.path());
-
         super::validate::execute(ValidateArgs {
-            bids_dir: dir.path().to_path_buf(),
-            subjects: None,
-            sessions: None,
+            bids_dir: dir.path().to_path_buf(), subjects: None, sessions: None,
         }).unwrap();
     }
 
     #[test]
     fn test_validate_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
-
         super::validate::execute(ValidateArgs {
-            bids_dir: dir.path().to_path_buf(),
-            subjects: None,
-            sessions: None,
-        }).unwrap(); // should not error, just print "no runs"
+            bids_dir: dir.path().to_path_buf(), subjects: None, sessions: None,
+        }).unwrap();
     }
 
     // --- Run (dry) ---
@@ -567,104 +503,9 @@ mod integration_tests {
         let out = dir.path().join("out");
         testutils::create_single_echo_bids(&bids);
 
-        super::run::execute(RunArgs {
-            bids_dir: bids,
-            output_dir: Some(out),
-            config: None,
-            subjects: None,
-            sessions: None,
-            acquisitions: None,
-            runs: None,
-            num_echoes: None,
-            qsm_algorithm: None,
-            unwrapping_algorithm: None,
-            bf_algorithm: None,
-            masking_algorithm: None,
-            masking_input: None,
-            combine_phase: None,
-            bet_fractional_intensity: None,
-            bet_smoothness: None,
-            bet_gradient_threshold: None,
-            bet_iterations: None,
-            bet_subdivisions: None,
-            qsm_reference: None,
-            tgv_alpha1: None,
-            tgv_alpha0: None,
-            mask_erosions: None,
-            rts_delta: None,
-            rts_mu: None,
-            rts_tol: None,
-            rts_rho: None,
-            rts_max_iter: None,
-            rts_lsmr_iter: None,
-            tv_lambda: None,
-            tv_rho: None,
-            tv_tol: None,
-            tv_max_iter: None,
-            tkd_threshold: None,
-            tsvd_threshold: None,
-            ilsqr_tol: None,
-            ilsqr_max_iter: None,
-            tikhonov_lambda: None,
-            nltv_lambda: None,
-            nltv_mu: None,
-            nltv_tol: None,
-            nltv_max_iter: None,
-            nltv_newton_iter: None,
-            medi_lambda: None,
-            medi_max_iter: None,
-            medi_cg_max_iter: None,
-            medi_cg_tol: None,
-            medi_tol: None,
-            medi_percentage: None,
-            medi_smv_radius: None,
-            medi_smv: false,
-            vsharp_threshold: None,
-            pdf_tol: None,
-            lbv_tol: None,
-            ismv_tol: None,
-            ismv_max_iter: None,
-            sharp_threshold: None,
-            sharp_radius_factor: None,
-            vsharp_max_radius_factor: None,
-            vsharp_min_radius_factor: None,
-            ismv_radius_factor: None,
-            no_romeo_phase_gradient_coherence: false,
-            no_romeo_mag_coherence: false,
-            no_romeo_mag_weight: false,
-            mcpc3ds_sigma: None,
-            tgv_iterations: None,
-            tgv_erosions: None,
-            qsmart_ilsqr_tol: None,
-            qsmart_ilsqr_max_iter: None,
-            qsmart_vasc_sphere_radius: None,
-            qsmart_sdf_spatial_radius: None,
-            n_procs: Some(1),
-            no_qsm: false,
-            do_swi: false,
-            do_t2starmap: false,
-            do_r2starmap: false,
-            inhomogeneity_correction: false,
-            no_inhomogeneity_correction: false,
-            obliquity_threshold: None,
-            swi_hp_sigma: None,
-            swi_scaling: None,
-            swi_strength: None,
-            swi_mip_window: None,
-            homogeneity_sigma_mm: None,
-            homogeneity_nbox: None,
-            linear_fit_reliability_threshold: None,
-            tgv_step_size: None,
-            tgv_tol: None,
-            mask_preset: None,
-            mask_sections_cli: None,
-            dry: true,
-            debug: false,
-            mem_limit_gb: Some(4.0),
-            no_mem_limit: false,
-            force: false,
-            clean_intermediates: false,
-        }).unwrap();
+        let mut args = default_run_args(bids, out);
+        args.mem_limit_gb = Some(4.0);
+        super::run::execute(args).unwrap();
     }
 
     #[test]
@@ -674,209 +515,17 @@ mod integration_tests {
         let out = dir.path().join("out");
         testutils::create_multi_echo_bids(&bids);
 
-        super::run::execute(RunArgs {
-            bids_dir: bids,
-            output_dir: Some(out),
-            config: None,
-            subjects: None,
-            sessions: None,
-            acquisitions: None,
-            runs: None,
-            num_echoes: None,
-            qsm_algorithm: Some(QsmAlgorithmArg::Tkd),
-            unwrapping_algorithm: None,
-            bf_algorithm: None,
-            masking_algorithm: None,
-            masking_input: None,
-            combine_phase: None,
-            bet_fractional_intensity: None,
-            bet_smoothness: None,
-            bet_gradient_threshold: None,
-            bet_iterations: None,
-            bet_subdivisions: None,
-            qsm_reference: None,
-            tgv_alpha1: None,
-            tgv_alpha0: None,
-            mask_erosions: None,
-            rts_delta: None,
-            rts_mu: None,
-            rts_tol: None,
-            rts_rho: None,
-            rts_max_iter: None,
-            rts_lsmr_iter: None,
-            tv_lambda: None,
-            tv_rho: None,
-            tv_tol: None,
-            tv_max_iter: None,
-            tkd_threshold: None,
-            tsvd_threshold: None,
-            ilsqr_tol: None,
-            ilsqr_max_iter: None,
-            tikhonov_lambda: None,
-            nltv_lambda: None,
-            nltv_mu: None,
-            nltv_tol: None,
-            nltv_max_iter: None,
-            nltv_newton_iter: None,
-            medi_lambda: None,
-            medi_max_iter: None,
-            medi_cg_max_iter: None,
-            medi_cg_tol: None,
-            medi_tol: None,
-            medi_percentage: None,
-            medi_smv_radius: None,
-            medi_smv: false,
-            vsharp_threshold: None,
-            pdf_tol: None,
-            lbv_tol: None,
-            ismv_tol: None,
-            ismv_max_iter: None,
-            sharp_threshold: None,
-            sharp_radius_factor: None,
-            vsharp_max_radius_factor: None,
-            vsharp_min_radius_factor: None,
-            ismv_radius_factor: None,
-            no_romeo_phase_gradient_coherence: false,
-            no_romeo_mag_coherence: false,
-            no_romeo_mag_weight: false,
-            mcpc3ds_sigma: None,
-            tgv_iterations: None,
-            tgv_erosions: None,
-            qsmart_ilsqr_tol: None,
-            qsmart_ilsqr_max_iter: None,
-            qsmart_vasc_sphere_radius: None,
-            qsmart_sdf_spatial_radius: None,
-            n_procs: Some(1),
-            no_qsm: false,
-            do_swi: false,
-            do_t2starmap: false,
-            do_r2starmap: false,
-            inhomogeneity_correction: false,
-            no_inhomogeneity_correction: false,
-            obliquity_threshold: None,
-            swi_hp_sigma: None,
-            swi_scaling: None,
-            swi_strength: None,
-            swi_mip_window: None,
-            homogeneity_sigma_mm: None,
-            homogeneity_nbox: None,
-            linear_fit_reliability_threshold: None,
-            tgv_step_size: None,
-            tgv_tol: None,
-            mask_preset: None,
-            mask_sections_cli: None,
-            dry: true,
-            debug: false,
-            mem_limit_gb: None,
-            no_mem_limit: true,
-            force: false,
-            clean_intermediates: false,
-        }).unwrap();
+        let mut args = default_run_args(bids, out);
+        args.qsm_algorithm = Some(QsmAlgorithmArg::Tkd);
+        args.no_mem_limit = true;
+        super::run::execute(args).unwrap();
     }
 
     #[test]
     fn test_run_dry_empty_bids() {
         let dir = tempfile::tempdir().unwrap();
-
-        // Should not error, just log "no runs"
-        super::run::execute(RunArgs {
-            bids_dir: dir.path().to_path_buf(),
-            output_dir: Some(dir.path().join("out")),
-            config: None,
-            subjects: None,
-            sessions: None,
-            acquisitions: None,
-            runs: None,
-            num_echoes: None,
-            qsm_algorithm: None,
-            unwrapping_algorithm: None,
-            bf_algorithm: None,
-            masking_algorithm: None,
-            masking_input: None,
-            combine_phase: None,
-            bet_fractional_intensity: None,
-            bet_smoothness: None,
-            bet_gradient_threshold: None,
-            bet_iterations: None,
-            bet_subdivisions: None,
-            qsm_reference: None,
-            tgv_alpha1: None,
-            tgv_alpha0: None,
-            mask_erosions: None,
-            rts_delta: None,
-            rts_mu: None,
-            rts_tol: None,
-            rts_rho: None,
-            rts_max_iter: None,
-            rts_lsmr_iter: None,
-            tv_lambda: None,
-            tv_rho: None,
-            tv_tol: None,
-            tv_max_iter: None,
-            tkd_threshold: None,
-            tsvd_threshold: None,
-            ilsqr_tol: None,
-            ilsqr_max_iter: None,
-            tikhonov_lambda: None,
-            nltv_lambda: None,
-            nltv_mu: None,
-            nltv_tol: None,
-            nltv_max_iter: None,
-            nltv_newton_iter: None,
-            medi_lambda: None,
-            medi_max_iter: None,
-            medi_cg_max_iter: None,
-            medi_cg_tol: None,
-            medi_tol: None,
-            medi_percentage: None,
-            medi_smv_radius: None,
-            medi_smv: false,
-            vsharp_threshold: None,
-            pdf_tol: None,
-            lbv_tol: None,
-            ismv_tol: None,
-            ismv_max_iter: None,
-            sharp_threshold: None,
-            sharp_radius_factor: None,
-            vsharp_max_radius_factor: None,
-            vsharp_min_radius_factor: None,
-            ismv_radius_factor: None,
-            no_romeo_phase_gradient_coherence: false,
-            no_romeo_mag_coherence: false,
-            no_romeo_mag_weight: false,
-            mcpc3ds_sigma: None,
-            tgv_iterations: None,
-            tgv_erosions: None,
-            qsmart_ilsqr_tol: None,
-            qsmart_ilsqr_max_iter: None,
-            qsmart_vasc_sphere_radius: None,
-            qsmart_sdf_spatial_radius: None,
-            n_procs: Some(1),
-            no_qsm: false,
-            do_swi: false,
-            do_t2starmap: false,
-            do_r2starmap: false,
-            inhomogeneity_correction: false,
-            no_inhomogeneity_correction: false,
-            obliquity_threshold: None,
-            swi_hp_sigma: None,
-            swi_scaling: None,
-            swi_strength: None,
-            swi_mip_window: None,
-            homogeneity_sigma_mm: None,
-            homogeneity_nbox: None,
-            linear_fit_reliability_threshold: None,
-            tgv_step_size: None,
-            tgv_tol: None,
-            mask_preset: None,
-            mask_sections_cli: None,
-            dry: true,
-            debug: false,
-            mem_limit_gb: None,
-            no_mem_limit: false,
-            force: false,
-            clean_intermediates: false,
-        }).unwrap();
+        let args = default_run_args(dir.path().to_path_buf(), dir.path().join("out"));
+        super::run::execute(args).unwrap();
     }
 
     // --- Run (actual execution) ---
@@ -888,106 +537,17 @@ mod integration_tests {
         let out = dir.path().join("out");
         testutils::create_single_echo_bids(&bids);
 
-        super::run::execute(RunArgs {
-            bids_dir: bids,
-            output_dir: Some(out.clone()),
-            config: None,
-            subjects: None,
-            sessions: None,
-            acquisitions: None,
-            runs: None,
-            num_echoes: None,
-            qsm_algorithm: Some(QsmAlgorithmArg::Tkd),
-            unwrapping_algorithm: Some(UnwrapAlgorithmArg::Laplacian),
-            bf_algorithm: Some(BfAlgorithmArg::Vsharp),
-            masking_algorithm: Some(MaskAlgorithmArg::Threshold),
-            masking_input: Some(MaskInputArg::MagnitudeFirst),
-            combine_phase: None,
-            bet_fractional_intensity: None,
-            bet_smoothness: None,
-            bet_gradient_threshold: None,
-            bet_iterations: None,
-            bet_subdivisions: None,
-            qsm_reference: None,
-            tgv_alpha1: None,
-            tgv_alpha0: None,
-            mask_erosions: Some(vec![1]),
-            rts_delta: None,
-            rts_mu: None,
-            rts_tol: None,
-            rts_rho: None,
-            rts_max_iter: None,
-            rts_lsmr_iter: None,
-            tv_lambda: None,
-            tv_rho: None,
-            tv_tol: None,
-            tv_max_iter: None,
-            tkd_threshold: None,
-            tsvd_threshold: None,
-            ilsqr_tol: None,
-            ilsqr_max_iter: None,
-            tikhonov_lambda: None,
-            nltv_lambda: None,
-            nltv_mu: None,
-            nltv_tol: None,
-            nltv_max_iter: None,
-            nltv_newton_iter: None,
-            medi_lambda: None,
-            medi_max_iter: None,
-            medi_cg_max_iter: None,
-            medi_cg_tol: None,
-            medi_tol: None,
-            medi_percentage: None,
-            medi_smv_radius: None,
-            medi_smv: false,
-            vsharp_threshold: None,
-            pdf_tol: None,
-            lbv_tol: None,
-            ismv_tol: None,
-            ismv_max_iter: None,
-            sharp_threshold: None,
-            sharp_radius_factor: None,
-            vsharp_max_radius_factor: None,
-            vsharp_min_radius_factor: None,
-            ismv_radius_factor: None,
-            no_romeo_phase_gradient_coherence: false,
-            no_romeo_mag_coherence: false,
-            no_romeo_mag_weight: false,
-            mcpc3ds_sigma: None,
-            tgv_iterations: None,
-            tgv_erosions: None,
-            qsmart_ilsqr_tol: None,
-            qsmart_ilsqr_max_iter: None,
-            qsmart_vasc_sphere_radius: None,
-            qsmart_sdf_spatial_radius: None,
-            n_procs: Some(1),
-            no_qsm: false,
-            do_swi: false,
-            do_t2starmap: false,
-            do_r2starmap: false,
-            inhomogeneity_correction: false,
-            no_inhomogeneity_correction: false,
-            obliquity_threshold: None,
-            swi_hp_sigma: None,
-            swi_scaling: None,
-            swi_strength: None,
-            swi_mip_window: None,
-            homogeneity_sigma_mm: None,
-            homogeneity_nbox: None,
-            linear_fit_reliability_threshold: None,
-            tgv_step_size: None,
-            tgv_tol: None,
-            mask_preset: None,
-            mask_sections_cli: None,
-            dry: false,
-            debug: false,
-            mem_limit_gb: None,
-            no_mem_limit: true,
-            force: false,
-            clean_intermediates: false,
-        }).unwrap();
+        let mut args = default_run_args(bids, out.clone());
+        args.qsm_algorithm = Some(QsmAlgorithmArg::Tkd);
+        args.unwrapping_algorithm = Some(UnwrapAlgorithmArg::Laplacian);
+        args.bf_algorithm = Some(BfAlgorithmArg::Vsharp);
+        args.masking_algorithm = Some(MaskAlgorithmArg::Threshold);
+        args.masking_input = Some(MaskInputArg::MagnitudeFirst);
+        args.mask_erosions = Some(vec![1]);
+        args.dry = false;
+        args.no_mem_limit = true;
+        super::run::execute(args).unwrap();
 
-        // Check that output QSM file was created
         let deriv = out.join("derivatives/qsmxt.rs");
         assert!(deriv.join("sub-1/anat/sub-1_Chimap.nii").exists());
         assert!(deriv.join("sub-1/anat/sub-1_mask.nii").exists());
@@ -1002,104 +562,20 @@ mod integration_tests {
         let out = dir.path().join("out");
         testutils::create_multi_echo_bids(&bids);
 
-        super::run::execute(RunArgs {
-            bids_dir: bids,
-            output_dir: Some(out.clone()),
-            config: None,
-            subjects: None,
-            sessions: None,
-            acquisitions: None,
-            runs: None,
-            num_echoes: None,
-            qsm_algorithm: Some(QsmAlgorithmArg::Tkd),
-            unwrapping_algorithm: Some(UnwrapAlgorithmArg::Laplacian),
-            bf_algorithm: Some(BfAlgorithmArg::Vsharp),
-            masking_algorithm: Some(MaskAlgorithmArg::Threshold),
-            masking_input: Some(MaskInputArg::Magnitude),
-            combine_phase: Some(true),
-            bet_fractional_intensity: None,
-            bet_smoothness: None,
-            bet_gradient_threshold: None,
-            bet_iterations: None,
-            bet_subdivisions: None,
-            qsm_reference: None,
-            tgv_alpha1: None,
-            tgv_alpha0: None,
-            mask_erosions: Some(vec![1]),
-            rts_delta: None,
-            rts_mu: None,
-            rts_tol: None,
-            rts_rho: None,
-            rts_max_iter: None,
-            rts_lsmr_iter: None,
-            tv_lambda: None,
-            tv_rho: None,
-            tv_tol: None,
-            tv_max_iter: None,
-            tkd_threshold: None,
-            tsvd_threshold: None,
-            ilsqr_tol: None,
-            ilsqr_max_iter: None,
-            tikhonov_lambda: None,
-            nltv_lambda: None,
-            nltv_mu: None,
-            nltv_tol: None,
-            nltv_max_iter: None,
-            nltv_newton_iter: None,
-            medi_lambda: None,
-            medi_max_iter: None,
-            medi_cg_max_iter: None,
-            medi_cg_tol: None,
-            medi_tol: None,
-            medi_percentage: None,
-            medi_smv_radius: None,
-            medi_smv: false,
-            vsharp_threshold: None,
-            pdf_tol: None,
-            lbv_tol: None,
-            ismv_tol: None,
-            ismv_max_iter: None,
-            sharp_threshold: None,
-            sharp_radius_factor: None,
-            vsharp_max_radius_factor: None,
-            vsharp_min_radius_factor: None,
-            ismv_radius_factor: None,
-            no_romeo_phase_gradient_coherence: false,
-            no_romeo_mag_coherence: false,
-            no_romeo_mag_weight: false,
-            mcpc3ds_sigma: None,
-            tgv_iterations: None,
-            tgv_erosions: None,
-            qsmart_ilsqr_tol: None,
-            qsmart_ilsqr_max_iter: None,
-            qsmart_vasc_sphere_radius: None,
-            qsmart_sdf_spatial_radius: None,
-            n_procs: Some(1),
-            no_qsm: false,
-            do_swi: true,
-            do_t2starmap: true,
-            do_r2starmap: true,
-            inhomogeneity_correction: false,
-            no_inhomogeneity_correction: false,
-            obliquity_threshold: None,
-            swi_hp_sigma: None,
-            swi_scaling: None,
-            swi_strength: None,
-            swi_mip_window: None,
-            homogeneity_sigma_mm: None,
-            homogeneity_nbox: None,
-            linear_fit_reliability_threshold: None,
-            tgv_step_size: None,
-            tgv_tol: None,
-            mask_preset: None,
-            mask_sections_cli: None,
-            dry: false,
-            debug: false,
-            mem_limit_gb: None,
-            no_mem_limit: true,
-            force: false,
-            clean_intermediates: false,
-        }).unwrap();
+        let mut args = default_run_args(bids, out.clone());
+        args.qsm_algorithm = Some(QsmAlgorithmArg::Tkd);
+        args.unwrapping_algorithm = Some(UnwrapAlgorithmArg::Laplacian);
+        args.bf_algorithm = Some(BfAlgorithmArg::Vsharp);
+        args.masking_algorithm = Some(MaskAlgorithmArg::Threshold);
+        args.masking_input = Some(MaskInputArg::Magnitude);
+        args.combine_phase = Some(true);
+        args.mask_erosions = Some(vec![1]);
+        args.dry = false;
+        args.no_mem_limit = true;
+        args.do_swi = true;
+        args.do_t2starmap = true;
+        args.do_r2starmap = true;
+        super::run::execute(args).unwrap();
 
         let deriv = out.join("derivatives/qsmxt.rs");
         assert!(deriv.join("sub-1/anat/sub-1_Chimap.nii").exists());
@@ -1115,106 +591,17 @@ mod integration_tests {
         let out = dir.path().join("out");
         testutils::create_single_echo_bids(&bids);
 
-        super::run::execute(RunArgs {
-            bids_dir: bids,
-            output_dir: Some(out.clone()),
-            config: None,
-            subjects: None,
-            sessions: None,
-            acquisitions: None,
-            runs: None,
-            num_echoes: None,
-            qsm_algorithm: Some(QsmAlgorithmArg::Tgv),
-            unwrapping_algorithm: None,
-            bf_algorithm: None,
-            masking_algorithm: None,
-            masking_input: Some(MaskInputArg::MagnitudeFirst),
-            combine_phase: None,
-            bet_fractional_intensity: None,
-            bet_smoothness: None,
-            bet_gradient_threshold: None,
-            bet_iterations: None,
-            bet_subdivisions: None,
-            qsm_reference: None,
-            tgv_alpha1: None,
-            tgv_alpha0: None,
-            mask_erosions: Some(vec![0]),
-            rts_delta: None,
-            rts_mu: None,
-            rts_tol: None,
-            rts_rho: None,
-            rts_max_iter: None,
-            rts_lsmr_iter: None,
-            tv_lambda: None,
-            tv_rho: None,
-            tv_tol: None,
-            tv_max_iter: None,
-            tkd_threshold: None,
-            tsvd_threshold: None,
-            ilsqr_tol: None,
-            ilsqr_max_iter: None,
-            tikhonov_lambda: None,
-            nltv_lambda: None,
-            nltv_mu: None,
-            nltv_tol: None,
-            nltv_max_iter: None,
-            nltv_newton_iter: None,
-            medi_lambda: None,
-            medi_max_iter: None,
-            medi_cg_max_iter: None,
-            medi_cg_tol: None,
-            medi_tol: None,
-            medi_percentage: None,
-            medi_smv_radius: None,
-            medi_smv: false,
-            vsharp_threshold: None,
-            pdf_tol: None,
-            lbv_tol: None,
-            ismv_tol: None,
-            ismv_max_iter: None,
-            sharp_threshold: None,
-            sharp_radius_factor: None,
-            vsharp_max_radius_factor: None,
-            vsharp_min_radius_factor: None,
-            ismv_radius_factor: None,
-            no_romeo_phase_gradient_coherence: false,
-            no_romeo_mag_coherence: false,
-            no_romeo_mag_weight: false,
-            mcpc3ds_sigma: None,
-            tgv_iterations: Some(5), // minimal for speed
-            tgv_erosions: Some(0), // 8×8×8 too small for erosion
-            qsmart_ilsqr_tol: None,
-            qsmart_ilsqr_max_iter: None,
-            qsmart_vasc_sphere_radius: None,
-            qsmart_sdf_spatial_radius: None,
-            n_procs: Some(1),
-            no_qsm: false,
-            do_swi: false,
-            do_t2starmap: false,
-            do_r2starmap: false,
-            inhomogeneity_correction: true,
-            no_inhomogeneity_correction: false,
-            obliquity_threshold: None,
-            swi_hp_sigma: None,
-            swi_scaling: None,
-            swi_strength: None,
-            swi_mip_window: None,
-            homogeneity_sigma_mm: None,
-            homogeneity_nbox: None,
-            linear_fit_reliability_threshold: None,
-            tgv_step_size: None,
-            tgv_tol: None,
-            mask_preset: None,
-            mask_sections_cli: Some(vec![
-                "phase-quality,threshold:otsu".to_string(),
-            ]),
-            dry: false,
-            debug: false,
-            mem_limit_gb: None,
-            no_mem_limit: true,
-            force: false,
-            clean_intermediates: false,
-        }).unwrap();
+        let mut args = default_run_args(bids, out.clone());
+        args.qsm_algorithm = Some(QsmAlgorithmArg::Tgv);
+        args.masking_input = Some(MaskInputArg::MagnitudeFirst);
+        args.mask_erosions = Some(vec![0]);
+        args.tgv_params.tgv_iterations = Some(5);
+        args.tgv_params.tgv_erosions = Some(0);
+        args.dry = false;
+        args.no_mem_limit = true;
+        args.inhomogeneity_correction = true;
+        args.mask_sections_cli = Some(vec!["phase-quality,threshold:otsu".to_string()]);
+        super::run::execute(args).unwrap();
 
         assert!(out.join("derivatives/qsmxt.rs/sub-1/anat/sub-1_Chimap.nii").exists());
     }
@@ -1226,106 +613,15 @@ mod integration_tests {
         let out = dir.path().join("out");
         testutils::create_single_echo_bids(&bids);
 
-        super::run::execute(RunArgs {
-            bids_dir: bids,
-            output_dir: Some(out.clone()),
-            config: None,
-            subjects: None,
-            sessions: None,
-            acquisitions: None,
-            runs: None,
-            num_echoes: None,
-            qsm_algorithm: Some(QsmAlgorithmArg::Tkd),
-            unwrapping_algorithm: Some(UnwrapAlgorithmArg::Laplacian),
-            bf_algorithm: Some(BfAlgorithmArg::Vsharp),
-            masking_algorithm: None,
-            masking_input: None,
-            combine_phase: None,
-            bet_fractional_intensity: None,
-            bet_smoothness: None,
-            bet_gradient_threshold: None,
-            bet_iterations: None,
-            bet_subdivisions: None,
-            qsm_reference: None,
-            tgv_alpha1: None,
-            tgv_alpha0: None,
-            mask_erosions: None,
-            rts_delta: None,
-            rts_mu: None,
-            rts_tol: None,
-            rts_rho: None,
-            rts_max_iter: None,
-            rts_lsmr_iter: None,
-            tv_lambda: None,
-            tv_rho: None,
-            tv_tol: None,
-            tv_max_iter: None,
-            tkd_threshold: None,
-            tsvd_threshold: None,
-            ilsqr_tol: None,
-            ilsqr_max_iter: None,
-            tikhonov_lambda: None,
-            nltv_lambda: None,
-            nltv_mu: None,
-            nltv_tol: None,
-            nltv_max_iter: None,
-            nltv_newton_iter: None,
-            medi_lambda: None,
-            medi_max_iter: None,
-            medi_cg_max_iter: None,
-            medi_cg_tol: None,
-            medi_tol: None,
-            medi_percentage: None,
-            medi_smv_radius: None,
-            medi_smv: false,
-            vsharp_threshold: None,
-            pdf_tol: None,
-            lbv_tol: None,
-            ismv_tol: None,
-            ismv_max_iter: None,
-            sharp_threshold: None,
-            sharp_radius_factor: None,
-            vsharp_max_radius_factor: None,
-            vsharp_min_radius_factor: None,
-            ismv_radius_factor: None,
-            no_romeo_phase_gradient_coherence: false,
-            no_romeo_mag_coherence: false,
-            no_romeo_mag_weight: false,
-            mcpc3ds_sigma: None,
-            tgv_iterations: None,
-            tgv_erosions: None,
-            qsmart_ilsqr_tol: None,
-            qsmart_ilsqr_max_iter: None,
-            qsmart_vasc_sphere_radius: None,
-            qsmart_sdf_spatial_radius: None,
-            n_procs: Some(1),
-            no_qsm: false,
-            do_swi: false,
-            do_t2starmap: false,
-            do_r2starmap: false,
-            inhomogeneity_correction: false,
-            no_inhomogeneity_correction: false,
-            obliquity_threshold: None,
-            swi_hp_sigma: None,
-            swi_scaling: None,
-            swi_strength: None,
-            swi_mip_window: None,
-            homogeneity_sigma_mm: None,
-            homogeneity_nbox: None,
-            linear_fit_reliability_threshold: None,
-            tgv_step_size: None,
-            tgv_tol: None,
-            mask_preset: None,
-            mask_sections_cli: Some(vec![
-                "phase-quality,threshold:otsu,dilate:1,erode:1".to_string(),
-            ]),
-            dry: false,
-            debug: false,
-            mem_limit_gb: None,
-            no_mem_limit: true,
-            force: false,
-            clean_intermediates: true,
-        }).unwrap();
+        let mut args = default_run_args(bids, out.clone());
+        args.qsm_algorithm = Some(QsmAlgorithmArg::Tkd);
+        args.unwrapping_algorithm = Some(UnwrapAlgorithmArg::Laplacian);
+        args.bf_algorithm = Some(BfAlgorithmArg::Vsharp);
+        args.dry = false;
+        args.no_mem_limit = true;
+        args.clean_intermediates = true;
+        args.mask_sections_cli = Some(vec!["phase-quality,threshold:otsu,dilate:1,erode:1".to_string()]);
+        super::run::execute(args).unwrap();
 
         assert!(out.join("derivatives/qsmxt.rs/sub-1/anat/sub-1_Chimap.nii").exists());
     }
@@ -1341,47 +637,12 @@ mod integration_tests {
         testutils::write_field(&input);
         testutils::write_mask(&mask);
 
-        super::invert::execute(InvertArgs {
-            input,
-            mask,
-            output: output.clone(),
-            algorithm: QsmAlgorithmArg::Rts,
-            b0_direction: vec![0.0, 0.0, 1.0],
-            rts_delta: 0.15,
-            rts_mu: 1e5,
-            rts_tol: 0.5, // loose tolerance for speed
-            rts_rho: 10.0,
-            rts_max_iter: 20,
-            rts_lsmr_iter: 4,
-            tv_lambda: 1e-3,
-            tv_rho: 0.02,
-            tv_tol: 1e-3,
-            tv_max_iter: 250,
-            tkd_threshold: 0.15,
-            tgv_iterations: 10,
-            tgv_erosions: 1,
-            ilsqr_tol: 0.01,
-            ilsqr_max_iter: 50,
-            tikhonov_lambda: 0.01,
-            nltv_lambda: 1e-4,
-            nltv_mu: 1e2,
-            nltv_tol: 1e-4,
-            nltv_max_iter: 100,
-            nltv_newton_iter: 5,
-            magnitude: None,
-            medi_lambda: 1000.0,
-            medi_merit: true,
-            medi_smv: true,
-            medi_smv_radius: 5.0,
-            medi_data_weighting: 1,
-            medi_percentage: 0.9,
-            medi_cg_tol: 0.01,
-            medi_cg_max_iter: 100,
-            medi_max_iter: 10,
-            medi_tol: 0.001,
-            field_strength: None,
-            echo_time: None,
-        }).unwrap();
+        super::invert::execute(InvertCommand::Rts(InvertRtsArgs {
+            common: common_invert(input, mask, output.clone()),
+            delta: None, mu: None,
+            tol: Some(0.5), // loose tolerance for speed
+            rho: None, max_iter: None, lsmr_iter: None,
+        })).unwrap();
         assert!(output.exists());
     }
 
@@ -1394,47 +655,10 @@ mod integration_tests {
         testutils::write_field(&input);
         testutils::write_mask(&mask);
 
-        super::invert::execute(InvertArgs {
-            input,
-            mask,
-            output: output.clone(),
-            algorithm: QsmAlgorithmArg::Tv,
-            b0_direction: vec![0.0, 0.0, 1.0],
-            rts_delta: 0.15,
-            rts_mu: 1e5,
-            rts_tol: 1e-4,
-            rts_rho: 10.0,
-            rts_max_iter: 20,
-            rts_lsmr_iter: 4,
-            tv_lambda: 1e-3,
-            tv_rho: 0.02,
-            tv_tol: 1e-3,
-            tv_max_iter: 250,
-            tkd_threshold: 0.15,
-            tgv_iterations: 10,
-            tgv_erosions: 1,
-            ilsqr_tol: 0.01,
-            ilsqr_max_iter: 50,
-            tikhonov_lambda: 0.01,
-            nltv_lambda: 1e-4,
-            nltv_mu: 1e2,
-            nltv_tol: 1e-4,
-            nltv_max_iter: 100,
-            nltv_newton_iter: 5,
-            magnitude: None,
-            medi_lambda: 1000.0,
-            medi_merit: true,
-            medi_smv: true,
-            medi_smv_radius: 5.0,
-            medi_data_weighting: 1,
-            medi_percentage: 0.9,
-            medi_cg_tol: 0.01,
-            medi_cg_max_iter: 100,
-            medi_max_iter: 10,
-            medi_tol: 0.001,
-            field_strength: None,
-            echo_time: None,
-        }).unwrap();
+        super::invert::execute(InvertCommand::Tv(InvertTvArgs {
+            common: common_invert(input, mask, output.clone()),
+            lambda: None, rho: None, tol: None, max_iter: None,
+        })).unwrap();
         assert!(output.exists());
     }
 
@@ -1447,47 +671,15 @@ mod integration_tests {
         testutils::write_field(&input);
         testutils::write_mask(&mask);
 
-        super::invert::execute(InvertArgs {
-            input,
-            mask,
-            output: output.clone(),
-            algorithm: QsmAlgorithmArg::Tgv,
-            b0_direction: vec![0.0, 0.0, 1.0],
-            rts_delta: 0.15,
-            rts_mu: 1e5,
-            rts_tol: 1e-4,
-            rts_rho: 10.0,
-            rts_max_iter: 20,
-            rts_lsmr_iter: 4,
-            tv_lambda: 1e-3,
-            tv_rho: 0.02,
-            tv_tol: 1e-3,
-            tv_max_iter: 250,
-            tkd_threshold: 0.15,
-            tgv_iterations: 5, // minimal for speed
-            tgv_erosions: 0, // 8×8×8 too small for erosion
-            ilsqr_tol: 0.01,
-            ilsqr_max_iter: 50,
-            tikhonov_lambda: 0.01,
-            nltv_lambda: 1e-4,
-            nltv_mu: 1e2,
-            nltv_tol: 1e-4,
-            nltv_max_iter: 100,
-            nltv_newton_iter: 5,
-            magnitude: None,
-            medi_lambda: 1000.0,
-            medi_merit: true,
-            medi_smv: true,
-            medi_smv_radius: 5.0,
-            medi_data_weighting: 1,
-            medi_percentage: 0.9,
-            medi_cg_tol: 0.01,
-            medi_cg_max_iter: 100,
-            medi_max_iter: 10,
-            medi_tol: 0.001,
-            field_strength: Some(3.0),
-            echo_time: Some(0.02),
-        }).unwrap();
+        super::invert::execute(InvertCommand::Tgv(InvertTgvArgs {
+            common: common_invert(input, mask, output.clone()),
+            field_strength: 3.0,
+            echo_time: 0.02,
+            iterations: Some(5),
+            erosions: Some(0),
+            alpha1: None, alpha0: None,
+            step_size: None, tol: None,
+        })).unwrap();
         assert!(output.exists());
     }
 
@@ -1506,12 +698,10 @@ mod integration_tests {
         testutils::write_mask(&mask);
 
         super::swi::execute(SwiArgs {
-            phase,
-            magnitude: mag,
-            mask,
+            phase, magnitude: mag, mask,
             output: output.clone(),
-            mip: true,
-            mip_output: Some(mip.clone()),
+            mip: true, mip_output: Some(mip.clone()),
+            swi_params: Default::default(),
         }).unwrap();
         assert!(output.exists());
         assert!(mip.exists());
@@ -1531,12 +721,9 @@ mod integration_tests {
         testutils::write_phase(&phase2);
 
         super::quality_map::execute(QualityMapArgs {
-            phase,
-            output: output.clone(),
-            magnitude: Some(mag),
-            phase2: Some(phase2),
-            te1: 0.004,
-            te2: 0.008,
+            phase, output: output.clone(),
+            magnitude: Some(mag), phase2: Some(phase2),
+            te1: 0.004, te2: 0.008,
         }).unwrap();
         assert!(output.exists());
     }
@@ -1552,14 +739,10 @@ mod integration_tests {
         testutils::write_field(&input);
         testutils::write_mask(&mask);
 
-        super::bgremove::execute(BgremoveArgs {
-            input,
-            mask,
-            output: output.clone(),
-            algorithm: BfAlgorithmArg::Lbv,
-            b0_direction: vec![0.0, 0.0, 1.0],
-            output_mask: None,
-        }).unwrap();
+        super::bgremove::execute(BgremoveCommand::Lbv(BgremoveLbvArgs {
+            common: common_bgremove(input, mask, output.clone()),
+            tol: None,
+        })).unwrap();
         assert!(output.exists());
     }
 
@@ -1572,14 +755,10 @@ mod integration_tests {
         testutils::write_field(&input);
         testutils::write_mask(&mask);
 
-        super::bgremove::execute(BgremoveArgs {
-            input,
-            mask,
-            output: output.clone(),
-            algorithm: BfAlgorithmArg::Ismv,
-            b0_direction: vec![0.0, 0.0, 1.0],
-            output_mask: None,
-        }).unwrap();
+        super::bgremove::execute(BgremoveCommand::Ismv(BgremoveIsmvArgs {
+            common: common_bgremove(input, mask, output.clone()),
+            tol: None, max_iter: None, radius_factor: None,
+        })).unwrap();
         assert!(output.exists());
     }
 
@@ -1599,9 +778,7 @@ mod integration_tests {
             partition: Some("gpu".to_string()),
             config: None,
             time: "01:00:00".to_string(),
-            mem: 16,
-            cpus_per_task: 2,
-            submit: false,
+            mem: 16, cpus_per_task: 2, submit: false,
         }).unwrap();
 
         assert!(out.join("derivatives/qsmxt.rs/slurm").exists());
@@ -1611,11 +788,8 @@ mod integration_tests {
     fn test_validate_multi_session() {
         let dir = tempfile::tempdir().unwrap();
         testutils::create_multi_session_bids(dir.path());
-
         super::validate::execute(ValidateArgs {
-            bids_dir: dir.path().to_path_buf(),
-            subjects: None,
-            sessions: None,
+            bids_dir: dir.path().to_path_buf(), subjects: None, sessions: None,
         }).unwrap();
     }
 }

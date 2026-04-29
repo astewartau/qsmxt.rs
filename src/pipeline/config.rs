@@ -655,7 +655,7 @@ impl PipelineConfig {
     pub fn apply_run_overrides(&mut self, args: &cli::RunArgs) {
         macro_rules! override_field {
             ($field:ident) => { if let Some(v) = args.$field { self.$field = v; } };
-            ($cli:ident => $config:ident) => { if let Some(v) = args.$cli { self.$config = v; } };
+            ($group:ident . $field:ident) => { if let Some(v) = args.$group.$field { self.$field = v; } };
         }
         if let Some(a) = args.qsm_algorithm {
             self.qsm_algorithm = match a {
@@ -700,59 +700,59 @@ impl PipelineConfig {
                 cli::QsmReferenceArg::None => QsmReference::None,
             };
         }
-        if let Some(v) = args.tgv_alpha1 {
+        if let Some(v) = args.tgv_params.tgv_alpha1 {
             self.tgv_alphas[0] = v;
         }
-        if let Some(v) = args.tgv_alpha0 {
+        if let Some(v) = args.tgv_params.tgv_alpha0 {
             self.tgv_alphas[1] = v;
         }
-        // Algorithm parameters
-        override_field!(rts_delta);
-        override_field!(rts_mu);
-        override_field!(rts_tol);
-        override_field!(rts_rho);
-        override_field!(rts_max_iter);
-        override_field!(rts_lsmr_iter);
-        override_field!(tv_lambda);
-        override_field!(tv_rho);
-        override_field!(tv_tol);
-        override_field!(tv_max_iter);
-        override_field!(tkd_threshold);
-        override_field!(tsvd_threshold);
-        override_field!(ilsqr_tol);
-        override_field!(ilsqr_max_iter);
-        override_field!(tikhonov_lambda);
-        override_field!(nltv_lambda);
-        override_field!(nltv_mu);
-        override_field!(nltv_tol);
-        override_field!(nltv_max_iter);
-        override_field!(nltv_newton_iter);
-        override_field!(medi_lambda);
-        override_field!(medi_max_iter);
-        override_field!(medi_cg_max_iter);
-        override_field!(medi_cg_tol);
-        override_field!(medi_tol);
-        override_field!(medi_percentage);
-        override_field!(medi_smv_radius);
-        if args.medi_smv { self.medi_smv = true; }
-        // Background removal parameters
-        override_field!(vsharp_threshold);
-        override_field!(pdf_tol);
-        override_field!(lbv_tol);
-        override_field!(ismv_tol);
-        override_field!(ismv_max_iter);
-        override_field!(sharp_threshold);
-        override_field!(sharp_radius_factor);
-        override_field!(vsharp_max_radius_factor);
-        override_field!(vsharp_min_radius_factor);
-        override_field!(ismv_radius_factor);
-        if args.no_romeo_phase_gradient_coherence {
+        // QSM inversion parameters (flattened groups)
+        override_field!(rts_params.rts_delta);
+        override_field!(rts_params.rts_mu);
+        override_field!(rts_params.rts_tol);
+        override_field!(rts_params.rts_rho);
+        override_field!(rts_params.rts_max_iter);
+        override_field!(rts_params.rts_lsmr_iter);
+        override_field!(tv_params.tv_lambda);
+        override_field!(tv_params.tv_rho);
+        override_field!(tv_params.tv_tol);
+        override_field!(tv_params.tv_max_iter);
+        override_field!(tkd_params.tkd_threshold);
+        override_field!(tsvd_params.tsvd_threshold);
+        override_field!(ilsqr_params.ilsqr_tol);
+        override_field!(ilsqr_params.ilsqr_max_iter);
+        override_field!(tikhonov_params.tikhonov_lambda);
+        override_field!(nltv_params.nltv_lambda);
+        override_field!(nltv_params.nltv_mu);
+        override_field!(nltv_params.nltv_tol);
+        override_field!(nltv_params.nltv_max_iter);
+        override_field!(nltv_params.nltv_newton_iter);
+        override_field!(medi_params.medi_lambda);
+        override_field!(medi_params.medi_max_iter);
+        override_field!(medi_params.medi_cg_max_iter);
+        override_field!(medi_params.medi_cg_tol);
+        override_field!(medi_params.medi_tol);
+        override_field!(medi_params.medi_percentage);
+        override_field!(medi_params.medi_smv_radius);
+        if args.medi_params.medi_smv { self.medi_smv = true; }
+        // Background removal parameters (flattened groups)
+        override_field!(vsharp_params.vsharp_threshold);
+        override_field!(pdf_params.pdf_tol);
+        override_field!(lbv_params.lbv_tol);
+        override_field!(ismv_params.ismv_tol);
+        override_field!(ismv_params.ismv_max_iter);
+        override_field!(sharp_params.sharp_threshold);
+        override_field!(sharp_params.sharp_radius_factor);
+        override_field!(vsharp_params.vsharp_max_radius_factor);
+        override_field!(vsharp_params.vsharp_min_radius_factor);
+        override_field!(ismv_params.ismv_radius_factor);
+        if args.romeo_params.no_romeo_phase_gradient_coherence {
             self.romeo_phase_gradient_coherence = false;
         }
-        if args.no_romeo_mag_coherence {
+        if args.romeo_params.no_romeo_mag_coherence {
             self.romeo_mag_coherence = false;
         }
-        if args.no_romeo_mag_weight {
+        if args.romeo_params.no_romeo_mag_weight {
             self.romeo_mag_weight = false;
         }
         if let Some(ref s) = args.mcpc3ds_sigma {
@@ -760,25 +760,25 @@ impl PipelineConfig {
                 self.mcpc3ds_sigma = [s[0], s[1], s[2]];
             }
         }
-        override_field!(tgv_iterations);
-        override_field!(tgv_erosions);
-        override_field!(qsmart_ilsqr_tol);
-        override_field!(qsmart_ilsqr_max_iter);
-        override_field!(qsmart_vasc_sphere_radius);
-        override_field!(qsmart_sdf_spatial_radius);
-        if let Some(ref s) = args.swi_hp_sigma {
+        override_field!(tgv_params.tgv_iterations);
+        override_field!(tgv_params.tgv_erosions);
+        override_field!(qsmart_params.qsmart_ilsqr_tol);
+        override_field!(qsmart_params.qsmart_ilsqr_max_iter);
+        override_field!(qsmart_params.qsmart_vasc_sphere_radius);
+        override_field!(qsmart_params.qsmart_sdf_spatial_radius);
+        if let Some(ref s) = args.swi_params.swi_hp_sigma {
             if s.len() == 3 { self.swi_hp_sigma = [s[0], s[1], s[2]]; }
         }
-        if let Some(ref v) = args.swi_scaling {
+        if let Some(ref v) = args.swi_params.swi_scaling {
             self.swi_scaling = v.clone();
         }
-        override_field!(swi_strength);
-        override_field!(swi_mip_window);
+        override_field!(swi_params.swi_strength);
+        override_field!(swi_params.swi_mip_window);
         override_field!(homogeneity_sigma_mm);
         override_field!(homogeneity_nbox);
         override_field!(linear_fit_reliability_threshold);
-        override_field!(tgv_step_size);
-        override_field!(tgv_tol);
+        override_field!(tgv_params.tgv_step_size);
+        override_field!(tgv_params.tgv_tol);
         if args.no_qsm {
             self.do_qsm = false;
         }
@@ -1032,58 +1032,29 @@ mod tests {
             bet_iterations: None,
             bet_subdivisions: None,
             qsm_reference: None,
-            tgv_alpha1: None,
-            tgv_alpha0: None,
             mask_erosions: None,
-            rts_delta: None,
-            rts_mu: None,
-            rts_tol: None,
-            rts_rho: None,
-            rts_max_iter: None,
-            rts_lsmr_iter: None,
-            tv_lambda: None,
-            tv_rho: None,
-            tv_tol: None,
-            tv_max_iter: None,
-            tkd_threshold: None,
-            tsvd_threshold: None,
-            ilsqr_tol: None,
-            ilsqr_max_iter: None,
-            tikhonov_lambda: None,
-            nltv_lambda: None,
-            nltv_mu: None,
-            nltv_tol: None,
-            nltv_max_iter: None,
-            nltv_newton_iter: None,
-            medi_lambda: None,
-            medi_max_iter: None,
-            medi_cg_max_iter: None,
-            medi_cg_tol: None,
-            medi_tol: None,
-            medi_percentage: None,
-            medi_smv_radius: None,
-            medi_smv: false,
-            vsharp_threshold: None,
-            pdf_tol: None,
-            lbv_tol: None,
-            ismv_tol: None,
-            ismv_max_iter: None,
-            sharp_threshold: None,
-            sharp_radius_factor: None,
-            vsharp_max_radius_factor: None,
-            vsharp_min_radius_factor: None,
-            ismv_radius_factor: None,
-            no_romeo_phase_gradient_coherence: false,
-            no_romeo_mag_coherence: false,
-            no_romeo_mag_weight: false,
+            rts_params: Default::default(),
+            tv_params: Default::default(),
+            tkd_params: Default::default(),
+            tsvd_params: Default::default(),
+            tgv_params: Default::default(),
+            tikhonov_params: Default::default(),
+            nltv_params: Default::default(),
+            medi_params: Default::default(),
+            ilsqr_params: Default::default(),
+            qsmart_params: Default::default(),
+            vsharp_params: Default::default(),
+            pdf_params: Default::default(),
+            lbv_params: Default::default(),
+            ismv_params: Default::default(),
+            sharp_params: Default::default(),
+            romeo_params: Default::default(),
+            swi_params: Default::default(),
             mcpc3ds_sigma: None,
-            tgv_iterations: None,
-            tgv_erosions: None,
-            qsmart_ilsqr_tol: None,
-            qsmart_ilsqr_max_iter: None,
-            qsmart_vasc_sphere_radius: None,
-            qsmart_sdf_spatial_radius: None,
             n_procs: None,
+            homogeneity_sigma_mm: None,
+            homogeneity_nbox: None,
+            linear_fit_reliability_threshold: None,
             no_qsm: false,
             do_swi: false,
             do_t2starmap: false,
@@ -1091,15 +1062,6 @@ mod tests {
             inhomogeneity_correction: false,
             no_inhomogeneity_correction: false,
             obliquity_threshold: None,
-            swi_hp_sigma: None,
-            swi_scaling: None,
-            swi_strength: None,
-            swi_mip_window: None,
-            homogeneity_sigma_mm: None,
-            homogeneity_nbox: None,
-            linear_fit_reliability_threshold: None,
-            tgv_step_size: None,
-            tgv_tol: None,
             mask_preset: None,
             mask_sections_cli: None,
             dry: false,
@@ -1355,12 +1317,12 @@ mod tests {
     fn test_apply_run_overrides_numeric_params() {
         let mut config = PipelineConfig::default();
         let mut args = default_run_args();
-        args.rts_mu = Some(2e5);
-        args.rts_tol = Some(1e-6);
-        args.tv_lambda = Some(0.01);
-        args.tkd_threshold = Some(0.2);
-        args.tgv_iterations = Some(500);
-        args.tgv_erosions = Some(5);
+        args.rts_params.rts_mu = Some(2e5);
+        args.rts_params.rts_tol = Some(1e-6);
+        args.tv_params.tv_lambda = Some(0.01);
+        args.tkd_params.tkd_threshold = Some(0.2);
+        args.tgv_params.tgv_iterations = Some(500);
+        args.tgv_params.tgv_erosions = Some(5);
         args.inhomogeneity_correction = true;
         args.obliquity_threshold = Some(10.0);
         config.apply_run_overrides(&args);

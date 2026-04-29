@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -23,16 +23,26 @@ pub enum Command {
     Validate(ValidateArgs),
     /// Generate SLURM job scripts for HPC execution
     Slurm(SlurmArgs),
-    /// Brain extraction (NIfTI in/out)
-    Bet(BetArgs),
-    /// Create a binary mask via thresholding (NIfTI in/out)
-    Mask(MaskArgs),
+    /// Masking operations (NIfTI in/out)
+    Mask {
+        #[command(subcommand)]
+        command: MaskCommand,
+    },
     /// Phase unwrapping (NIfTI in/out)
-    Unwrap(UnwrapArgs),
+    Unwrap {
+        #[command(subcommand)]
+        command: UnwrapCommand,
+    },
     /// Background field removal (NIfTI in/out)
-    Bgremove(BgremoveArgs),
+    Bgremove {
+        #[command(subcommand)]
+        command: BgremoveCommand,
+    },
     /// Dipole inversion (NIfTI in/out)
-    Invert(InvertArgs),
+    Invert {
+        #[command(subcommand)]
+        command: InvertCommand,
+    },
     /// Susceptibility-weighted imaging (NIfTI in/out)
     Swi(SwiArgs),
     /// R2* mapping from multi-echo magnitude data (NIfTI in/out)
@@ -43,19 +53,252 @@ pub enum Command {
     Homogeneity(HomogeneityArgs),
     /// Resample oblique volume to axial orientation (NIfTI in/out)
     Resample(ResampleArgs),
-    /// Dilate a binary mask (NIfTI in/out)
-    Dilate(DilateArgs),
-    /// Morphological closing on a binary mask (NIfTI in/out)
-    Close(CloseArgs),
-    /// Fill holes in a binary mask (NIfTI in/out)
-    FillHoles(FillHolesArgs),
-    /// Gaussian smooth a binary mask (NIfTI in/out)
-    SmoothMask(SmoothMaskArgs),
     /// Compute ROMEO phase quality map (NIfTI in/out)
     #[command(name = "quality-map")]
     QualityMap(QualityMapArgs),
     /// Launch interactive TUI for pipeline configuration
     Tui,
+}
+
+// ─── Shared algorithm parameter groups (prefixed, used by RunArgs) ───
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct RtsParamArgs {
+    /// RTS delta parameter
+    #[arg(long)]
+    pub rts_delta: Option<f64>,
+    /// RTS mu parameter
+    #[arg(long)]
+    pub rts_mu: Option<f64>,
+    /// RTS tolerance
+    #[arg(long)]
+    pub rts_tol: Option<f64>,
+    /// RTS rho (ADMM penalty)
+    #[arg(long)]
+    pub rts_rho: Option<f64>,
+    /// RTS max iterations
+    #[arg(long)]
+    pub rts_max_iter: Option<usize>,
+    /// RTS LSMR iterations
+    #[arg(long)]
+    pub rts_lsmr_iter: Option<usize>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct TvParamArgs {
+    /// TV lambda parameter
+    #[arg(long)]
+    pub tv_lambda: Option<f64>,
+    /// TV rho (ADMM penalty)
+    #[arg(long)]
+    pub tv_rho: Option<f64>,
+    /// TV tolerance
+    #[arg(long)]
+    pub tv_tol: Option<f64>,
+    /// TV max iterations
+    #[arg(long)]
+    pub tv_max_iter: Option<usize>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct TkdParamArgs {
+    /// TKD threshold
+    #[arg(long)]
+    pub tkd_threshold: Option<f64>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct TsvdParamArgs {
+    /// TSVD threshold
+    #[arg(long)]
+    pub tsvd_threshold: Option<f64>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct TgvParamArgs {
+    /// TGV iterations
+    #[arg(long)]
+    pub tgv_iterations: Option<usize>,
+    /// TGV erosions
+    #[arg(long)]
+    pub tgv_erosions: Option<usize>,
+    /// TGV alpha1 (first-order weight)
+    #[arg(long)]
+    pub tgv_alpha1: Option<f64>,
+    /// TGV alpha0 (second-order weight)
+    #[arg(long)]
+    pub tgv_alpha0: Option<f64>,
+    /// TGV primal step size multiplier
+    #[arg(long)]
+    pub tgv_step_size: Option<f64>,
+    /// TGV convergence tolerance
+    #[arg(long)]
+    pub tgv_tol: Option<f64>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct TikhonovParamArgs {
+    /// Tikhonov lambda
+    #[arg(long)]
+    pub tikhonov_lambda: Option<f64>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct NltvParamArgs {
+    /// NLTV lambda
+    #[arg(long)]
+    pub nltv_lambda: Option<f64>,
+    /// NLTV mu (penalty parameter)
+    #[arg(long)]
+    pub nltv_mu: Option<f64>,
+    /// NLTV tolerance
+    #[arg(long)]
+    pub nltv_tol: Option<f64>,
+    /// NLTV max iterations
+    #[arg(long)]
+    pub nltv_max_iter: Option<usize>,
+    /// NLTV Newton iterations
+    #[arg(long)]
+    pub nltv_newton_iter: Option<usize>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct MediParamArgs {
+    /// MEDI lambda
+    #[arg(long)]
+    pub medi_lambda: Option<f64>,
+    /// MEDI: enable MERIT weighting
+    #[arg(long)]
+    pub medi_merit: Option<bool>,
+    /// MEDI: enable SMV deconvolution
+    #[arg(long)]
+    pub medi_smv: bool,
+    /// MEDI SMV radius in mm
+    #[arg(long)]
+    pub medi_smv_radius: Option<f64>,
+    /// MEDI: data weighting mode (0=uniform, 1=SNR)
+    #[arg(long)]
+    pub medi_data_weighting: Option<i32>,
+    /// MEDI edge percentage (0.0-1.0)
+    #[arg(long)]
+    pub medi_percentage: Option<f64>,
+    /// MEDI CG tolerance
+    #[arg(long)]
+    pub medi_cg_tol: Option<f64>,
+    /// MEDI CG max iterations
+    #[arg(long)]
+    pub medi_cg_max_iter: Option<usize>,
+    /// MEDI max outer iterations
+    #[arg(long)]
+    pub medi_max_iter: Option<usize>,
+    /// MEDI outer tolerance
+    #[arg(long)]
+    pub medi_tol: Option<f64>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct IlsqrParamArgs {
+    /// iLSQR tolerance
+    #[arg(long)]
+    pub ilsqr_tol: Option<f64>,
+    /// iLSQR max iterations
+    #[arg(long)]
+    pub ilsqr_max_iter: Option<usize>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct QsmartParamArgs {
+    /// QSMART iLSQR tolerance
+    #[arg(long)]
+    pub qsmart_ilsqr_tol: Option<f64>,
+    /// QSMART iLSQR max iterations
+    #[arg(long)]
+    pub qsmart_ilsqr_max_iter: Option<usize>,
+    /// QSMART vasculature detection sphere radius
+    #[arg(long)]
+    pub qsmart_vasc_sphere_radius: Option<i32>,
+    /// QSMART SDF spatial radius
+    #[arg(long)]
+    pub qsmart_sdf_spatial_radius: Option<i32>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct VsharpParamArgs {
+    /// V-SHARP deconvolution threshold
+    #[arg(long)]
+    pub vsharp_threshold: Option<f64>,
+    /// V-SHARP max radius factor (multiplied by min voxel size)
+    #[arg(long)]
+    pub vsharp_max_radius_factor: Option<f64>,
+    /// V-SHARP min radius factor (multiplied by max voxel size)
+    #[arg(long)]
+    pub vsharp_min_radius_factor: Option<f64>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct PdfParamArgs {
+    /// PDF tolerance
+    #[arg(long)]
+    pub pdf_tol: Option<f64>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct LbvParamArgs {
+    /// LBV tolerance
+    #[arg(long)]
+    pub lbv_tol: Option<f64>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct IsmvParamArgs {
+    /// iSMV tolerance
+    #[arg(long)]
+    pub ismv_tol: Option<f64>,
+    /// iSMV max iterations
+    #[arg(long)]
+    pub ismv_max_iter: Option<usize>,
+    /// iSMV radius factor (multiplied by max voxel size)
+    #[arg(long)]
+    pub ismv_radius_factor: Option<f64>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct SharpParamArgs {
+    /// SHARP threshold
+    #[arg(long)]
+    pub sharp_threshold: Option<f64>,
+    /// SHARP radius factor (multiplied by min voxel size)
+    #[arg(long)]
+    pub sharp_radius_factor: Option<f64>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct RomeoParamArgs {
+    /// ROMEO: disable phase gradient coherence weights
+    #[arg(long)]
+    pub no_romeo_phase_gradient_coherence: bool,
+    /// ROMEO: disable magnitude coherence weights
+    #[arg(long)]
+    pub no_romeo_mag_coherence: bool,
+    /// ROMEO: disable magnitude weighting
+    #[arg(long)]
+    pub no_romeo_mag_weight: bool,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct SwiParamArgs {
+    /// SWI high-pass filter sigma (3 values, in voxels)
+    #[arg(long, num_args = 3)]
+    pub swi_hp_sigma: Option<Vec<f64>>,
+    /// SWI phase scaling type (tanh, negative-tanh, positive, negative, triangular)
+    #[arg(long)]
+    pub swi_scaling: Option<String>,
+    /// SWI phase scaling strength
+    #[arg(long)]
+    pub swi_strength: Option<f64>,
+    /// SWI MIP window size in slices
+    #[arg(long)]
+    pub swi_mip_window: Option<usize>,
 }
 
 // ─── Pipeline commands ───
@@ -72,7 +315,6 @@ pub struct RunArgs {
     #[arg(long)]
     pub config: Option<PathBuf>,
 
-    // Filters
     /// Process only these subjects (e.g., sub-01 sub-02)
     #[arg(long, num_args = 1..)]
     pub subjects: Option<Vec<String>>,
@@ -93,7 +335,6 @@ pub struct RunArgs {
     #[arg(long)]
     pub num_echoes: Option<usize>,
 
-    // Algorithm overrides
     /// QSM algorithm
     #[arg(long, value_enum)]
     pub qsm_algorithm: Option<QsmAlgorithmArg>,
@@ -114,7 +355,6 @@ pub struct RunArgs {
     #[arg(long, value_enum)]
     pub masking_input: Option<MaskInputArg>,
 
-    // Parameter overrides
     /// Combine multi-echo phase data
     #[arg(long)]
     pub combine_phase: Option<bool>,
@@ -143,230 +383,52 @@ pub struct RunArgs {
     #[arg(long, value_enum)]
     pub qsm_reference: Option<QsmReferenceArg>,
 
-    /// TGV alpha1 (first-order weight)
-    #[arg(long)]
-    pub tgv_alpha1: Option<f64>,
-
-    /// TGV alpha0 (second-order weight)
-    #[arg(long)]
-    pub tgv_alpha0: Option<f64>,
-
     /// Mask erosion iterations
     #[arg(long, num_args = 1..)]
     pub mask_erosions: Option<Vec<usize>>,
 
-    /// RTS delta parameter
-    #[arg(long)]
-    pub rts_delta: Option<f64>,
-
-    /// RTS mu parameter
-    #[arg(long)]
-    pub rts_mu: Option<f64>,
-
-    /// RTS tolerance
-    #[arg(long)]
-    pub rts_tol: Option<f64>,
-
-    /// RTS rho (ADMM penalty)
-    #[arg(long)]
-    pub rts_rho: Option<f64>,
-
-    /// RTS max iterations
-    #[arg(long)]
-    pub rts_max_iter: Option<usize>,
-
-    /// RTS LSMR iterations
-    #[arg(long)]
-    pub rts_lsmr_iter: Option<usize>,
-
-    /// TGV iterations
-    #[arg(long)]
-    pub tgv_iterations: Option<usize>,
-
-    /// TGV erosions
-    #[arg(long)]
-    pub tgv_erosions: Option<usize>,
-
-    /// TV lambda parameter
-    #[arg(long)]
-    pub tv_lambda: Option<f64>,
-
-    /// TV rho (ADMM penalty)
-    #[arg(long)]
-    pub tv_rho: Option<f64>,
-
-    /// TV tolerance
-    #[arg(long)]
-    pub tv_tol: Option<f64>,
-
-    /// TV max iterations
-    #[arg(long)]
-    pub tv_max_iter: Option<usize>,
-
-    /// TKD threshold
-    #[arg(long)]
-    pub tkd_threshold: Option<f64>,
-
-    /// TSVD threshold
-    #[arg(long)]
-    pub tsvd_threshold: Option<f64>,
-
-    /// iLSQR tolerance
-    #[arg(long)]
-    pub ilsqr_tol: Option<f64>,
-
-    /// iLSQR max iterations
-    #[arg(long)]
-    pub ilsqr_max_iter: Option<usize>,
-
-    /// Tikhonov lambda
-    #[arg(long)]
-    pub tikhonov_lambda: Option<f64>,
-
-    /// NLTV lambda
-    #[arg(long)]
-    pub nltv_lambda: Option<f64>,
-
-    /// NLTV mu (penalty parameter)
-    #[arg(long)]
-    pub nltv_mu: Option<f64>,
-
-    /// NLTV tolerance
-    #[arg(long)]
-    pub nltv_tol: Option<f64>,
-
-    /// NLTV max iterations
-    #[arg(long)]
-    pub nltv_max_iter: Option<usize>,
-
-    /// NLTV Newton iterations
-    #[arg(long)]
-    pub nltv_newton_iter: Option<usize>,
-
-    /// MEDI lambda
-    #[arg(long)]
-    pub medi_lambda: Option<f64>,
-
-    /// MEDI max outer iterations
-    #[arg(long)]
-    pub medi_max_iter: Option<usize>,
-
-    /// MEDI CG max iterations
-    #[arg(long)]
-    pub medi_cg_max_iter: Option<usize>,
-
-    /// MEDI CG tolerance
-    #[arg(long)]
-    pub medi_cg_tol: Option<f64>,
-
-    /// MEDI outer tolerance
-    #[arg(long)]
-    pub medi_tol: Option<f64>,
-
-    /// MEDI edge percentage (0.0-1.0)
-    #[arg(long)]
-    pub medi_percentage: Option<f64>,
-
-    /// MEDI SMV radius in mm
-    #[arg(long)]
-    pub medi_smv_radius: Option<f64>,
-
-    /// Enable MEDI SMV mode (MEDI handles background removal internally; skips BG removal step)
-    #[arg(long)]
-    pub medi_smv: bool,
-
-    /// V-SHARP deconvolution threshold
-    #[arg(long)]
-    pub vsharp_threshold: Option<f64>,
-
-    /// PDF tolerance
-    #[arg(long)]
-    pub pdf_tol: Option<f64>,
-
-    /// LBV tolerance
-    #[arg(long)]
-    pub lbv_tol: Option<f64>,
-
-    /// iSMV tolerance
-    #[arg(long)]
-    pub ismv_tol: Option<f64>,
-
-    /// iSMV max iterations
-    #[arg(long)]
-    pub ismv_max_iter: Option<usize>,
-
-    /// SHARP threshold
-    #[arg(long)]
-    pub sharp_threshold: Option<f64>,
-
-    /// SHARP radius factor (multiplied by min voxel size)
-    #[arg(long)]
-    pub sharp_radius_factor: Option<f64>,
-
-    /// V-SHARP max radius factor (multiplied by min voxel size)
-    #[arg(long)]
-    pub vsharp_max_radius_factor: Option<f64>,
-
-    /// V-SHARP min radius factor (multiplied by max voxel size)
-    #[arg(long)]
-    pub vsharp_min_radius_factor: Option<f64>,
-
-    /// iSMV radius factor (multiplied by max voxel size)
-    #[arg(long)]
-    pub ismv_radius_factor: Option<f64>,
-
-    /// ROMEO: disable phase gradient coherence weights
-    #[arg(long)]
-    pub no_romeo_phase_gradient_coherence: bool,
-
-    /// ROMEO: disable magnitude coherence weights
-    #[arg(long)]
-    pub no_romeo_mag_coherence: bool,
-
-    /// ROMEO: disable magnitude weighting
-    #[arg(long)]
-    pub no_romeo_mag_weight: bool,
+    #[command(flatten)]
+    pub rts_params: RtsParamArgs,
+    #[command(flatten)]
+    pub tv_params: TvParamArgs,
+    #[command(flatten)]
+    pub tkd_params: TkdParamArgs,
+    #[command(flatten)]
+    pub tsvd_params: TsvdParamArgs,
+    #[command(flatten)]
+    pub tgv_params: TgvParamArgs,
+    #[command(flatten)]
+    pub tikhonov_params: TikhonovParamArgs,
+    #[command(flatten)]
+    pub nltv_params: NltvParamArgs,
+    #[command(flatten)]
+    pub medi_params: MediParamArgs,
+    #[command(flatten)]
+    pub ilsqr_params: IlsqrParamArgs,
+    #[command(flatten)]
+    pub qsmart_params: QsmartParamArgs,
+    #[command(flatten)]
+    pub vsharp_params: VsharpParamArgs,
+    #[command(flatten)]
+    pub pdf_params: PdfParamArgs,
+    #[command(flatten)]
+    pub lbv_params: LbvParamArgs,
+    #[command(flatten)]
+    pub ismv_params: IsmvParamArgs,
+    #[command(flatten)]
+    pub sharp_params: SharpParamArgs,
+    #[command(flatten)]
+    pub romeo_params: RomeoParamArgs,
+    #[command(flatten)]
+    pub swi_params: SwiParamArgs,
 
     /// MCPC-3D-S smoothing sigma (3 values, in voxels)
     #[arg(long, num_args = 3)]
     pub mcpc3ds_sigma: Option<Vec<f64>>,
 
-    /// QSMART iLSQR tolerance
-    #[arg(long)]
-    pub qsmart_ilsqr_tol: Option<f64>,
-
-    /// QSMART iLSQR max iterations
-    #[arg(long)]
-    pub qsmart_ilsqr_max_iter: Option<usize>,
-
-    /// QSMART vasculature detection sphere radius
-    #[arg(long)]
-    pub qsmart_vasc_sphere_radius: Option<i32>,
-
-    /// QSMART SDF spatial radius
-    #[arg(long)]
-    pub qsmart_sdf_spatial_radius: Option<i32>,
-
-    // Execution
     /// Number of parallel threads
     #[arg(long)]
     pub n_procs: Option<usize>,
-
-    /// SWI high-pass filter sigma (3 values, in voxels)
-    #[arg(long, num_args = 3)]
-    pub swi_hp_sigma: Option<Vec<f64>>,
-
-    /// SWI phase scaling type (tanh, negative-tanh, positive, negative, triangular)
-    #[arg(long)]
-    pub swi_scaling: Option<String>,
-
-    /// SWI phase scaling strength
-    #[arg(long)]
-    pub swi_strength: Option<f64>,
-
-    /// SWI MIP window size in slices
-    #[arg(long)]
-    pub swi_mip_window: Option<usize>,
 
     /// Inhomogeneity correction smoothing sigma in mm
     #[arg(long)]
@@ -379,14 +441,6 @@ pub struct RunArgs {
     /// Linear fit reliability threshold percentile (degrees)
     #[arg(long)]
     pub linear_fit_reliability_threshold: Option<f64>,
-
-    /// TGV primal step size multiplier
-    #[arg(long)]
-    pub tgv_step_size: Option<f64>,
-
-    /// TGV convergence tolerance
-    #[arg(long)]
-    pub tgv_tol: Option<f64>,
 
     /// Skip QSM processing (only run supplementary outputs like SWI, T2*, R2*)
     #[arg(long)]
@@ -510,261 +564,476 @@ pub struct SlurmArgs {
     pub submit: bool,
 }
 
-// ─── Algorithm commands ───
+// ─── Standalone algorithm commands (subcommand-per-algorithm) ───
 
-#[derive(Parser, Debug)]
-pub struct BetArgs {
-    /// Input magnitude NIfTI file
-    pub input: PathBuf,
+// ── Mask ──
 
-    /// Output mask NIfTI file
-    #[arg(short, long)]
-    pub output: PathBuf,
-
-    /// Fractional intensity threshold (0.0-1.0, smaller = larger brain)
-    #[arg(long, default_value_t = 0.5)]
-    pub fractional_intensity: f64,
-
-    /// Surface smoothness factor
-    #[arg(long, default_value_t = 1.0)]
-    pub smoothness: f64,
-
-    /// Gradient threshold (-1 to 1)
-    #[arg(long, default_value_t = 0.0)]
-    pub gradient_threshold: f64,
-
-    /// Number of iterations
-    #[arg(long, default_value_t = 1000)]
-    pub iterations: usize,
-
-    /// Icosphere subdivision level
-    #[arg(long, default_value_t = 4)]
-    pub subdivisions: usize,
-}
-
-#[derive(Parser, Debug)]
-pub struct MaskArgs {
+#[derive(Args, Debug, Clone)]
+pub struct MaskCommonArgs {
     /// Input NIfTI file
     pub input: PathBuf,
-
     /// Output mask NIfTI file
     #[arg(short, long)]
     pub output: PathBuf,
+    /// Refinement operation (repeatable, applied in order).
+    /// Examples: erode:2, dilate:1, fill-holes:0, close:1, gaussian:4.0
+    #[arg(long = "op")]
+    pub ops: Vec<String>,
+}
 
-    /// Thresholding method
-    #[arg(long, value_enum, default_value = "otsu")]
-    pub method: ThresholdMethod,
-
-    /// Manual threshold value (for method=value)
-    #[arg(long)]
-    pub threshold: Option<f64>,
-
-    /// Number of mask erosion iterations
-    #[arg(long, default_value_t = 0)]
-    pub erosions: usize,
+#[derive(Subcommand, Debug)]
+pub enum MaskCommand {
+    /// Otsu automatic thresholding
+    Otsu(MaskOtsuArgs),
+    /// Fixed value thresholding
+    Value(MaskValueArgs),
+    /// Percentile thresholding
+    Percentile(MaskPercentileArgs),
+    /// Brain extraction (BET)
+    Bet(MaskBetArgs),
+    /// Robust threshold (Otsu + dilate:1 + fill-holes:0 + erode:2)
+    Robust(MaskRobustArgs),
+    /// Erode a binary mask
+    Erode(MaskErodeArgs),
+    /// Dilate a binary mask
+    Dilate(MaskDilateArgs),
+    /// Morphological closing on a binary mask
+    Close(MaskCloseArgs),
+    /// Fill holes in a binary mask
+    FillHoles(MaskFillHolesArgs),
+    /// Gaussian smooth a binary mask (re-thresholds at 0.5)
+    Smooth(MaskSmoothArgs),
 }
 
 #[derive(Parser, Debug)]
-pub struct UnwrapArgs {
+pub struct MaskOtsuArgs {
+    #[command(flatten)]
+    pub common: MaskCommonArgs,
+}
+
+#[derive(Parser, Debug)]
+pub struct MaskValueArgs {
+    #[command(flatten)]
+    pub common: MaskCommonArgs,
+    /// Threshold value
+    #[arg(long)]
+    pub threshold: f64,
+}
+
+#[derive(Parser, Debug)]
+pub struct MaskPercentileArgs {
+    #[command(flatten)]
+    pub common: MaskCommonArgs,
+    /// Percentile value (0-100)
+    #[arg(long)]
+    pub percentile: f64,
+}
+
+#[derive(Parser, Debug)]
+pub struct MaskBetArgs {
+    #[command(flatten)]
+    pub common: MaskCommonArgs,
+    /// Fractional intensity (0.0-1.0, smaller = larger brain)
+    #[arg(long, default_value_t = 0.5)]
+    pub fractional_intensity: f64,
+}
+
+#[derive(Parser, Debug)]
+pub struct MaskRobustArgs {
+    /// Input NIfTI file
+    pub input: PathBuf,
+    /// Output mask NIfTI file
+    #[arg(short, long)]
+    pub output: PathBuf,
+}
+
+// ── Unwrap ──
+
+#[derive(Args, Debug, Clone)]
+pub struct UnwrapCommonArgs {
     /// Input wrapped phase NIfTI file
     pub input: PathBuf,
-
     /// Binary mask NIfTI file
     #[arg(short, long)]
     pub mask: PathBuf,
-
     /// Output unwrapped phase NIfTI file
     #[arg(short, long)]
     pub output: PathBuf,
+}
 
-    /// Unwrapping algorithm
-    #[arg(long, value_enum, default_value = "laplacian")]
-    pub algorithm: UnwrapAlgorithmArg,
-
-    /// Magnitude image (recommended for ROMEO)
-    #[arg(long)]
-    pub magnitude: Option<PathBuf>,
+#[derive(Subcommand, Debug)]
+pub enum UnwrapCommand {
+    /// ROMEO region-growing unwrapping
+    Romeo(UnwrapRomeoArgs),
+    /// Laplacian-based unwrapping
+    Laplacian(UnwrapLaplacianArgs),
 }
 
 #[derive(Parser, Debug)]
-pub struct BgremoveArgs {
+pub struct UnwrapRomeoArgs {
+    #[command(flatten)]
+    pub common: UnwrapCommonArgs,
+    /// Magnitude image (improves quality)
+    #[arg(long)]
+    pub magnitude: Option<PathBuf>,
+    /// Disable phase gradient coherence weights
+    #[arg(long)]
+    pub no_phase_gradient_coherence: bool,
+    /// Disable magnitude coherence weights
+    #[arg(long)]
+    pub no_mag_coherence: bool,
+    /// Disable magnitude weighting
+    #[arg(long)]
+    pub no_mag_weight: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct UnwrapLaplacianArgs {
+    #[command(flatten)]
+    pub common: UnwrapCommonArgs,
+}
+
+// ── Bgremove ──
+
+#[derive(Args, Debug, Clone)]
+pub struct BgremoveCommonArgs {
     /// Input total field NIfTI file
     pub input: PathBuf,
-
     /// Binary mask NIfTI file
     #[arg(short, long)]
     pub mask: PathBuf,
-
     /// Output local field NIfTI file
     #[arg(short, long)]
     pub output: PathBuf,
-
-    /// Background removal algorithm
-    #[arg(long, value_enum, default_value = "vsharp")]
-    pub algorithm: BfAlgorithmArg,
-
     /// B0 direction (3 values)
     #[arg(long, num_args = 3, default_values_t = [0.0, 0.0, 1.0])]
     pub b0_direction: Vec<f64>,
-
     /// Output eroded mask (for algorithms that erode)
     #[arg(long)]
     pub output_mask: Option<PathBuf>,
 }
 
+#[derive(Subcommand, Debug)]
+pub enum BgremoveCommand {
+    /// Variable radius SHARP (V-SHARP)
+    Vsharp(BgremoveVsharpArgs),
+    /// Projection onto Dipole Fields
+    Pdf(BgremovePdfArgs),
+    /// Laplacian Boundary Value
+    Lbv(BgremoveLbvArgs),
+    /// Iterative Spherical Mean Value
+    Ismv(BgremoveIsmvArgs),
+    /// Spherical Harmonic Array Reconstruction Procedure
+    Sharp(BgremoveSharpArgs),
+}
+
 #[derive(Parser, Debug)]
-pub struct InvertArgs {
+pub struct BgremoveVsharpArgs {
+    #[command(flatten)]
+    pub common: BgremoveCommonArgs,
+    /// Deconvolution threshold
+    #[arg(long)]
+    pub threshold: Option<f64>,
+    /// Max radius factor (multiplied by min voxel size)
+    #[arg(long)]
+    pub max_radius_factor: Option<f64>,
+    /// Min radius factor (multiplied by max voxel size)
+    #[arg(long)]
+    pub min_radius_factor: Option<f64>,
+}
+
+#[derive(Parser, Debug)]
+pub struct BgremovePdfArgs {
+    #[command(flatten)]
+    pub common: BgremoveCommonArgs,
+    /// Tolerance
+    #[arg(long)]
+    pub tol: Option<f64>,
+}
+
+#[derive(Parser, Debug)]
+pub struct BgremoveLbvArgs {
+    #[command(flatten)]
+    pub common: BgremoveCommonArgs,
+    /// Tolerance
+    #[arg(long)]
+    pub tol: Option<f64>,
+}
+
+#[derive(Parser, Debug)]
+pub struct BgremoveIsmvArgs {
+    #[command(flatten)]
+    pub common: BgremoveCommonArgs,
+    /// Tolerance
+    #[arg(long)]
+    pub tol: Option<f64>,
+    /// Max iterations
+    #[arg(long)]
+    pub max_iter: Option<usize>,
+    /// Radius factor (multiplied by max voxel size)
+    #[arg(long)]
+    pub radius_factor: Option<f64>,
+}
+
+#[derive(Parser, Debug)]
+pub struct BgremoveSharpArgs {
+    #[command(flatten)]
+    pub common: BgremoveCommonArgs,
+    /// Threshold
+    #[arg(long)]
+    pub threshold: Option<f64>,
+    /// Radius factor (multiplied by min voxel size)
+    #[arg(long)]
+    pub radius_factor: Option<f64>,
+}
+
+// ── Invert ──
+
+#[derive(Args, Debug, Clone)]
+pub struct InvertCommonArgs {
     /// Input local field NIfTI file
     pub input: PathBuf,
-
     /// Binary mask NIfTI file
     #[arg(short, long)]
     pub mask: PathBuf,
-
     /// Output susceptibility map NIfTI file
     #[arg(short, long)]
     pub output: PathBuf,
-
-    /// Dipole inversion algorithm
-    #[arg(long, value_enum, default_value = "rts")]
-    pub algorithm: QsmAlgorithmArg,
-
     /// B0 direction (3 values)
     #[arg(long, num_args = 3, default_values_t = [0.0, 0.0, 1.0])]
     pub b0_direction: Vec<f64>,
+}
 
-    // RTS parameters
-    #[arg(long, default_value_t = 0.15)]
-    pub rts_delta: f64,
-    #[arg(long, default_value_t = 1e5)]
-    pub rts_mu: f64,
-    #[arg(long, default_value_t = 0.01)]
-    pub rts_tol: f64,
-    #[arg(long, default_value_t = 10.0)]
-    pub rts_rho: f64,
-    #[arg(long, default_value_t = 20)]
-    pub rts_max_iter: usize,
-    #[arg(long, default_value_t = 4)]
-    pub rts_lsmr_iter: usize,
+#[derive(Subcommand, Debug)]
+pub enum InvertCommand {
+    /// Regularized Total Strength (RTS)
+    Rts(InvertRtsArgs),
+    /// Total Variation (ADMM)
+    Tv(InvertTvArgs),
+    /// Truncated K-space Division
+    Tkd(InvertTkdArgs),
+    /// Truncated Singular Value Decomposition
+    Tsvd(InvertTsvdArgs),
+    /// Total Generalized Variation
+    Tgv(InvertTgvArgs),
+    /// Tikhonov regularization
+    Tikhonov(InvertTikhonovArgs),
+    /// Nonlocal Total Variation
+    Nltv(InvertNltvArgs),
+    /// Morphology Enabled Dipole Inversion
+    Medi(InvertMediArgs),
+    /// Iterative Least Squares QR
+    Ilsqr(InvertIlsqrArgs),
+}
 
-    // TV parameters
-    #[arg(long, default_value_t = 0.0002)]
-    pub tv_lambda: f64,
-    #[arg(long, default_value_t = 0.02)]
-    pub tv_rho: f64,
-    #[arg(long, default_value_t = 0.001)]
-    pub tv_tol: f64,
-    #[arg(long, default_value_t = 250)]
-    pub tv_max_iter: usize,
+#[derive(Parser, Debug)]
+pub struct InvertRtsArgs {
+    #[command(flatten)]
+    pub common: InvertCommonArgs,
+    /// Delta parameter
+    #[arg(long)]
+    pub delta: Option<f64>,
+    /// Mu parameter
+    #[arg(long)]
+    pub mu: Option<f64>,
+    /// Tolerance
+    #[arg(long)]
+    pub tol: Option<f64>,
+    /// Rho (ADMM penalty)
+    #[arg(long)]
+    pub rho: Option<f64>,
+    /// Max iterations
+    #[arg(long)]
+    pub max_iter: Option<usize>,
+    /// LSMR iterations
+    #[arg(long)]
+    pub lsmr_iter: Option<usize>,
+}
 
-    // TKD parameters
-    #[arg(long, default_value_t = 0.15)]
-    pub tkd_threshold: f64,
+#[derive(Parser, Debug)]
+pub struct InvertTvArgs {
+    #[command(flatten)]
+    pub common: InvertCommonArgs,
+    /// Lambda parameter
+    #[arg(long)]
+    pub lambda: Option<f64>,
+    /// Rho (ADMM penalty)
+    #[arg(long)]
+    pub rho: Option<f64>,
+    /// Tolerance
+    #[arg(long)]
+    pub tol: Option<f64>,
+    /// Max iterations
+    #[arg(long)]
+    pub max_iter: Option<usize>,
+}
 
-    // iLSQR parameters
-    #[arg(long, default_value_t = 0.01)]
-    pub ilsqr_tol: f64,
-    #[arg(long, default_value_t = 50)]
-    pub ilsqr_max_iter: usize,
+#[derive(Parser, Debug)]
+pub struct InvertTkdArgs {
+    #[command(flatten)]
+    pub common: InvertCommonArgs,
+    /// Threshold
+    #[arg(long)]
+    pub threshold: Option<f64>,
+}
 
-    // Tikhonov parameters
-    #[arg(long, default_value_t = 0.01)]
-    pub tikhonov_lambda: f64,
+#[derive(Parser, Debug)]
+pub struct InvertTsvdArgs {
+    #[command(flatten)]
+    pub common: InvertCommonArgs,
+    /// Threshold
+    #[arg(long)]
+    pub threshold: Option<f64>,
+}
 
-    // NLTV parameters
-    #[arg(long, default_value_t = 1e-4)]
-    pub nltv_lambda: f64,
-    #[arg(long, default_value_t = 1e2)]
-    pub nltv_mu: f64,
-    #[arg(long, default_value_t = 1e-4)]
-    pub nltv_tol: f64,
-    #[arg(long, default_value_t = 100)]
-    pub nltv_max_iter: usize,
-    #[arg(long, default_value_t = 5)]
-    pub nltv_newton_iter: usize,
+#[derive(Parser, Debug)]
+pub struct InvertTgvArgs {
+    #[command(flatten)]
+    pub common: InvertCommonArgs,
+    /// B0 field strength in Tesla
+    #[arg(long)]
+    pub field_strength: f64,
+    /// Echo time in seconds
+    #[arg(long)]
+    pub echo_time: f64,
+    /// Iterations
+    #[arg(long)]
+    pub iterations: Option<usize>,
+    /// Erosions
+    #[arg(long)]
+    pub erosions: Option<usize>,
+    /// Alpha1 (first-order weight)
+    #[arg(long)]
+    pub alpha1: Option<f64>,
+    /// Alpha0 (second-order weight)
+    #[arg(long)]
+    pub alpha0: Option<f64>,
+    /// Primal step size multiplier
+    #[arg(long)]
+    pub step_size: Option<f64>,
+    /// Convergence tolerance
+    #[arg(long)]
+    pub tol: Option<f64>,
+}
 
-    // MEDI parameters
-    /// Magnitude NIfTI file (recommended for MEDI)
+#[derive(Parser, Debug)]
+pub struct InvertTikhonovArgs {
+    #[command(flatten)]
+    pub common: InvertCommonArgs,
+    /// Lambda
+    #[arg(long)]
+    pub lambda: Option<f64>,
+}
+
+#[derive(Parser, Debug)]
+pub struct InvertNltvArgs {
+    #[command(flatten)]
+    pub common: InvertCommonArgs,
+    /// Lambda
+    #[arg(long)]
+    pub lambda: Option<f64>,
+    /// Mu (penalty parameter)
+    #[arg(long)]
+    pub mu: Option<f64>,
+    /// Tolerance
+    #[arg(long)]
+    pub tol: Option<f64>,
+    /// Max iterations
+    #[arg(long)]
+    pub max_iter: Option<usize>,
+    /// Newton iterations
+    #[arg(long)]
+    pub newton_iter: Option<usize>,
+}
+
+#[derive(Parser, Debug)]
+pub struct InvertMediArgs {
+    #[command(flatten)]
+    pub common: InvertCommonArgs,
+    /// Magnitude NIfTI file (recommended)
     #[arg(long)]
     pub magnitude: Option<PathBuf>,
-    #[arg(long, default_value_t = 1000.0)]
-    pub medi_lambda: f64,
-    /// MEDI: enable MERIT weighting
-    #[arg(long, default_value_t = true)]
-    pub medi_merit: bool,
-    /// MEDI: enable SMV deconvolution
-    #[arg(long, default_value_t = true)]
-    pub medi_smv: bool,
-    #[arg(long, default_value_t = 5.0)]
-    pub medi_smv_radius: f64,
-    /// MEDI: data weighting mode (0=uniform, 1=SNR)
-    #[arg(long, default_value_t = 1)]
-    pub medi_data_weighting: i32,
-    #[arg(long, default_value_t = 0.9)]
-    pub medi_percentage: f64,
-    #[arg(long, default_value_t = 0.01)]
-    pub medi_cg_tol: f64,
-    #[arg(long, default_value_t = 100)]
-    pub medi_cg_max_iter: usize,
-    #[arg(long, default_value_t = 10)]
-    pub medi_max_iter: usize,
-    #[arg(long, default_value_t = 0.001)]
-    pub medi_tol: f64,
-
-    // TGV parameters
-    #[arg(long, default_value_t = 1000)]
-    pub tgv_iterations: usize,
-    #[arg(long, default_value_t = 3)]
-    pub tgv_erosions: usize,
-
-    /// B0 field strength in Tesla (required for TGV)
+    /// Lambda
     #[arg(long)]
-    pub field_strength: Option<f64>,
-
-    /// Echo time in seconds (required for TGV)
+    pub lambda: Option<f64>,
+    /// Enable MERIT weighting
     #[arg(long)]
-    pub echo_time: Option<f64>,
+    pub merit: Option<bool>,
+    /// Enable SMV deconvolution
+    #[arg(long)]
+    pub smv: bool,
+    /// SMV radius in mm
+    #[arg(long)]
+    pub smv_radius: Option<f64>,
+    /// Data weighting mode (0=uniform, 1=SNR)
+    #[arg(long)]
+    pub data_weighting: Option<i32>,
+    /// Edge percentage (0.0-1.0)
+    #[arg(long)]
+    pub percentage: Option<f64>,
+    /// CG tolerance
+    #[arg(long)]
+    pub cg_tol: Option<f64>,
+    /// CG max iterations
+    #[arg(long)]
+    pub cg_max_iter: Option<usize>,
+    /// Max outer iterations
+    #[arg(long)]
+    pub max_iter: Option<usize>,
+    /// Outer tolerance
+    #[arg(long)]
+    pub tol: Option<f64>,
 }
+
+#[derive(Parser, Debug)]
+pub struct InvertIlsqrArgs {
+    #[command(flatten)]
+    pub common: InvertCommonArgs,
+    /// Tolerance
+    #[arg(long)]
+    pub tol: Option<f64>,
+    /// Max iterations
+    #[arg(long)]
+    pub max_iter: Option<usize>,
+}
+
+// ── SWI ──
 
 #[derive(Parser, Debug)]
 pub struct SwiArgs {
     /// Input phase NIfTI file
     pub phase: PathBuf,
-
     /// Input magnitude NIfTI file
     pub magnitude: PathBuf,
-
     /// Binary mask NIfTI file
     #[arg(short, long)]
     pub mask: PathBuf,
-
     /// Output SWI NIfTI file
     #[arg(short, long)]
     pub output: PathBuf,
-
     /// Also compute minimum intensity projection
     #[arg(long)]
     pub mip: bool,
-
     /// Output path for MIP
     #[arg(long)]
     pub mip_output: Option<PathBuf>,
+    #[command(flatten)]
+    pub swi_params: SwiParamArgs,
 }
+
+// ── Other simple commands ──
 
 #[derive(Parser, Debug)]
 pub struct R2starArgs {
     /// Input multi-echo magnitude NIfTI files (3+ echoes required)
     #[arg(required = true, num_args = 3..)]
     pub inputs: Vec<PathBuf>,
-
     /// Binary mask NIfTI file
     #[arg(short, long)]
     pub mask: PathBuf,
-
     /// Output R2* map NIfTI file
     #[arg(short, long)]
     pub output: PathBuf,
-
     /// Echo times in seconds (must match number of inputs)
     #[arg(long, required = true, num_args = 3..)]
     pub echo_times: Vec<f64>,
@@ -775,15 +1044,12 @@ pub struct T2starArgs {
     /// Input multi-echo magnitude NIfTI files (3+ echoes required)
     #[arg(required = true, num_args = 3..)]
     pub inputs: Vec<PathBuf>,
-
     /// Binary mask NIfTI file
     #[arg(short, long)]
     pub mask: PathBuf,
-
     /// Output T2* map NIfTI file
     #[arg(short, long)]
     pub output: PathBuf,
-
     /// Echo times in seconds (must match number of inputs)
     #[arg(long, required = true, num_args = 3..)]
     pub echo_times: Vec<f64>,
@@ -793,71 +1059,72 @@ pub struct T2starArgs {
 pub struct HomogeneityArgs {
     /// Input magnitude NIfTI file
     pub input: PathBuf,
-
     /// Output corrected magnitude NIfTI file
     #[arg(short, long)]
     pub output: PathBuf,
-
     /// Smoothing sigma in mm (default: 7.0)
     #[arg(long, default_value_t = 7.0)]
     pub sigma: f64,
-
     /// Number of box filter passes for Gaussian approximation (default: 3)
     #[arg(long, default_value_t = 3)]
     pub nbox: usize,
 }
 
 #[derive(Parser, Debug)]
-pub struct DilateArgs {
+pub struct MaskErodeArgs {
     /// Input binary mask NIfTI file
     pub input: PathBuf,
+    /// Output eroded mask NIfTI file
+    #[arg(short, long)]
+    pub output: PathBuf,
+    /// Number of erosion iterations
+    #[arg(long, default_value_t = 1)]
+    pub iterations: usize,
+}
 
+#[derive(Parser, Debug)]
+pub struct MaskDilateArgs {
+    /// Input binary mask NIfTI file
+    pub input: PathBuf,
     /// Output dilated mask NIfTI file
     #[arg(short, long)]
     pub output: PathBuf,
-
     /// Number of dilation iterations
     #[arg(long, default_value_t = 1)]
     pub iterations: usize,
 }
 
 #[derive(Parser, Debug)]
-pub struct CloseArgs {
+pub struct MaskCloseArgs {
     /// Input binary mask NIfTI file
     pub input: PathBuf,
-
     /// Output closed mask NIfTI file
     #[arg(short, long)]
     pub output: PathBuf,
-
     /// Closing radius
     #[arg(long, default_value_t = 1)]
     pub radius: usize,
 }
 
 #[derive(Parser, Debug)]
-pub struct FillHolesArgs {
+pub struct MaskFillHolesArgs {
     /// Input binary mask NIfTI file
     pub input: PathBuf,
-
     /// Output filled mask NIfTI file
     #[arg(short, long)]
     pub output: PathBuf,
-
     /// Maximum hole size in voxels
     #[arg(long, default_value_t = 1000)]
     pub max_size: usize,
 }
 
 #[derive(Parser, Debug)]
-pub struct SmoothMaskArgs {
+pub struct MaskSmoothArgs {
     /// Input binary mask NIfTI file
     pub input: PathBuf,
-
     /// Output smoothed mask NIfTI file
     #[arg(short, long)]
     pub output: PathBuf,
-
     /// Gaussian sigma in mm
     #[arg(long, default_value_t = 4.0)]
     pub sigma: f64,
@@ -867,7 +1134,6 @@ pub struct SmoothMaskArgs {
 pub struct ResampleArgs {
     /// Input NIfTI file
     pub input: PathBuf,
-
     /// Output resampled NIfTI file
     #[arg(short, long)]
     pub output: PathBuf,
@@ -877,87 +1143,56 @@ pub struct ResampleArgs {
 pub struct QualityMapArgs {
     /// Input phase NIfTI file (first echo)
     pub phase: PathBuf,
-
     /// Output quality map NIfTI file
     #[arg(short, long)]
     pub output: PathBuf,
-
     /// Magnitude image (improves quality estimation)
     #[arg(long)]
     pub magnitude: Option<PathBuf>,
-
     /// Second echo phase image (improves quality estimation)
     #[arg(long)]
     pub phase2: Option<PathBuf>,
-
     /// Echo time of first phase in seconds
     #[arg(long, default_value_t = 0.02)]
     pub te1: f64,
-
     /// Echo time of second phase in seconds (if --phase2 provided)
     #[arg(long, default_value_t = 0.04)]
     pub te2: f64,
 }
 
-// ─── Shared enums ───
+// ─── Shared enums (used by RunArgs) ───
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum QsmAlgorithmArg {
-    Rts,
-    Tv,
-    Tkd,
-    Tsvd,
-    Tgv,
-    Tikhonov,
-    Nltv,
-    Medi,
-    Ilsqr,
-    Qsmart,
+    Rts, Tv, Tkd, Tsvd, Tgv, Tikhonov, Nltv, Medi, Ilsqr, Qsmart,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum UnwrapAlgorithmArg {
-    Romeo,
-    Laplacian,
+    Romeo, Laplacian,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum BfAlgorithmArg {
-    Vsharp,
-    Pdf,
-    Lbv,
-    Ismv,
-    Sharp,
+    Vsharp, Pdf, Lbv, Ismv, Sharp,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum MaskAlgorithmArg {
-    Bet,
-    Threshold,
+    Bet, Threshold,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum MaskInputArg {
-    MagnitudeFirst,
-    Magnitude,
-    MagnitudeLast,
-    PhaseQuality,
+    MagnitudeFirst, Magnitude, MagnitudeLast, PhaseQuality,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum QsmReferenceArg {
-    Mean,
-    None,
+    Mean, None,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum MaskPresetArg {
-    RobustThreshold,
-    Bet,
-}
-
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
-pub enum ThresholdMethod {
-    Otsu,
-    Value,
+    RobustThreshold, Bet,
 }
