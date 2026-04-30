@@ -70,8 +70,9 @@ qsmxt run /path/to/bids /path/to/output
 # Dry run to preview what will be processed
 qsmxt run /path/to/bids --dry
 
-# Filter to specific subjects
-qsmxt run /path/to/bids --subjects sub-01 sub-02
+# Filter runs by pattern
+qsmxt run /path/to/bids --include "sub-01*" "sub-02*"
+qsmxt run /path/to/bids --exclude "*mygrea*"
 
 # Launch the interactive TUI
 qsmxt tui
@@ -102,7 +103,7 @@ Launch with `qsmxt tui`. The TUI provides four tabs:
 
 | Tab | Description |
 |-----|-------------|
-| **1: Input** | Set BIDS directory, output directory (optional), config file; browse and filter subjects/sessions/runs |
+| **1: Input** | Set BIDS directory, output directory (optional), config file; include/exclude patterns; browse and toggle runs |
 | **2: Pipeline** | Configure masking, unwrapping, background removal, inversion, and all algorithm parameters |
 | **3: Supplementary** | Toggle SWI, T2\*/R2\* maps, configure SWI parameters |
 | **4: Execution** | Switch between Local and SLURM mode; configure execution settings |
@@ -121,6 +122,7 @@ The Execution tab switches between **Local** mode (dry run, debug, thread count)
 | `R` | Reset all fields on current tab |
 | `d` | Delete mask refinement step |
 | `Ctrl+↑`/`Ctrl+↓` | Reorder mask steps |
+| `Ctrl/Alt+Backspace` | Delete whole word in text fields |
 | `F5` | Run pipeline |
 | `q` / `Esc` | Quit |
 
@@ -128,7 +130,7 @@ The Execution tab switches between **Local** mode (dry run, debug, thread count)
 
 The Pipeline tab includes an interactive mask editor with:
 
-- **Presets**: Robust threshold, BET, Simple threshold, or Custom
+- **Presets**: Robust threshold or BET (custom is auto-set when editing sections directly)
 - **Per-section structure**: Input source → Generator (threshold/BET) → Refinement steps
 - **Multiple sections**: Add masks that are OR'd (combined) together
 - **Refinement steps**: erode, dilate, close, fill-holes, gaussian -- add, delete, and reorder
@@ -146,18 +148,18 @@ The output directory is optional -- if omitted, outputs go to `<BIDS_DIR>/deriva
 ### Filtering
 
 ```
---subjects <SUB>...         Process only these subjects
---sessions <SES>...         Process only these sessions
---acquisitions <ACQ>...     Process only these acquisitions
---runs <RUN>...             Process only these runs
---num-echoes <N>            Limit number of echoes
+--include <PATTERN>...     Include only runs matching these glob patterns (e.g. "sub-1*" "*ses-pre*")
+--exclude <PATTERN>...     Exclude runs matching these glob patterns (e.g. "*mygrea*")
+--num-echoes <N>           Limit number of echoes
 ```
+
+Patterns are matched against run key strings (e.g. `sub-01_ses-pre_acq-gre_run-1_MEGRE`). Both `--include` and `--exclude` can be combined.
 
 ### Algorithm selection
 
 ```
 --qsm-algorithm <ALGO>     rts, tv, tkd, tsvd, tgv, tikhonov, nltv, medi, ilsqr, qsmart
---unwrapping-algorithm <A>  romeo, laplacian (default)
+--unwrapping-algorithm <A>  romeo (default), laplacian
 --bf-algorithm <ALGO>       vsharp (default), pdf, lbv, ismv, sharp
 --qsm-reference <REF>      mean (default), none
 --combine-phase <BOOL>      true (MCPC-3D-S, default), false (linear fit)
@@ -174,13 +176,13 @@ Format: `<input>,<generator>,<refinement1>,<refinement2>,...`
 
 ```sh
 # Single robust threshold mask (default)
---mask phase-quality,threshold:otsu,dilate:2,fill-holes:0,erode:2
+--mask phase-quality,threshold:otsu,dilate:1,fill-holes:0,erode:1
 
 # BET mask
 --mask magnitude,bet:0.5,erode:2
 
 # Two masks combined (OR'd)
---mask phase-quality,threshold:otsu,dilate:2,erode:2 \
+--mask phase-quality,threshold:otsu,dilate:1,erode:1 \
 --mask magnitude,bet:0.5
 ```
 
@@ -226,29 +228,43 @@ Each algorithm has configurable parameters exposed as CLI flags (e.g. `--rts-del
 
 ## Standalone commands
 
-Each command operates on individual NIfTI files:
+Each processing step uses algorithm subcommands. Run `qsmxt <command> --help` to see available algorithms, and `qsmxt <command> <algorithm> --help` for algorithm-specific parameters.
 
-| Command       | Description |
-|---------------|-------------|
-| `bet`         | Brain extraction |
-| `mask`        | Binary mask creation (Otsu or manual threshold) |
-| `unwrap`      | Phase unwrapping (ROMEO, Laplacian) |
-| `bgremove`    | Background field removal (V-SHARP, PDF, LBV, iSMV, SHARP) |
-| `invert`      | Dipole inversion (RTS, TV, TKD, TSVD, TGV, Tikhonov, NLTV, MEDI, iLSQR) |
+| Command       | Subcommands / Description |
+|---------------|---------------------------|
+| `mask`        | `otsu`, `value`, `percentile`, `bet`, `robust` — mask generation with optional `--op` refinement chains. Also: `erode`, `dilate`, `close`, `fill-holes`, `smooth` for standalone mask operations. |
+| `unwrap`      | `romeo`, `laplacian` — phase unwrapping |
+| `bgremove`    | `vsharp`, `pdf`, `lbv`, `ismv`, `sharp` — background field removal |
+| `invert`      | `rts`, `tv`, `tkd`, `tsvd`, `tgv`, `tikhonov`, `nltv`, `medi`, `ilsqr` — dipole inversion |
 | `swi`         | Susceptibility-weighted imaging with optional MIP |
 | `r2star`      | R2\* mapping from multi-echo magnitude (ARLO) |
 | `t2star`      | T2\* mapping from multi-echo magnitude |
 | `homogeneity` | Inhomogeneity correction on magnitude data |
 | `resample`    | Resample oblique volume to axial orientation |
-| `dilate`      | Dilate a binary mask |
-| `close`       | Morphological closing on a binary mask |
-| `fill-holes`  | Fill holes in a binary mask |
-| `smooth-mask` | Gaussian smooth a binary mask |
 | `quality-map` | Compute ROMEO phase quality map |
+
+Examples:
+
+```sh
+# Create a robust mask with refinement ops
+qsmxt mask robust input.nii -o mask.nii
+
+# Create a mask with custom refinement chain
+qsmxt mask otsu input.nii -o mask.nii --op dilate:2 --op fill-holes:0 --op erode:1
+
+# Unwrap phase with ROMEO
+qsmxt unwrap romeo phase.nii -m mask.nii -o unwrapped.nii --magnitude mag.nii
+
+# Background removal with V-SHARP
+qsmxt bgremove vsharp field.nii -m mask.nii -o local.nii --threshold 0.02
+
+# Dipole inversion with TKD
+qsmxt invert tkd local.nii -m mask.nii -o chi.nii --threshold 0.15
+```
 
 ## SLURM / HPC
 
-Generate per-subject job scripts for cluster execution:
+Generate per-run job scripts for cluster execution:
 
 ```sh
 qsmxt slurm /path/to/bids \
