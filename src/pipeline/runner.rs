@@ -37,7 +37,7 @@ impl StageContext<'_> {
 }
 
 /// Global multi-progress for coordinating parallel progress bars.
-static MULTI_PROGRESS: std::sync::LazyLock<MultiProgress> =
+pub static MULTI_PROGRESS: std::sync::LazyLock<MultiProgress> =
     std::sync::LazyLock::new(MultiProgress::new);
 
 /// Create an indicatif progress bar for iterative algorithms.
@@ -45,7 +45,7 @@ fn create_progress_bar(label: &str, total: u64) -> ProgressBar {
     let pb = MULTI_PROGRESS.add(ProgressBar::new(total));
     pb.set_style(
         ProgressStyle::with_template(&format!(
-            "  {{spinner:.green}} {} [{{bar:30.cyan/dim}}] {{pos}}/{{len}} ({{percent}}%) | {{elapsed_precise}} elapsed | RSS: {{msg}}",
+            "  {{spinner:.green}} {} [{{bar:30.cyan/dim}}] {{pos}}/{{len}} ({{percent}}%) | {{elapsed_precise}} elapsed | Mem: {{msg}}",
             label
         ))
         .unwrap()
@@ -65,18 +65,23 @@ fn iter_progress_bar(run_key: &str, step_name: &str) -> (Box<dyn FnMut(usize, us
         if pb_ref.is_none() && total > 0 {
             *pb_ref = Some(create_progress_bar(&name, total as u64));
         }
+        let finished = current == total;
         if let Some(ref bar) = *pb_ref {
             bar.set_position(current as u64);
             // Update memory info occasionally (reading /proc is cheap but not free)
-            if current == 1 || current == total || current.is_multiple_of(10) {
+            if current == 1 || finished || current.is_multiple_of(10) {
                 let rss = memory::process_rss_bytes();
                 if rss > 0 {
                     bar.set_message(memory::format_bytes(rss));
                 }
             }
-            if current == total {
+            if finished {
                 bar.finish_and_clear();
             }
+        }
+        // Drop the bar after finishing so MultiProgress reclaims the slot
+        if finished {
+            *pb_ref = None;
         }
     });
     (cb, None)
@@ -89,7 +94,7 @@ fn log_step_done(step_name: &str, start: Instant) {
     let rss = memory::process_rss_bytes();
     if rss > 0 {
         log::info!(
-            "{} complete ({:.1}s, RSS: {})",
+            "{} complete ({:.1}s, Mem: {})",
             step_name, secs, memory::format_bytes(rss),
         );
     } else {
@@ -254,7 +259,7 @@ fn stage_scale_phase(ctx: &mut StageContext, progress: &dyn Fn(&str)) -> crate::
         return Ok(());
     }
     let t = Instant::now();
-    progress("Scaling phase");
+    progress("Rescaling phase to radians");
     let mut phase_paths = Vec::new();
     for (i, echo) in ctx.run.echoes.iter().enumerate() {
         let mut phase_nifti = nifti_io::read_nifti_file(&echo.phase_nifti)
@@ -269,7 +274,6 @@ fn stage_scale_phase(ctx: &mut StageContext, progress: &dyn Fn(&str)) -> crate::
     // (needed by MCPC-3D-S, linear fit, ROMEO)
     let mut mag_paths = Vec::new();
     if ctx.run.has_magnitude {
-        progress("Saving magnitude intermediates");
         for (i, echo) in ctx.run.echoes.iter().enumerate() {
             if let Some(ref mag_path) = echo.magnitude_nifti {
                 let out_path = ctx.output.mag_path(&ctx.run.key, i + 1);
@@ -285,7 +289,7 @@ fn stage_scale_phase(ctx: &mut StageContext, progress: &dyn Fn(&str)) -> crate::
     let mut all_paths = phase_paths;
     all_paths.extend(mag_paths);
     ctx.mark_done("scale_phase", all_paths)?;
-    log_step_done("Scale phase", t);
+    log_step_done("Rescale phase", t);
     Ok(())
 }
 
@@ -648,14 +652,16 @@ fn stage_tgv(
             if pb_ref.is_none() && total > 0 {
                 *pb_ref = Some(create_progress_bar(&format!("{} TGV", ctx.run.key), total as u64));
             }
+            let finished = current == total;
             if let Some(ref bar) = *pb_ref {
                 bar.set_position(current as u64);
-                if current == 1 || current == total || current.is_multiple_of(10) {
+                if current == 1 || finished || current.is_multiple_of(10) {
                     let rss = memory::process_rss_bytes();
                     if rss > 0 { bar.set_message(memory::format_bytes(rss)); }
                 }
-                if current == total { bar.finish_and_clear(); }
+                if finished { bar.finish_and_clear(); }
             }
+            if finished { *pb_ref = None; }
         },
     );
     let chi: Vec<f64> = chi_f32.iter().map(|&v| v as f64).collect();
@@ -705,14 +711,16 @@ fn stage_qsmart(
         |current: usize, total: usize| {
             let mut pb_ref = vasc_pb.borrow_mut();
             if pb_ref.is_none() && total > 0 { *pb_ref = Some(create_progress_bar(&format!("{} Vasculature", ctx.run.key), total as u64)); }
+            let finished = current == total;
             if let Some(ref bar) = *pb_ref {
                 bar.set_position(current as u64);
-                if current == 1 || current == total || current.is_multiple_of(10) {
+                if current == 1 || finished || current.is_multiple_of(10) {
                     let rss = memory::process_rss_bytes();
                     if rss > 0 { bar.set_message(memory::format_bytes(rss)); }
                 }
-                if current == total { bar.finish_and_clear(); }
+                if finished { bar.finish_and_clear(); }
             }
+            if finished { *pb_ref = None; }
         },
     );
     drop(magnitude);
@@ -733,14 +741,16 @@ fn stage_qsmart(
         |current: usize, total: usize| {
             let mut pb_ref = sdf1_pb.borrow_mut();
             if pb_ref.is_none() && total > 0 { *pb_ref = Some(create_progress_bar(&format!("{} SDF-1", ctx.run.key), total as u64)); }
+            let finished = current == total;
             if let Some(ref bar) = *pb_ref {
                 bar.set_position(current as u64);
-                if current == 1 || current == total || current.is_multiple_of(10) {
+                if current == 1 || finished || current.is_multiple_of(10) {
                     let rss = memory::process_rss_bytes();
                     if rss > 0 { bar.set_message(memory::format_bytes(rss)); }
                 }
-                if current == total { bar.finish_and_clear(); }
+                if finished { bar.finish_and_clear(); }
             }
+            if finished { *pb_ref = None; }
         },
     );
 
@@ -765,14 +775,16 @@ fn stage_qsmart(
         |current: usize, total: usize| {
             let mut pb_ref = sdf2_pb.borrow_mut();
             if pb_ref.is_none() && total > 0 { *pb_ref = Some(create_progress_bar(&format!("{} SDF-2", ctx.run.key), total as u64)); }
+            let finished = current == total;
             if let Some(ref bar) = *pb_ref {
                 bar.set_position(current as u64);
-                if current == 1 || current == total || current.is_multiple_of(10) {
+                if current == 1 || finished || current.is_multiple_of(10) {
                     let rss = memory::process_rss_bytes();
                     if rss > 0 { bar.set_message(memory::format_bytes(rss)); }
                 }
-                if current == total { bar.finish_and_clear(); }
+                if finished { bar.finish_and_clear(); }
             }
+            if finished { *pb_ref = None; }
         },
     );
 

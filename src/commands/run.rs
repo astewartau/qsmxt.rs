@@ -134,7 +134,7 @@ pub fn execute(args: RunArgs) -> crate::Result<()> {
     env_logger::Builder::new()
         .filter_level(log_level)
         .format_timestamp(None)
-        .format(move |buf, record| {
+        .format(move |_buf, record| {
             use env_logger::fmt::style::{AnsiColor, Style};
             let level = record.level();
             let style = match level {
@@ -144,9 +144,10 @@ pub fn execute(args: RunArgs) -> crate::Result<()> {
                 log::Level::Debug => Style::new().fg_color(Some(AnsiColor::Blue.into())),
                 log::Level::Trace => Style::new().fg_color(Some(AnsiColor::Cyan.into())),
             };
-            // Colored output to stderr
-            writeln!(buf, "[{style}{level:5}{style:#} {}] {}",
-                record.target(), record.args())?;
+            // Use MultiProgress.println to properly coordinate with progress bars
+            let line = format!("[{style}{level:5}{style:#} {}] {}",
+                record.target(), record.args());
+            let _ = crate::pipeline::runner::MULTI_PROGRESS.println(line);
             // Plain text to log file
             if let Ok(mut f) = log_file.lock() {
                 let _ = writeln!(f, "[{level:5} {}] {}", record.target(), record.args());
@@ -159,6 +160,11 @@ pub fn execute(args: RunArgs) -> crate::Result<()> {
     // Log version info
     info!("qsmxt.rs {}", env!("CARGO_PKG_VERSION"));
     info!("QSM.rs {} ({})", env!("QSM_CORE_VERSION"), env!("QSM_CORE_GIT_HASH"));
+    info!(
+        "Processing {} run(s) across {} subject(s)",
+        runs.len(),
+        subjects.len()
+    );
 
     let output = DerivativeOutputs::new(&derivatives_dir);
 
@@ -194,6 +200,6 @@ pub fn execute(args: RunArgs) -> crate::Result<()> {
         });
     }
 
-    info!("All runs completed successfully");
+    info!("All runs completed successfully — results in {}", derivatives_dir.display());
     Ok(())
 }

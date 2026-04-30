@@ -53,7 +53,25 @@ pub fn execute_local(
 
             let elapsed = run_start.elapsed();
             match &result {
-                Ok(()) => info!("{}: Done ({:.1}s)", run.key, elapsed.as_secs_f64()),
+                Ok(()) => {
+                    info!("{}: Done ({:.1}s)", run.key, elapsed.as_secs_f64());
+                    // Log final output paths
+                    let final_paths: Vec<_> = [
+                        output.qsm_path(&run.key),
+                        output.mask_path(&run.key),
+                        output.magnitude_path(&run.key),
+                        output.swi_path(&run.key),
+                        output.swi_mip_path(&run.key),
+                        output.t2star_path(&run.key),
+                        output.r2star_path(&run.key),
+                    ]
+                    .into_iter()
+                    .filter(|p| p.exists())
+                    .collect();
+                    for path in &final_paths {
+                        info!("{}: -> {}", run.key, path.display());
+                    }
+                }
                 Err(e) => error!("{}: FAILED after {:.1}s - {}", run.key, elapsed.as_secs_f64(), e),
             }
 
