@@ -2,6 +2,7 @@ name: Install Scripts
 
 on:
   push:
+    branches: [main]
     paths:
       - 'install.sh'
       - 'install.ps1'
