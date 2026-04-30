@@ -171,9 +171,9 @@ impl FilterTreeState {
     /// Scan BIDS directory if it changed since last scan.
     pub fn maybe_rescan(&mut self, bids_dir: &str) {
         let trimmed = bids_dir.trim();
-        let dir = if trimmed.starts_with("~/") {
+        let dir = if let Some(rest) = trimmed.strip_prefix("~/") {
             if let Some(home) = std::env::var_os("HOME") {
-                format!("{}/{}", home.to_string_lossy(), &trimmed[2..])
+                format!("{}/{}", home.to_string_lossy(), rest)
             } else {
                 trimmed.to_string()
             }
@@ -2581,7 +2581,6 @@ mod tests {
 
     // --- F5 triggers run ---
 
-    #[test]
     #[test]
     fn test_f5_requires_bids_dir() {
         let mut app = App::new();
