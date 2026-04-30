@@ -52,6 +52,7 @@ curl -fsSL "$URL" -o "${TMPDIR}/qsmxt.tar.gz"
 tar xzf "${TMPDIR}/qsmxt.tar.gz" -C "$TMPDIR"
 
 # Install
+mkdir -p "$INSTALL_DIR"
 if [ -w "$INSTALL_DIR" ]; then
     mv "${TMPDIR}/qsmxt" "${INSTALL_DIR}/qsmxt"
 else
