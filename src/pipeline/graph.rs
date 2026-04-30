@@ -258,31 +258,16 @@ fn downstream_steps(step_name: &str) -> &'static [&'static str] {
     }
 }
 
-/// The path to the pipeline state file for a given run.
+/// The path to the pipeline state file for a given run (in workflow dir).
 pub fn state_file_path(output_dir: &Path, key: &AcquisitionKey) -> PathBuf {
-    let mut dir = output_dir.join(format!("sub-{}", key.subject));
+    let mut dir = output_dir.join("workflow").join(format!("sub-{}", key.subject));
     if let Some(ref ses) = key.session {
         dir = dir.join(format!("ses-{}", ses));
     }
     dir.join("anat").join(".pipeline_state.json")
 }
 
-/// Intermediate file path helper.
-#[allow(dead_code)]
-pub fn intermediate_path(
-    output_dir: &Path,
-    key: &AcquisitionKey,
-    suffix: &str,
-) -> PathBuf {
-    let mut dir = output_dir.join(format!("sub-{}", key.subject));
-    if let Some(ref ses) = key.session {
-        dir = dir.join(format!("ses-{}", ses));
-    }
-    dir.join("anat")
-        .join(format!("{}_{}", key.basename(), suffix))
-}
-
-/// Remove intermediate files, keeping only final outputs.
+/// Remove intermediate files (workflow dir), keeping only final outputs.
 pub fn clean_intermediates(state: &PipelineState, output_dir: &Path, key: &AcquisitionKey) {
     let final_steps: HashSet<&str> =
         ["mask", "magnitude", "reference", "swi", "t2star_r2star"].iter().copied().collect();
@@ -540,37 +525,7 @@ mod tests {
             suffix: "MEGRE".to_string(),
         };
         let path = state_file_path(Path::new("/out"), &key);
-        assert_eq!(path, PathBuf::from("/out/sub-01/ses-pre/anat/.pipeline_state.json"));
-    }
-
-    #[test]
-    fn test_intermediate_path_no_session() {
-        let key = AcquisitionKey {
-            subject: "01".to_string(),
-            session: None,
-            acquisition: None,
-            reconstruction: None,
-            inversion: None,
-            run: None,
-            suffix: "MEGRE".to_string(),
-        };
-        let path = intermediate_path(Path::new("/out"), &key, "unwrapped.nii");
-        assert_eq!(path, PathBuf::from("/out/sub-01/anat/sub-01_unwrapped.nii"));
-    }
-
-    #[test]
-    fn test_intermediate_path_with_session() {
-        let key = AcquisitionKey {
-            subject: "02".to_string(),
-            session: Some("post".to_string()),
-            acquisition: None,
-            reconstruction: None,
-            inversion: None,
-            run: None,
-            suffix: "MEGRE".to_string(),
-        };
-        let path = intermediate_path(Path::new("/out"), &key, "mask.nii");
-        assert_eq!(path, PathBuf::from("/out/sub-02/ses-post/anat/sub-02_ses-post_mask.nii"));
+        assert_eq!(path, PathBuf::from("/out/workflow/sub-01/ses-pre/anat/.pipeline_state.json"));
     }
 
     #[test]
