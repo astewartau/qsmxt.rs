@@ -3,8 +3,8 @@ use crate::cli::ValidateArgs;
 
 pub fn execute(args: ValidateArgs) -> crate::Result<()> {
     let filter = DiscoveryFilter {
-        subjects: args.subjects,
-        sessions: args.sessions,
+        include: args.include,
+        exclude: args.exclude,
         ..Default::default()
     };
 

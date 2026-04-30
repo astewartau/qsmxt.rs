@@ -315,21 +315,13 @@ pub struct RunArgs {
     #[arg(long)]
     pub config: Option<PathBuf>,
 
-    /// Process only these subjects (e.g., sub-01 sub-02)
+    /// Include only runs matching these glob patterns (e.g. "sub-1*" "*ses-pre*")
     #[arg(long, num_args = 1..)]
-    pub subjects: Option<Vec<String>>,
+    pub include: Option<Vec<String>>,
 
-    /// Process only these sessions
+    /// Exclude runs matching these glob patterns (e.g. "*mygrea*")
     #[arg(long, num_args = 1..)]
-    pub sessions: Option<Vec<String>>,
-
-    /// Process only these acquisitions
-    #[arg(long, num_args = 1..)]
-    pub acquisitions: Option<Vec<String>>,
-
-    /// Process only these runs
-    #[arg(long, num_args = 1..)]
-    pub runs: Option<Vec<String>>,
+    pub exclude: Option<Vec<String>>,
 
     /// Limit number of echoes to process
     #[arg(long)]
@@ -518,13 +510,13 @@ pub struct ValidateArgs {
     /// Input BIDS directory
     pub bids_dir: PathBuf,
 
-    /// Check only these subjects
+    /// Include only runs matching these glob patterns
     #[arg(long, num_args = 1..)]
-    pub subjects: Option<Vec<String>>,
+    pub include: Option<Vec<String>>,
 
-    /// Check only these sessions
+    /// Exclude runs matching these glob patterns
     #[arg(long, num_args = 1..)]
-    pub sessions: Option<Vec<String>>,
+    pub exclude: Option<Vec<String>>,
 }
 
 #[derive(Parser, Debug)]
@@ -562,6 +554,18 @@ pub struct SlurmArgs {
     /// Auto-submit scripts via sbatch
     #[arg(long)]
     pub submit: bool,
+
+    /// Include only runs matching these glob patterns (e.g. "sub-1*" "*ses-pre*")
+    #[arg(long, num_args = 1..)]
+    pub include: Option<Vec<String>>,
+
+    /// Exclude runs matching these glob patterns (e.g. "*mygrea*")
+    #[arg(long, num_args = 1..)]
+    pub exclude: Option<Vec<String>>,
+
+    /// Limit number of echoes to process
+    #[arg(long)]
+    pub num_echoes: Option<usize>,
 }
 
 // ─── Standalone algorithm commands (subcommand-per-algorithm) ───
@@ -591,7 +595,7 @@ pub enum MaskCommand {
     Percentile(MaskPercentileArgs),
     /// Brain extraction (BET)
     Bet(MaskBetArgs),
-    /// Robust threshold (Otsu + dilate:1 + fill-holes:0 + erode:2)
+    /// Robust threshold (Otsu + dilate:1 + fill-holes:0 + erode:1)
     Robust(MaskRobustArgs),
     /// Erode a binary mask
     Erode(MaskErodeArgs),

@@ -139,6 +139,15 @@ fn draw_form(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         let focused = i == app.active_field;
         let editing = focused && app.editing;
 
+        // Indent sub-fields under a parent checkbox
+        let indent = match (app.active_tab, i) {
+            (2, 1..=6) => true,   // SWI settings under "Compute SWI"
+            (3, 4..=9) => true,   // SLURM settings under "Execution Mode"
+            _ => false,
+        };
+        let prefix = if indent { "    " } else { "  " };
+        let label_width: usize = if indent { 20 } else { 22 };
+
         let line = match &field.kind {
             FieldKind::Text => {
                 let value = app.get_text_value(app.active_tab, i).to_string();
@@ -148,13 +157,16 @@ fn draw_form(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
                     Style::default().fg(Color::White)
                 };
                 let val_style = if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::Gray) };
-                let display_val = if value.is_empty() && !editing {
+                let is_required = app.active_tab == 3 && i == 4 && app.form.execution_mode == 1;
+                let display_val = if value.is_empty() && !editing && is_required {
+                    Span::styled("(required)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
+                } else if value.is_empty() && !editing {
                     Span::styled("(empty)", Style::default().fg(Color::DarkGray))
                 } else {
                     Span::styled(value, val_style)
                 };
                 Line::from(vec![
-                    Span::styled(format!("  {:22}", format!("{}:", field.label)), label_style),
+                    Span::styled(format!("{}{:w$}", prefix, format!("{}:", field.label), w = label_width), label_style),
                     display_val,
                 ])
             }
@@ -166,16 +178,17 @@ fn draw_form(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
                 } else {
                     Style::default().fg(Color::White)
                 };
+                let label = format!("{}{:w$}", prefix, format!("{}:", field.label), w = label_width);
                 if focused {
                     Line::from(vec![
-                        Span::styled(format!("  {:22}", format!("{}:", field.label)), label_style),
+                        Span::styled(label, label_style),
                         Span::styled("◀ ", Style::default().fg(Color::DarkGray)),
                         Span::styled(*val, Style::default().fg(Color::Cyan)),
                         Span::styled(" ▶", Style::default().fg(Color::DarkGray)),
                     ])
                 } else {
                     Line::from(vec![
-                        Span::styled(format!("  {:22}", format!("{}:", field.label)), label_style),
+                        Span::styled(label, label_style),
                         Span::styled(*val, Style::default().fg(Color::Gray)),
                     ])
                 }
@@ -189,7 +202,7 @@ fn draw_form(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
                 };
                 let (marker, color) = if checked { ("[x]", Color::Green) } else { ("[ ]", Color::Gray) };
                 Line::from(vec![
-                    Span::styled(format!("  {:22}", format!("{}:", field.label)), label_style),
+                    Span::styled(format!("{}{:w$}", prefix, format!("{}:", field.label), w = label_width), label_style),
                     Span::styled(marker, Style::default().fg(color)),
                 ])
             }
@@ -232,6 +245,14 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
+    // Split into scrollable content + help text area
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(2)])
+        .split(inner);
+    let content_area = chunks[0];
+    let help_area = chunks[1];
+
     let io_field_count = super::app::App::INPUT_IO_FIELDS;
     let in_io = app.active_field < io_field_count;
 
@@ -258,6 +279,9 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         // For output_dir, show bids_dir as placeholder when empty
         let display_val = if i == 1 && value.is_empty() && !app.form.bids_dir.is_empty() && !(focused && app.editing) {
             Span::styled(&app.form.bids_dir, Style::default().fg(Color::DarkGray))
+        } else if i == 0 && value.is_empty() && !(focused && app.editing) {
+            // BIDS Directory is required
+            Span::styled("(required)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
         } else if value.is_empty() && !(focused && app.editing) {
             Span::styled("(empty)", Style::default().fg(Color::DarkGray))
         } else {
@@ -293,19 +317,29 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         } else {
             let tree = app.filter_state.tree.as_ref().unwrap();
 
-            // Pattern
-            let pattern_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::Pattern;
-            let pattern_label = Span::styled(
-                "  Pattern: ",
-                if pattern_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
+            // Include pattern
+            let include_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::Include;
+            let include_label = Span::styled(
+                "  Include:  ",
+                if include_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
                 else { Style::default().fg(Color::White) },
             );
-            let pattern_val = if app.filter_state.pattern.is_empty() && !app.filter_state.pattern_editing {
-                Span::styled("(enter glob to filter)", Style::default().fg(Color::DarkGray))
+            let include_val = Span::styled(&app.filter_state.include_pattern, Style::default().fg(Color::Cyan));
+            lines.push(Line::from(vec![include_label, include_val]));
+
+            // Exclude pattern
+            let exclude_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::Exclude;
+            let exclude_label = Span::styled(
+                "  Exclude:  ",
+                if exclude_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
+                else { Style::default().fg(Color::White) },
+            );
+            let exclude_val = if app.filter_state.exclude_pattern.is_empty() && !app.filter_state.exclude_editing {
+                Span::styled("(empty)", Style::default().fg(Color::DarkGray))
             } else {
-                Span::styled(&app.filter_state.pattern, Style::default().fg(Color::Cyan))
+                Span::styled(&app.filter_state.exclude_pattern, Style::default().fg(Color::Cyan))
             };
-            lines.push(Line::from(vec![pattern_label, pattern_val]));
+            lines.push(Line::from(vec![exclude_label, exclude_val]));
             lines.push(Line::from(""));
 
             // Tree rows
@@ -350,7 +384,7 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
                         let indent = if ses.is_some() { "      " } else { "    " };
                         let (marker, color) = if leaf.selected { ("[x]", Color::Green) } else { ("[ ]", Color::Gray) };
                         let style = if focused {
-                            Style::default().fg(color).add_modifier(Modifier::BOLD)
+                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                         } else {
                             Style::default().fg(color)
                         };
@@ -391,44 +425,78 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         // Filter area starts after IO fields + separator + header
         let offset = io_field_count + 2;
         match app.filter_state.focus {
-            super::app::FilterFocus::Pattern => Some(offset),
-            super::app::FilterFocus::TreeNode(i) => Some(offset + i + 2),
+            super::app::FilterFocus::Include => Some(offset),
+            super::app::FilterFocus::Exclude => Some(offset + 1),
+            super::app::FilterFocus::TreeNode(i) => Some(offset + i + 3), // +3 for include, exclude, blank line
             super::app::FilterFocus::NumEchoes => {
                 let vis_len = app.filter_state.visible_rows().len();
-                Some(offset + vis_len + 3)
+                Some(offset + vis_len + 4) // +4 for include, exclude, blank, tree rows
             }
         }
     };
 
-    render_scrollable(f, inner, lines, &mut app.form_scroll_offset, focused_line);
+    render_scrollable(f, content_area, lines, &mut app.form_scroll_offset, focused_line);
+
+    // Help text for focused field
+    let help_text = if in_io {
+        match app.active_field {
+            0 => "Path to BIDS-formatted dataset directory",
+            1 => "Output directory (defaults to BIDS directory)",
+            2 => "Optional pipeline configuration file (TOML)",
+            _ => "",
+        }
+    } else {
+        match app.filter_state.focus {
+            super::app::FilterFocus::Include => "Glob patterns to include (space-separated, e.g. sub-1* *ses-pre*)",
+            super::app::FilterFocus::Exclude => "Glob patterns to exclude (space-separated, e.g. *mygrea*)",
+            super::app::FilterFocus::TreeNode(_) => "Space: toggle, Enter: expand/collapse",
+            super::app::FilterFocus::NumEchoes => "Limit number of echoes to process",
+        }
+    };
+    if !help_text.is_empty() {
+        let help_para = Paragraph::new(Line::from(Span::styled(
+            format!("  {}", help_text),
+            Style::default().fg(Color::DarkGray),
+        )));
+        f.render_widget(help_para, help_area);
+    }
 
     // Set cursor if editing IO field
     if app.editing && in_io {
         let scroll = app.form_scroll_offset;
-        if app.active_field >= scroll && app.active_field < scroll + inner.height as usize {
-            let y = inner.y + (app.active_field - scroll) as u16;
-            let x = inner.x + 24 + app.cursor_pos as u16;
+        if app.active_field >= scroll && app.active_field < scroll + content_area.height as usize {
+            let y = content_area.y + (app.active_field - scroll) as u16;
+            let x = content_area.x + 24 + app.cursor_pos as u16;
             f.set_cursor_position((x, y));
         }
     }
-    // Set cursor if editing filter pattern/num_echoes
-    if app.filter_state.pattern_editing {
-        let offset = io_field_count + 2;
+    // Set cursor if editing filter include/exclude/num_echoes
+    if app.filter_state.include_editing {
+        let offset = io_field_count + 2; // after IO fields + separator + header
         let scroll = app.form_scroll_offset;
         let line = offset;
-        if line >= scroll && line < scroll + inner.height as usize {
-            let y = inner.y + (line - scroll) as u16;
-            let x = inner.x + 11 + app.filter_state.pattern_cursor as u16;
+        if line >= scroll && line < scroll + content_area.height as usize {
+            let y = content_area.y + (line - scroll) as u16;
+            let x = content_area.x + 12 + app.filter_state.include_cursor as u16;
+            f.set_cursor_position((x, y));
+        }
+    } else if app.filter_state.exclude_editing {
+        let offset = io_field_count + 2 + 1; // include line + exclude line
+        let scroll = app.form_scroll_offset;
+        let line = offset;
+        if line >= scroll && line < scroll + content_area.height as usize {
+            let y = content_area.y + (line - scroll) as u16;
+            let x = content_area.x + 12 + app.filter_state.exclude_cursor as u16;
             f.set_cursor_position((x, y));
         }
     } else if app.filter_state.num_echoes_editing {
-        let offset = io_field_count + 2;
+        let offset = io_field_count + 2 + 1; // include + exclude
         let vis_len = app.filter_state.visible_rows().len();
-        let line = offset + vis_len + 3;
+        let line = offset + vis_len + 2; // +2 for blank line + tree rows
         let scroll = app.form_scroll_offset;
-        if line >= scroll && line < scroll + inner.height as usize {
-            let y = inner.y + (line - scroll) as u16;
-            let x = inner.x + 14 + app.filter_state.num_echoes_cursor as u16;
+        if line >= scroll && line < scroll + content_area.height as usize {
+            let y = content_area.y + (line - scroll) as u16;
+            let x = content_area.x + 14 + app.filter_state.num_echoes_cursor as u16;
             f.set_cursor_position((x, y));
         }
     }
@@ -786,6 +854,16 @@ fn draw_command_preview_with(f: &mut Frame, cmd: &str, area: ratatui::layout::Re
 }
 
 fn draw_help_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    // Show error message if present
+    if let Some(ref err) = app.error_message {
+        let error_line = Line::from(vec![
+            Span::styled(" Error: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(err.as_str(), Style::default().fg(Color::Red)),
+        ]);
+        f.render_widget(Paragraph::new(error_line), area);
+        return;
+    }
+
     let help = if app.editing {
         vec![
             Span::styled(" Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),

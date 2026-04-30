@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::bids::discovery::{self, BidsTree};
 
@@ -17,9 +17,32 @@ pub const TAB_NAMES: [&str; 4] = [
 /// What is focused in the flattened filter tree view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterFocus {
-    Pattern,
+    Include,
+    Exclude,
     TreeNode(usize), // index into the flattened visible node list
     NumEchoes,
+}
+
+/// Find the position of the previous word boundary (for Ctrl/Alt+Backspace).
+fn word_boundary_left(text: &str, cursor: usize) -> usize {
+    if cursor == 0 { return 0; }
+    let bytes = text.as_bytes();
+    let mut pos = cursor - 1;
+    // Skip whitespace/separators
+    while pos > 0 && matches!(bytes[pos], b' ' | b'/' | b'_' | b'-') {
+        pos -= 1;
+    }
+    // Skip word chars
+    while pos > 0 && !matches!(bytes[pos - 1], b' ' | b'/' | b'_' | b'-') {
+        pos -= 1;
+    }
+    pos
+}
+
+/// Which text field is being edited in the filter area.
+enum FilterTextField {
+    Include,
+    Exclude,
 }
 
 /// A single visible row in the flattened tree (for navigation/rendering).
@@ -36,14 +59,19 @@ pub struct FilterTreeState {
     pub tree: Option<BidsTree>,
     pub collapsed: HashSet<String>,
     pub focus: FilterFocus,
-    pub pattern: String,
-    pub pattern_editing: bool,
-    pub pattern_cursor: usize,
+    pub include_pattern: String,
+    pub include_editing: bool,
+    pub include_cursor: usize,
+    pub exclude_pattern: String,
+    pub exclude_editing: bool,
+    pub exclude_cursor: usize,
     pub num_echoes: String,
     pub num_echoes_editing: bool,
     pub num_echoes_cursor: usize,
     pub scanned_bids_dir: Option<String>,
     pub scroll_offset: usize,
+    /// Set when the user manually toggles tree checkboxes (pattern may not match)
+    pub manual_override: bool,
 }
 
 impl Default for FilterTreeState {
@@ -51,15 +79,19 @@ impl Default for FilterTreeState {
         Self {
             tree: None,
             collapsed: HashSet::new(),
-            focus: FilterFocus::Pattern,
-            pattern: String::new(),
-            pattern_editing: false,
-            pattern_cursor: 0,
+            focus: FilterFocus::Include,
+            include_pattern: "*".to_string(),
+            include_editing: false,
+            include_cursor: 0,
+            exclude_pattern: String::new(),
+            exclude_editing: false,
+            exclude_cursor: 0,
             num_echoes: String::new(),
             num_echoes_editing: false,
             num_echoes_cursor: 0,
             scanned_bids_dir: None,
             scroll_offset: 0,
+            manual_override: false,
         }
     }
 }
@@ -93,16 +125,13 @@ impl FilterTreeState {
     }
 
     /// Total number of focusable items: pattern + tree rows + num_echoes.
-    fn focusable_count(&self) -> usize {
-        // pattern(1) + tree rows + num_echoes(1)
-        1 + self.visible_rows().len() + 1
-    }
-
     /// Move focus down.
     pub fn focus_next(&mut self) {
-        let max = self.focusable_count().saturating_sub(1);
         match self.focus {
-            FilterFocus::Pattern => {
+            FilterFocus::Include => {
+                self.focus = FilterFocus::Exclude;
+            }
+            FilterFocus::Exclude => {
                 if !self.visible_rows().is_empty() {
                     self.focus = FilterFocus::TreeNode(0);
                 } else {
@@ -119,21 +148,21 @@ impl FilterTreeState {
             }
             FilterFocus::NumEchoes => {} // already at bottom
         }
-        let _ = max; // used for bounds
     }
 
     /// Move focus up.
     pub fn focus_prev(&mut self) {
         match self.focus {
-            FilterFocus::Pattern => {} // already at top
-            FilterFocus::TreeNode(0) => self.focus = FilterFocus::Pattern,
+            FilterFocus::Include => {} // already at top
+            FilterFocus::Exclude => self.focus = FilterFocus::Include,
+            FilterFocus::TreeNode(0) => self.focus = FilterFocus::Exclude,
             FilterFocus::TreeNode(i) => self.focus = FilterFocus::TreeNode(i - 1),
             FilterFocus::NumEchoes => {
                 let rows = self.visible_rows().len();
                 if rows > 0 {
                     self.focus = FilterFocus::TreeNode(rows - 1);
                 } else {
-                    self.focus = FilterFocus::Pattern;
+                    self.focus = FilterFocus::Exclude;
                 }
             }
         }
@@ -141,7 +170,16 @@ impl FilterTreeState {
 
     /// Scan BIDS directory if it changed since last scan.
     pub fn maybe_rescan(&mut self, bids_dir: &str) {
-        let dir = bids_dir.trim().to_string();
+        let trimmed = bids_dir.trim();
+        let dir = if trimmed.starts_with("~/") {
+            if let Some(home) = std::env::var_os("HOME") {
+                format!("{}/{}", home.to_string_lossy(), &trimmed[2..])
+            } else {
+                trimmed.to_string()
+            }
+        } else {
+            trimmed.to_string()
+        };
         if dir.is_empty() {
             return;
         }
@@ -151,8 +189,9 @@ impl FilterTreeState {
         match discovery::scan_bids_tree(Path::new(&dir)) {
             Ok(tree) => {
                 self.tree = Some(tree);
-                self.focus = FilterFocus::Pattern;
+                self.focus = FilterFocus::Include;
                 self.scroll_offset = 0;
+                self.apply_include_exclude();
             }
             Err(_) => {
                 self.tree = None;
@@ -161,29 +200,26 @@ impl FilterTreeState {
         self.scanned_bids_dir = Some(dir);
     }
 
-    /// Apply glob pattern: check runs whose display matches, uncheck others.
-    pub fn apply_pattern(&mut self) {
+    /// Apply include/exclude patterns to update tree checkbox state.
+    pub fn apply_include_exclude(&mut self) {
+        use crate::bids::discovery::passes_include_exclude;
         let Some(ref mut tree) = self.tree else { return };
-        let pat = self.pattern.trim();
-        if pat.is_empty() {
-            // Empty pattern: select all
-            tree.set_all(true);
-            return;
-        }
-        // Convert glob to regex: escape dots, * -> .*, ? -> .
-        let regex_str = format!(
-            "^(?i){}$",
-            pat.replace('.', r"\.")
-               .replace('*', ".*")
-               .replace('?', ".")
-        );
-        let re = match regex::Regex::new(&regex_str) {
-            Ok(r) => r,
-            Err(_) => return,
+
+        let include = if self.include_pattern.trim().is_empty() {
+            None
+        } else {
+            Some(self.include_pattern.split_whitespace().map(String::from).collect::<Vec<_>>())
         };
+        let exclude = if self.exclude_pattern.trim().is_empty() {
+            None
+        } else {
+            Some(self.exclude_pattern.split_whitespace().map(String::from).collect::<Vec<_>>())
+        };
+
         tree.for_each_run_mut(|run| {
-            run.selected = re.is_match(&run.key_string) || re.is_match(&run.display);
+            run.selected = passes_include_exclude(&run.key_string, &include, &exclude);
         });
+        self.manual_override = false;
     }
 
     /// Toggle the focused tree node (run leaf or subject/session toggle).
@@ -238,64 +274,51 @@ impl FilterTreeState {
         }
     }
 
-    /// Collect selected runs as filter values for RunArgs.
-    /// Returns (subjects, sessions, acquisitions, runs) as Option<Vec<String>>.
-    /// None means "all" (no filter).
-    #[allow(clippy::type_complexity)]
-    pub fn selected_filters(&self) -> (Option<Vec<String>>, Option<Vec<String>>, Option<Vec<String>>, Option<Vec<String>>) {
-        let Some(ref tree) = self.tree else {
-            return (None, None, None, None);
-        };
-        if tree.total_runs() == 0 || tree.selected_runs() == tree.total_runs() {
-            return (None, None, None, None);
-        }
-
-        let mut subjects = HashSet::new();
-        let mut sessions = HashSet::new();
-        let mut acquisitions = HashSet::new();
-        let mut runs = HashSet::new();
-
-        for sub in &tree.subjects {
-            for run in &sub.runs {
+    /// Get include/exclude filter args for command building.
+    /// When manual_override is set, returns exact key list as include patterns.
+    pub fn get_include_exclude(&self) -> (Option<Vec<String>>, Option<Vec<String>>) {
+        if self.manual_override {
+            // Manual toggle: emit whichever of --include or --exclude is shorter
+            let Some(ref tree) = self.tree else { return (None, None) };
+            let total = tree.total_runs();
+            let selected = tree.selected_runs();
+            if selected == total {
+                return (None, None); // all selected, no filter needed
+            }
+            let mut included = Vec::new();
+            let mut excluded = Vec::new();
+            tree.for_each_run(|run| {
                 if run.selected {
-                    subjects.insert(format!("sub-{}", sub.name));
-                    Self::extract_entities_from_key(&run.key_string, &mut sessions, &mut acquisitions, &mut runs);
+                    included.push(run.key_string.clone());
+                } else {
+                    excluded.push(run.key_string.clone());
                 }
+            });
+            if included.is_empty() {
+                return (None, None);
             }
-            for ses in &sub.sessions {
-                for run in &ses.runs {
-                    if run.selected {
-                        subjects.insert(format!("sub-{}", sub.name));
-                        sessions.insert(format!("ses-{}", ses.name));
-                        Self::extract_entities_from_key(&run.key_string, &mut sessions, &mut acquisitions, &mut runs);
-                    }
-                }
+            // Pick the shorter representation
+            if excluded.len() <= included.len() {
+                excluded.sort();
+                (None, Some(excluded))
+            } else {
+                included.sort();
+                (Some(included), None)
             }
+        } else {
+            // Pattern mode: pass through include/exclude patterns
+            let include = if self.include_pattern.trim().is_empty() || self.include_pattern.trim() == "*" {
+                None
+            } else {
+                Some(self.include_pattern.split_whitespace().map(String::from).collect())
+            };
+            let exclude = if self.exclude_pattern.trim().is_empty() {
+                None
+            } else {
+                Some(self.exclude_pattern.split_whitespace().map(String::from).collect())
+            };
+            (include, exclude)
         }
-
-        // Only filter on entities that actually narrow the selection
-        let to_opt = |set: HashSet<String>| -> Option<Vec<String>> {
-            if set.is_empty() { None } else {
-                let mut v: Vec<_> = set.into_iter().collect();
-                v.sort();
-                Some(v)
-            }
-        };
-
-        (to_opt(subjects), None, None, None)
-        // We pass subjects only — the pipeline's DiscoveryFilter will handle the rest.
-        // More granular filtering would require per-run selection which the current
-        // DiscoveryFilter doesn't support. Subject-level is the primary use case.
-    }
-
-    fn extract_entities_from_key(
-        _key: &str,
-        _sessions: &mut HashSet<String>,
-        _acquisitions: &mut HashSet<String>,
-        _runs: &mut HashSet<String>,
-    ) {
-        // Key format: sub-XX[_ses-YY][_acq-ZZ][_run-WW]_SUFFIX
-        // Entity extraction is handled by the pipeline's DiscoveryFilter
     }
 }
 
@@ -593,18 +616,7 @@ impl Default for PipelineFormState {
             bet_gradient_threshold: format!("{}", bet.gradient_threshold),
             bet_iterations: format!("{}", bet.iterations),
             bet_subdivisions: format!("{}", bet.subdivisions),
-            mask_sections: vec![crate::pipeline::config::MaskSection {
-                input: crate::pipeline::config::MaskingInput::PhaseQuality,
-                generator: crate::pipeline::config::MaskOp::Threshold {
-                    method: crate::pipeline::config::MaskThresholdMethod::Otsu,
-                    value: None,
-                },
-                refinements: vec![
-                    crate::pipeline::config::MaskOp::Dilate { iterations: 2 },
-                    crate::pipeline::config::MaskOp::FillHoles { max_size: 0 },
-                    crate::pipeline::config::MaskOp::Erode { iterations: 2 },
-                ],
-            }],
+            mask_sections: crate::pipeline::config::default_mask_sections(),
             mask_preset: 0, // robust threshold
             focus: 0,
             editing: false,
@@ -1073,15 +1085,7 @@ impl PipelineFormState {
         use crate::pipeline::config::*;
         match preset {
             0 => { // Robust threshold
-                self.mask_sections = vec![MaskSection {
-                    input: MaskingInput::PhaseQuality,
-                    generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
-                    refinements: vec![
-                        MaskOp::Dilate { iterations: 2 },
-                        MaskOp::FillHoles { max_size: 0 },
-                        MaskOp::Erode { iterations: 2 },
-                    ],
-                }];
+                self.mask_sections = default_mask_sections();
             }
             1 => { // BET
                 self.mask_sections = vec![MaskSection {
@@ -1215,6 +1219,7 @@ pub struct App {
     pub should_run: bool,
     pub tab_fields: Vec<Vec<FieldDef>>,
     pub form_scroll_offset: usize,
+    pub error_message: Option<String>,
 }
 
 pub struct RunForm {
@@ -1401,6 +1406,7 @@ impl App {
             should_run: false,
             tab_fields,
             form_scroll_offset: 0,
+            error_message: None,
         }
     }
 
@@ -1412,7 +1418,35 @@ impl App {
         &self.tab_fields[self.active_tab][self.active_field]
     }
 
+    /// Validate required fields and either set should_run or show error.
+    pub fn try_run(&mut self) {
+        self.error_message = None;
+
+        // BIDS directory is always required
+        if self.form.bids_dir.trim().is_empty() {
+            self.error_message = Some("BIDS Directory is required".to_string());
+            self.active_tab = 0;
+            self.active_field = 0;
+            return;
+        }
+
+        // SLURM mode requires account
+        if self.form.execution_mode == 1 && self.form.slurm_account.trim().is_empty() {
+            self.error_message = Some("SLURM Account is required".to_string());
+            self.active_tab = 3;
+            self.active_field = 4;
+            return;
+        }
+
+        self.should_run = true;
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) {
+        // Clear error on any non-F5 key press
+        if key.code != KeyCode::F(5) {
+            self.error_message = None;
+        }
+
         // Route tab 0 (Input) to its combined IO + filter handler
         if self.active_tab == 0 {
             self.handle_input_tab_key(key);
@@ -1479,7 +1513,7 @@ impl App {
             KeyCode::Char('R') => self.reset_current_tab(),
 
             // Run
-            KeyCode::F(5) => self.should_run = true,
+            KeyCode::F(5) => self.try_run(),
 
             _ => {}
         }
@@ -1533,7 +1567,7 @@ impl App {
                 KeyCode::Char('r') => self.reset_current_field(),
                 // Reset all IO fields
                 KeyCode::Char('R') => self.reset_current_tab(),
-                KeyCode::F(5) => self.should_run = true,
+                KeyCode::F(5) => self.try_run(),
                 _ => {}
             }
             // Trigger BIDS rescan when bids_dir changes
@@ -1541,13 +1575,13 @@ impl App {
             self.filter_state.maybe_rescan(&bids_dir);
         } else {
             // Delegate to filter tree handler, but intercept Up at the top to go back to IO
-            if self.filter_state.pattern_editing || self.filter_state.num_echoes_editing {
+            if self.filter_state.include_editing || self.filter_state.exclude_editing || self.filter_state.num_echoes_editing {
                 // Let filter handle its own editing
                 self.handle_filter_key(key);
                 return;
             }
             match key.code {
-                KeyCode::Up | KeyCode::Char('k') if self.filter_state.focus == FilterFocus::Pattern => {
+                KeyCode::Up | KeyCode::Char('k') if self.filter_state.focus == FilterFocus::Include => {
                     // At top of filter tree, go back to IO fields
                     self.active_field = Self::INPUT_IO_FIELDS - 1;
                 }
@@ -1670,9 +1704,13 @@ impl App {
     }
 
     fn handle_filter_key(&mut self, key: KeyEvent) {
-        // Handle editing mode (pattern or num_echoes text input)
-        if self.filter_state.pattern_editing {
-            self.handle_filter_pattern_key(key);
+        // Handle editing mode (include, exclude, or num_echoes text input)
+        if self.filter_state.include_editing {
+            self.handle_filter_text_key(key, FilterTextField::Include);
+            return;
+        }
+        if self.filter_state.exclude_editing {
+            self.handle_filter_text_key(key, FilterTextField::Exclude);
             return;
         }
         if self.filter_state.num_echoes_editing {
@@ -1707,14 +1745,24 @@ impl App {
             KeyCode::Right => self.filter_state.toggle_collapse(),
 
             // Toggle / interact
-            KeyCode::Char(' ') => self.filter_state.toggle_focused(),
+            KeyCode::Char(' ') => {
+                self.filter_state.toggle_focused();
+                self.filter_state.manual_override = true;
+            }
             KeyCode::Enter => {
                 match self.filter_state.focus {
-                    FilterFocus::Pattern => {
-                        self.filter_state.pattern_editing = true;
-                        self.filter_state.pattern_cursor = self.filter_state.pattern.len();
+                    FilterFocus::Include => {
+                        self.filter_state.include_editing = true;
+                        self.filter_state.include_cursor = self.filter_state.include_pattern.len();
                     }
-                    FilterFocus::TreeNode(_) => self.filter_state.toggle_focused(),
+                    FilterFocus::Exclude => {
+                        self.filter_state.exclude_editing = true;
+                        self.filter_state.exclude_cursor = self.filter_state.exclude_pattern.len();
+                    }
+                    FilterFocus::TreeNode(_) => {
+                        self.filter_state.toggle_focused();
+                        self.filter_state.manual_override = true;
+                    }
                     FilterFocus::NumEchoes => {
                         self.filter_state.num_echoes_editing = true;
                         self.filter_state.num_echoes_cursor = self.filter_state.num_echoes.len();
@@ -1727,48 +1775,64 @@ impl App {
                 if let Some(ref mut tree) = self.filter_state.tree {
                     tree.set_all(true);
                 }
+                self.filter_state.manual_override = true;
             }
             KeyCode::Char('n') => {
                 if let Some(ref mut tree) = self.filter_state.tree {
                     tree.set_all(false);
                 }
+                self.filter_state.manual_override = true;
             }
 
-            KeyCode::F(5) => self.should_run = true,
+            KeyCode::F(5) => self.try_run(),
 
             _ => {}
         }
     }
 
-    fn handle_filter_pattern_key(&mut self, key: KeyEvent) {
-        let fs = &mut self.filter_state;
+    fn handle_filter_text_key(&mut self, key: KeyEvent, field: FilterTextField) {
+        let (text, cursor, editing) = match field {
+            FilterTextField::Include => (
+                &mut self.filter_state.include_pattern,
+                &mut self.filter_state.include_cursor,
+                &mut self.filter_state.include_editing,
+            ),
+            FilterTextField::Exclude => (
+                &mut self.filter_state.exclude_pattern,
+                &mut self.filter_state.exclude_cursor,
+                &mut self.filter_state.exclude_editing,
+            ),
+        };
         match key.code {
             KeyCode::Esc => {
-                fs.pattern_editing = false;
+                *editing = false;
             }
             KeyCode::Enter => {
-                fs.pattern_editing = false;
-                fs.apply_pattern();
+                *editing = false;
+                self.filter_state.apply_include_exclude();
             }
             KeyCode::Char(c) => {
-                fs.pattern.insert(fs.pattern_cursor, c);
-                fs.pattern_cursor += 1;
+                text.insert(*cursor, c);
+                *cursor += 1;
             }
-            KeyCode::Backspace if fs.pattern_cursor > 0 => {
-                fs.pattern_cursor -= 1;
-                fs.pattern.remove(fs.pattern_cursor);
+            KeyCode::Backspace if key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) && *cursor > 0 => {
+                let new_pos = word_boundary_left(text, *cursor);
+                text.drain(new_pos..*cursor);
+                *cursor = new_pos;
             }
-            KeyCode::Delete
-                if fs.pattern_cursor < fs.pattern.len() => {
-                    fs.pattern.remove(fs.pattern_cursor);
-                }
-            KeyCode::Left => fs.pattern_cursor = fs.pattern_cursor.saturating_sub(1),
-            KeyCode::Right
-                if fs.pattern_cursor < fs.pattern.len() => {
-                    fs.pattern_cursor += 1;
-                }
-            KeyCode::Home => fs.pattern_cursor = 0,
-            KeyCode::End => fs.pattern_cursor = fs.pattern.len(),
+            KeyCode::Backspace if *cursor > 0 => {
+                *cursor -= 1;
+                text.remove(*cursor);
+            }
+            KeyCode::Delete if *cursor < text.len() => {
+                text.remove(*cursor);
+            }
+            KeyCode::Left => *cursor = cursor.saturating_sub(1),
+            KeyCode::Right if *cursor < text.len() => {
+                *cursor += 1;
+            }
+            KeyCode::Home => *cursor = 0,
+            KeyCode::End => *cursor = text.len(),
             _ => {}
         }
     }
@@ -1782,6 +1846,11 @@ impl App {
             KeyCode::Char(c) => {
                 fs.num_echoes.insert(fs.num_echoes_cursor, c);
                 fs.num_echoes_cursor += 1;
+            }
+            KeyCode::Backspace if key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) && fs.num_echoes_cursor > 0 => {
+                let new_pos = word_boundary_left(&fs.num_echoes, fs.num_echoes_cursor);
+                fs.num_echoes.drain(new_pos..fs.num_echoes_cursor);
+                fs.num_echoes_cursor = new_pos;
             }
             KeyCode::Backspace if fs.num_echoes_cursor > 0 => {
                 fs.num_echoes_cursor -= 1;
@@ -1821,6 +1890,13 @@ impl App {
                         if let Some(s) = ps.get_param_mut(&field) {
                             s.insert(cursor, c);
                             cursor += 1;
+                        }
+                    }
+                    KeyCode::Backspace if key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) && cursor > 0 => {
+                        if let Some(s) = ps.get_param_mut(&field) {
+                            let new_pos = word_boundary_left(s, cursor);
+                            s.drain(new_pos..cursor);
+                            cursor = new_pos;
                         }
                     }
                     KeyCode::Backspace if cursor > 0 => {
@@ -1871,6 +1947,11 @@ impl App {
                 KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => {
                     ps.mask_threshold_value_buf.insert(cursor, c);
                     cursor += 1;
+                }
+                KeyCode::Backspace if key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) && cursor > 0 => {
+                    let new_pos = word_boundary_left(&ps.mask_threshold_value_buf, cursor);
+                    ps.mask_threshold_value_buf.drain(new_pos..cursor);
+                    cursor = new_pos;
                 }
                 KeyCode::Backspace if cursor > 0 => {
                     cursor -= 1;
@@ -2063,8 +2144,9 @@ impl App {
                     let focus_idx = focusable.get(ps.focus).copied().unwrap_or(0);
                     match rows.get(focus_idx) {
                         Some(PipelineRow::AlgoSelect { field, options, .. }) => {
-                            let n = options.len() as isize;
-                            let cur = ps.get_select(field) as isize;
+                            // Mask preset: only cycle between 0 (robust) and 1 (bet); "custom" is auto-set
+                            let n = if *field == "mask_preset" { 2 } else { options.len() } as isize;
+                            let cur = ps.get_select(field).min((n - 1) as usize) as isize;
                             let new_val = (cur + delta).rem_euclid(n) as usize;
                             ps.set_select(field, new_val);
                             ps.restore_focus(&focused_field);
@@ -2093,7 +2175,7 @@ impl App {
                 self.pipeline_state = PipelineFormState::default();
             }
 
-            KeyCode::F(5) => self.should_run = true,
+            KeyCode::F(5) => self.try_run(),
 
             _ => {}
         }
@@ -2111,6 +2193,12 @@ impl App {
                 self.text_value_mut().insert(cursor, c);
                 cursor += 1;
             }
+            KeyCode::Backspace
+                if key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) && cursor > 0 => {
+                    let new_pos = word_boundary_left(self.text_value(), cursor);
+                    self.text_value_mut().drain(new_pos..cursor);
+                    cursor = new_pos;
+                }
             KeyCode::Backspace
                 if cursor > 0 => {
                     cursor -= 1;
@@ -2256,6 +2344,8 @@ impl App {
     /// Whether a field is visible (used to hide SLURM fields in Local mode and vice versa).
     pub fn is_field_visible(&self, tab: usize, field: usize) -> bool {
         match (tab, field) {
+            // SWI settings (1-6) only visible when Compute SWI is checked
+            (2, 1..=6) => self.form.do_swi,
             // SLURM fields (4-9) only visible in SLURM mode
             (3, 4..=9) => self.form.execution_mode == 1,
             // Dry Run and Num Processes only in Local mode
@@ -2492,10 +2582,32 @@ mod tests {
     // --- F5 triggers run ---
 
     #[test]
-    fn test_f5_triggers_run() {
+    #[test]
+    fn test_f5_requires_bids_dir() {
         let mut app = App::new();
         app.handle_key(key(KeyCode::F(5)));
+        assert!(!app.should_run);
+        assert!(app.error_message.is_some());
+    }
+
+    #[test]
+    fn test_f5_triggers_run_with_bids() {
+        let mut app = App::new();
+        app.form.bids_dir = "/tmp/bids".to_string();
+        app.handle_key(key(KeyCode::F(5)));
         assert!(app.should_run);
+        assert!(app.error_message.is_none());
+    }
+
+    #[test]
+    fn test_f5_requires_slurm_account() {
+        let mut app = App::new();
+        app.form.bids_dir = "/tmp/bids".to_string();
+        app.form.execution_mode = 1; // SLURM
+        app.handle_key(key(KeyCode::F(5)));
+        assert!(!app.should_run);
+        assert!(app.error_message.as_deref() == Some("SLURM Account is required"));
+        assert_eq!(app.active_tab, 3); // navigated to Execution tab
     }
 
     // --- Pipeline state selects ---
@@ -2645,8 +2757,9 @@ mod tests {
     fn test_filter_state_default() {
         let fs = super::FilterTreeState::default();
         assert!(fs.tree.is_none());
-        assert!(fs.pattern.is_empty());
-        assert_eq!(fs.focus, super::FilterFocus::Pattern);
+        assert_eq!(fs.include_pattern, "*");
+        assert!(fs.exclude_pattern.is_empty());
+        assert_eq!(fs.focus, super::FilterFocus::Include);
     }
 
     #[test]
@@ -2692,7 +2805,9 @@ mod tests {
         let mut fs = super::FilterTreeState::default();
         fs.maybe_rescan(dir.path().to_str().unwrap());
 
-        assert_eq!(fs.focus, super::FilterFocus::Pattern);
+        assert_eq!(fs.focus, super::FilterFocus::Include);
+        fs.focus_next(); // -> Exclude
+        assert_eq!(fs.focus, super::FilterFocus::Exclude);
         fs.focus_next(); // -> tree node 0 (subject)
         assert!(matches!(fs.focus, super::FilterFocus::TreeNode(0)));
         fs.focus_next(); // -> tree node 1 (run)

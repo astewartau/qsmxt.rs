@@ -66,15 +66,15 @@ impl fmt::Display for MaskOp {
         match self {
             Self::Threshold { method: MaskThresholdMethod::Otsu, .. } => write!(f, "threshold:otsu"),
             Self::Threshold { method: MaskThresholdMethod::Fixed, value } =>
-                write!(f, "threshold:fixed:{}", value.unwrap_or(0.5)),
+                write!(f, "threshold:fixed:{:.4}", value.unwrap_or(0.5)),
             Self::Threshold { method: MaskThresholdMethod::Percentile, value } =>
-                write!(f, "threshold:percentile:{}", value.unwrap_or(75.0)),
-            Self::Bet { fractional_intensity } => write!(f, "bet:{}", fractional_intensity),
+                write!(f, "threshold:percentile:{:.1}", value.unwrap_or(75.0)),
+            Self::Bet { fractional_intensity } => write!(f, "bet:{:.2}", fractional_intensity),
             Self::Erode { iterations } => write!(f, "erode:{}", iterations),
             Self::Dilate { iterations } => write!(f, "dilate:{}", iterations),
             Self::Close { radius } => write!(f, "close:{}", radius),
             Self::FillHoles { max_size } => write!(f, "fill-holes:{}", max_size),
-            Self::GaussianSmooth { sigma_mm } => write!(f, "gaussian:{}", sigma_mm),
+            Self::GaussianSmooth { sigma_mm } => write!(f, "gaussian:{:.1}", sigma_mm),
         }
     }
 }
@@ -528,14 +528,14 @@ fn default_linear_fit_reliability_threshold() -> f64 { qsm_core::utils::LinearFi
 fn default_tgv_iterations() -> usize { qsm_core::inversion::TgvParams::default().iterations }
 fn default_tgv_step_size() -> f64 { qsm_core::inversion::TgvParams::default().step_size as f64 }
 fn default_tgv_tol() -> f64 { qsm_core::inversion::TgvParams::default().tol as f64 }
-fn default_mask_sections() -> Vec<MaskSection> {
+pub fn default_mask_sections() -> Vec<MaskSection> {
     vec![MaskSection {
         input: MaskingInput::PhaseQuality,
         generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
         refinements: vec![
-            MaskOp::Dilate { iterations: 2 },
+            MaskOp::Dilate { iterations: 1 },
             MaskOp::FillHoles { max_size: 0 },
-            MaskOp::Erode { iterations: 2 },
+            MaskOp::Erode { iterations: 1 },
         ],
     }]
 }
@@ -1015,10 +1015,8 @@ mod tests {
             bids_dir: PathBuf::from("/tmp/fake"),
             output_dir: Some(PathBuf::from("/tmp/fake_out")),
             config: None,
-            subjects: None,
-            sessions: None,
-            acquisitions: None,
-            runs: None,
+            include: None,
+            exclude: None,
             num_echoes: None,
             qsm_algorithm: None,
             unwrapping_algorithm: None,

@@ -9,7 +9,11 @@ pub fn execute(args: SlurmArgs) -> crate::Result<()> {
         PipelineConfig::default()
     };
 
-    let filter = DiscoveryFilter::default();
+    let filter = DiscoveryFilter {
+        include: args.include.clone(),
+        exclude: args.exclude.clone(),
+        num_echoes: args.num_echoes,
+    };
     let runs = discovery::discover_runs(&args.bids_dir, &filter)?;
 
     if runs.is_empty() {

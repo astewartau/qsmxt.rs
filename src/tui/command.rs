@@ -28,19 +28,13 @@ pub fn build_command_string(app: &App) -> String {
         parts.push(format!("--config {}", form.config_file));
     }
 
-    // Filters (from tree selection)
-    let (subjects, sessions, acquisitions, runs) = app.filter_state.selected_filters();
-    if let Some(subs) = &subjects {
-        parts.push(format!("--subjects {}", subs.join(" ")));
+    // Filters (from tree selection / include/exclude patterns)
+    let (include, exclude) = app.filter_state.get_include_exclude();
+    if let Some(ref inc) = include {
+        parts.push(format!("--include {}", inc.join(" ")));
     }
-    if let Some(sess) = &sessions {
-        parts.push(format!("--sessions {}", sess.join(" ")));
-    }
-    if let Some(acqs) = &acquisitions {
-        parts.push(format!("--acquisitions {}", acqs.join(" ")));
-    }
-    if let Some(rs) = &runs {
-        parts.push(format!("--runs {}", rs.join(" ")));
+    if let Some(ref exc) = exclude {
+        parts.push(format!("--exclude {}", exc.join(" ")));
     }
     if !app.filter_state.num_echoes.is_empty() {
         parts.push(format!("--num-echoes {}", app.filter_state.num_echoes));
@@ -273,10 +267,8 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         bids_dir: PathBuf::from(&form.bids_dir),
         output_dir: if form.output_dir.is_empty() { None } else { Some(PathBuf::from(&form.output_dir)) },
         config: parse_optional_path(&form.config_file),
-        subjects: app.filter_state.selected_filters().0,
-        sessions: app.filter_state.selected_filters().1,
-        acquisitions: app.filter_state.selected_filters().2,
-        runs: app.filter_state.selected_filters().3,
+        include: app.filter_state.get_include_exclude().0,
+        exclude: app.filter_state.get_include_exclude().1,
         num_echoes: parse_optional_usize(&app.filter_state.num_echoes),
         qsm_algorithm: Some(qsm_options[ps.qsm_algorithm]),
         unwrapping_algorithm: Some(unwrap_options[ps.unwrapping_algorithm]),
@@ -485,6 +477,7 @@ pub fn build_slurm_args(app: &App) -> crate::Result<SlurmArgs> {
     }
 
     let defaults = super::app::RunForm::default();
+    let (include, exclude) = app.filter_state.get_include_exclude();
     Ok(SlurmArgs {
         bids_dir: PathBuf::from(&form.bids_dir),
         output_dir: if form.output_dir.is_empty() { None } else { Some(PathBuf::from(&form.output_dir)) },
@@ -495,6 +488,9 @@ pub fn build_slurm_args(app: &App) -> crate::Result<SlurmArgs> {
         mem: form.slurm_mem.trim().parse().unwrap_or(32),
         cpus_per_task: form.slurm_cpus.trim().parse().unwrap_or(4),
         submit: form.slurm_submit,
+        include,
+        exclude,
+        num_echoes: parse_optional_usize(&app.filter_state.num_echoes),
     })
 }
 

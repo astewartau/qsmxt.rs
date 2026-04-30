@@ -36,11 +36,54 @@ pub struct QsmRun {
 /// Filters for BIDS discovery.
 #[derive(Debug, Clone, Default)]
 pub struct DiscoveryFilter {
-    pub subjects: Option<Vec<String>>,
-    pub sessions: Option<Vec<String>>,
-    pub acquisitions: Option<Vec<String>>,
-    pub runs: Option<Vec<String>>,
+    /// Glob patterns — include runs whose key matches at least one pattern
+    pub include: Option<Vec<String>>,
+    /// Glob patterns — exclude runs whose key matches any pattern
+    pub exclude: Option<Vec<String>>,
     pub num_echoes: Option<usize>,
+}
+
+/// Convert a glob pattern to a case-insensitive regex string.
+/// Supports `*` (any chars), `?` (single char). Anchored to full string.
+pub fn glob_to_regex(pattern: &str) -> String {
+    let mut re = String::from("(?i)^");
+    for ch in pattern.chars() {
+        match ch {
+            '*' => re.push_str(".*"),
+            '?' => re.push('.'),
+            '.' => re.push_str("\\."),
+            '(' | ')' | '[' | ']' | '{' | '}' | '+' | '^' | '$' | '|' | '\\' => {
+                re.push('\\');
+                re.push(ch);
+            }
+            _ => re.push(ch),
+        }
+    }
+    re.push('$');
+    re
+}
+
+/// Check if a key matches a glob pattern.
+pub fn matches_glob(key: &str, pattern: &str) -> bool {
+    let re_str = glob_to_regex(pattern);
+    regex::Regex::new(&re_str).map(|re| re.is_match(key)).unwrap_or(false)
+}
+
+/// Check if a key passes include/exclude filters.
+pub fn passes_include_exclude(key: &str, include: &Option<Vec<String>>, exclude: &Option<Vec<String>>) -> bool {
+    // Include: must match at least one pattern (if specified)
+    if let Some(ref patterns) = include {
+        if !patterns.iter().any(|p| matches_glob(key, p)) {
+            return false;
+        }
+    }
+    // Exclude: must not match any pattern
+    if let Some(ref patterns) = exclude {
+        if patterns.iter().any(|p| matches_glob(key, p)) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Discover all QSM runs in a BIDS directory.
@@ -69,40 +112,6 @@ pub fn discover_runs(bids_dir: &Path, filter: &DiscoveryFilter) -> crate::Result
                     continue;
                 }
 
-                // Apply filters
-                if let Some(ref subs) = filter.subjects {
-                    if !subs.iter().any(|s| {
-                        s == &ent.subject
-                            || s == &format!("sub-{}", ent.subject)
-                    }) {
-                        continue;
-                    }
-                }
-                if let Some(ref sess) = filter.sessions {
-                    match &ent.session {
-                        Some(ses) if sess.iter().any(|s| {
-                            s == ses || s == &format!("ses-{}", ses)
-                        }) => {}
-                        Some(_) => continue,
-                        None => continue,
-                    }
-                }
-                if let Some(ref acqs) = filter.acquisitions {
-                    match &ent.acquisition {
-                        Some(acq) if acqs.contains(acq) => {}
-                        Some(_) => continue,
-                        None if acqs.is_empty() => {}
-                        None => continue,
-                    }
-                }
-                if let Some(ref runs) = filter.runs {
-                    match &ent.run {
-                        Some(run) if runs.contains(run) => {}
-                        Some(_) => continue,
-                        None => continue,
-                    }
-                }
-
                 debug!("Found phase file: {}", path.display());
                 phase_files.push((path, ent));
             }
@@ -114,6 +123,13 @@ pub fn discover_runs(bids_dir: &Path, filter: &DiscoveryFilter) -> crate::Result
     for (path, ent) in phase_files {
         let key = ent.acquisition_key();
         groups.entry(key).or_default().push((path, ent));
+    }
+
+    // Apply include/exclude filters on grouped run keys
+    if filter.include.is_some() || filter.exclude.is_some() {
+        groups.retain(|key, _| {
+            passes_include_exclude(&key.to_string(), &filter.include, &filter.exclude)
+        });
     }
 
     // Build QsmRun for each group
@@ -267,6 +283,19 @@ impl BidsTree {
     }
 
     /// Iterate over all run leaves mutably.
+    pub fn for_each_run(&self, mut f: impl FnMut(&BidsRunLeaf)) {
+        for sub in &self.subjects {
+            for run in &sub.runs {
+                f(run);
+            }
+            for ses in &sub.sessions {
+                for run in &ses.runs {
+                    f(run);
+                }
+            }
+        }
+    }
+
     pub fn for_each_run_mut(&mut self, mut f: impl FnMut(&mut BidsRunLeaf)) {
         for sub in &mut self.subjects {
             for run in &mut sub.runs {
@@ -437,15 +466,27 @@ mod tests {
     }
 
     #[test]
-    fn test_discover_with_subject_filter() {
+    fn test_discover_with_include_filter() {
         let dir = tempfile::tempdir().unwrap();
         testutils::create_single_echo_bids(dir.path());
         let filter = DiscoveryFilter {
-            subjects: Some(vec!["99".to_string()]),
+            include: Some(vec!["sub-99*".to_string()]),
             ..Default::default()
         };
         let runs = discover_runs(dir.path(), &filter).unwrap();
         assert_eq!(runs.len(), 0, "Filter should exclude sub-1");
+    }
+
+    #[test]
+    fn test_discover_with_exclude_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        testutils::create_single_echo_bids(dir.path());
+        let filter = DiscoveryFilter {
+            exclude: Some(vec!["*sub-1*".to_string()]),
+            ..Default::default()
+        };
+        let runs = discover_runs(dir.path(), &filter).unwrap();
+        assert_eq!(runs.len(), 0, "Exclude should remove sub-1");
     }
 
     #[test]
@@ -460,11 +501,11 @@ mod tests {
     }
 
     #[test]
-    fn test_discover_with_session_filter() {
+    fn test_discover_with_session_include() {
         let dir = tempfile::tempdir().unwrap();
         testutils::create_multi_session_bids(dir.path());
         let filter = DiscoveryFilter {
-            sessions: Some(vec!["pre".to_string()]),
+            include: Some(vec!["*ses-pre*".to_string()]),
             ..Default::default()
         };
         let runs = discover_runs(dir.path(), &filter).unwrap();

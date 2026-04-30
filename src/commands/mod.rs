@@ -25,10 +25,8 @@ mod integration_tests {
             bids_dir,
             output_dir: Some(output_dir),
             config: None,
-            subjects: None,
-            sessions: None,
-            acquisitions: None,
-            runs: None,
+            include: None,
+            exclude: None,
             num_echoes: None,
             qsm_algorithm: None,
             unwrapping_algorithm: None,
@@ -528,7 +526,7 @@ mod integration_tests {
         let dir = tempfile::tempdir().unwrap();
         testutils::create_single_echo_bids(dir.path());
         super::validate::execute(ValidateArgs {
-            bids_dir: dir.path().to_path_buf(), subjects: None, sessions: None,
+            bids_dir: dir.path().to_path_buf(), include: None, exclude: None,
         }).unwrap();
     }
 
@@ -537,7 +535,7 @@ mod integration_tests {
         let dir = tempfile::tempdir().unwrap();
         testutils::create_multi_echo_bids(dir.path());
         super::validate::execute(ValidateArgs {
-            bids_dir: dir.path().to_path_buf(), subjects: None, sessions: None,
+            bids_dir: dir.path().to_path_buf(), include: None, exclude: None,
         }).unwrap();
     }
 
@@ -545,7 +543,7 @@ mod integration_tests {
     fn test_validate_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
         super::validate::execute(ValidateArgs {
-            bids_dir: dir.path().to_path_buf(), subjects: None, sessions: None,
+            bids_dir: dir.path().to_path_buf(), include: None, exclude: None,
         }).unwrap();
     }
 
@@ -850,6 +848,7 @@ mod integration_tests {
             config: None,
             time: "01:00:00".to_string(),
             mem: 16, cpus_per_task: 2, submit: false,
+            include: None, exclude: None, num_echoes: None,
         }).unwrap();
 
         assert!(out.join("derivatives/qsmxt.rs/slurm").exists());
@@ -860,7 +859,7 @@ mod integration_tests {
         let dir = tempfile::tempdir().unwrap();
         testutils::create_multi_session_bids(dir.path());
         super::validate::execute(ValidateArgs {
-            bids_dir: dir.path().to_path_buf(), subjects: None, sessions: None,
+            bids_dir: dir.path().to_path_buf(), include: None, exclude: None,
         }).unwrap();
     }
 }

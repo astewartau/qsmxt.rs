@@ -85,11 +85,11 @@ pub fn execute(cmd: MaskCommand) -> crate::Result<()> {
             let nifti = load_nifti(&args.input)?;
             let (nx, ny, nz) = nifti.dims;
             let t = qsm_core::utils::otsu_threshold(&nifti.data, 256);
-            info!("Robust mask (Otsu threshold: {:.4}, dilate:1, fill-holes:auto, erode:2)", t);
+            info!("Robust mask (Otsu threshold: {:.4}, dilate:1, fill-holes:auto, erode:1)", t);
             let mut mask: Vec<u8> = nifti.data.iter().map(|&v| if v > t { 1u8 } else { 0u8 }).collect();
             mask = phase::dilate_mask(&mask, nx, ny, nz, 1);
             mask = qsm_core::utils::fill_holes(&mask, nx, ny, nz, nx * ny * nz / 20);
-            mask = phase::erode_mask(&mask, nx, ny, nz, 2);
+            mask = phase::erode_mask(&mask, nx, ny, nz, 1);
 
             save_mask(&args.output, &mask, &nifti)?;
             let count: usize = mask.iter().map(|&m| m as usize).sum();

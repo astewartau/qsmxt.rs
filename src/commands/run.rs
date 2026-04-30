@@ -23,10 +23,8 @@ pub fn execute(args: RunArgs) -> crate::Result<()> {
 
     // Discover BIDS runs
     let filter = DiscoveryFilter {
-        subjects: args.subjects.clone(),
-        sessions: args.sessions.clone(),
-        acquisitions: args.acquisitions.clone(),
-        runs: args.runs.clone(),
+        include: args.include.clone(),
+        exclude: args.exclude.clone(),
         num_echoes: args.num_echoes,
     };
 
