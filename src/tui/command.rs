@@ -523,22 +523,23 @@ pub fn config_from_app(app: &App) -> PipelineConfig {
     let qsm_algorithm = qsm_algorithms[ps.qsm_algorithm];
     let is_end_to_end = matches!(qsm_algorithm, QsmAlgorithm::Tgv | QsmAlgorithm::Qsmart);
 
-    let mut config = PipelineConfig::default();
-    config.do_qsm = ps.do_qsm;
-    config.do_swi = app.form.do_swi;
-    config.do_t2starmap = app.form.do_t2starmap;
-    config.do_r2starmap = app.form.do_r2starmap;
-    config.inhomogeneity_correction = ps.inhomogeneity_correction;
-    config.qsm_algorithm = qsm_algorithm;
-    config.unwrapping_algorithm = if is_end_to_end { None } else { Some(unwrap_algorithms[ps.unwrapping_algorithm]) };
-    config.bf_algorithm = if is_end_to_end { None } else { Some(bf_algorithms[ps.bf_algorithm]) };
-    config.combine_phase = ps.phase_combination == 0;
-    config.qsm_reference = match ps.qsm_reference {
-        0 => QsmReference::Mean,
-        _ => QsmReference::None,
-    };
-    config.mask_sections = ps.mask_sections.clone();
-    config
+    PipelineConfig {
+        do_qsm: ps.do_qsm,
+        do_swi: app.form.do_swi,
+        do_t2starmap: app.form.do_t2starmap,
+        do_r2starmap: app.form.do_r2starmap,
+        inhomogeneity_correction: ps.inhomogeneity_correction,
+        qsm_algorithm,
+        unwrapping_algorithm: if is_end_to_end { None } else { Some(unwrap_algorithms[ps.unwrapping_algorithm]) },
+        bf_algorithm: if is_end_to_end { None } else { Some(bf_algorithms[ps.bf_algorithm]) },
+        combine_phase: ps.phase_combination == 0,
+        qsm_reference: match ps.qsm_reference {
+            0 => QsmReference::Mean,
+            _ => QsmReference::None,
+        },
+        mask_sections: ps.mask_sections.clone(),
+        ..PipelineConfig::default()
+    }
 }
 
 #[cfg(test)]

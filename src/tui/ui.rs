@@ -866,9 +866,8 @@ fn draw_methods_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
                 raw_line.to_string(),
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             )));
-        } else if raw_line.starts_with("- ") {
+        } else if let Some(content) = raw_line.strip_prefix("- ") {
             let prefix = "  - ";
-            let content = &raw_line[2..];
             let width = inner.width as usize;
             let content_width = width.saturating_sub(prefix.len());
             if content_width > 0 && content.len() > content_width {
