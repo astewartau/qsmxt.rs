@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::cli::*;
+use crate::pipeline::config::{PipelineConfig, QsmAlgorithm, UnwrappingAlgorithm, BfAlgorithm, QsmReference};
 use super::app::App;
 
 pub fn build_command_string(app: &App) -> String {
@@ -503,6 +504,41 @@ pub fn build_slurm_args(app: &App) -> crate::Result<SlurmArgs> {
         exclude,
         num_echoes: parse_optional_usize(&app.filter_state.num_echoes),
     })
+}
+
+/// Build a PipelineConfig reflecting the current TUI state (for methods preview).
+pub fn config_from_app(app: &App) -> PipelineConfig {
+    let ps = &app.pipeline_state;
+    let qsm_algorithms = [
+        QsmAlgorithm::Rts, QsmAlgorithm::Tv, QsmAlgorithm::Tkd, QsmAlgorithm::Tsvd,
+        QsmAlgorithm::Tgv, QsmAlgorithm::Tikhonov, QsmAlgorithm::Nltv, QsmAlgorithm::Medi,
+        QsmAlgorithm::Ilsqr, QsmAlgorithm::Qsmart,
+    ];
+    let unwrap_algorithms = [UnwrappingAlgorithm::Romeo, UnwrappingAlgorithm::Laplacian];
+    let bf_algorithms = [
+        BfAlgorithm::Vsharp, BfAlgorithm::Pdf, BfAlgorithm::Lbv,
+        BfAlgorithm::Ismv, BfAlgorithm::Sharp,
+    ];
+
+    let qsm_algorithm = qsm_algorithms[ps.qsm_algorithm];
+    let is_end_to_end = matches!(qsm_algorithm, QsmAlgorithm::Tgv | QsmAlgorithm::Qsmart);
+
+    let mut config = PipelineConfig::default();
+    config.do_qsm = ps.do_qsm;
+    config.do_swi = app.form.do_swi;
+    config.do_t2starmap = app.form.do_t2starmap;
+    config.do_r2starmap = app.form.do_r2starmap;
+    config.inhomogeneity_correction = ps.inhomogeneity_correction;
+    config.qsm_algorithm = qsm_algorithm;
+    config.unwrapping_algorithm = if is_end_to_end { None } else { Some(unwrap_algorithms[ps.unwrapping_algorithm]) };
+    config.bf_algorithm = if is_end_to_end { None } else { Some(bf_algorithms[ps.bf_algorithm]) };
+    config.combine_phase = ps.phase_combination == 0;
+    config.qsm_reference = match ps.qsm_reference {
+        0 => QsmReference::Mean,
+        _ => QsmReference::None,
+    };
+    config.mask_sections = ps.mask_sections.clone();
+    config
 }
 
 #[cfg(test)]

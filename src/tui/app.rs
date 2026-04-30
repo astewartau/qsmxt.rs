@@ -5,11 +5,12 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::bids::discovery::{self, BidsTree};
 
-pub const TAB_NAMES: [&str; 4] = [
+pub const TAB_NAMES: [&str; 5] = [
     "Input",
     "Pipeline",
     "Supplementary",
     "Execution",
+    "Methods",
 ];
 
 // ─── Filter tree state ───
@@ -1219,6 +1220,7 @@ pub struct App {
     pub should_run: bool,
     pub tab_fields: Vec<Vec<FieldDef>>,
     pub form_scroll_offset: usize,
+    pub methods_scroll_offset: usize,
     pub error_message: Option<String>,
 }
 
@@ -1392,6 +1394,8 @@ impl App {
                     help: "Automatically submit generated scripts via sbatch",
                 },
             ],
+            // Tab 4: Methods (read-only, custom rendering)
+            vec![],
         ];
 
         App {
@@ -1406,6 +1410,7 @@ impl App {
             should_run: false,
             tab_fields,
             form_scroll_offset: 0,
+            methods_scroll_offset: 0,
             error_message: None,
         }
     }
@@ -1458,6 +1463,34 @@ impl App {
             return;
         }
 
+        // Route tab 4 (Methods) — read-only, only tab switching and scrolling
+        if self.active_tab == 4 {
+            match key.code {
+                KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+                KeyCode::Char(c @ '1'..='5') => {
+                    self.active_tab = (c as usize) - ('1' as usize);
+                    self.active_field = 0;
+                }
+                KeyCode::Tab => {
+                    self.active_tab = (self.active_tab + 1) % TAB_NAMES.len();
+                    self.active_field = 0;
+                }
+                KeyCode::BackTab => {
+                    self.active_tab = (self.active_tab + TAB_NAMES.len() - 1) % TAB_NAMES.len();
+                    self.active_field = 0;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.methods_scroll_offset = self.methods_scroll_offset.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.methods_scroll_offset += 1;
+                }
+                KeyCode::F(5) | KeyCode::Enter => self.try_run(),
+                _ => {}
+            }
+            return;
+        }
+
         if self.editing {
             self.handle_editing_key(key);
             return;
@@ -1467,7 +1500,7 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
 
             // Tab switching
-            KeyCode::Char(c @ '1'..='4') => {
+            KeyCode::Char(c @ '1'..='5') => {
                 self.active_tab = (c as usize) - ('1' as usize);
                 self.active_field = 0;
             }
@@ -1536,7 +1569,7 @@ impl App {
             }
             match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
-                KeyCode::Char(c @ '1'..='4') => {
+                KeyCode::Char(c @ '1'..='5') => {
                     self.active_tab = (c as usize) - ('1' as usize);
                     self.active_field = 0;
                 }
@@ -1723,7 +1756,7 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
 
             // Tab switching (same as other tabs)
-            KeyCode::Char(c @ '1'..='4') => {
+            KeyCode::Char(c @ '1'..='5') => {
                 self.active_tab = (c as usize) - ('1' as usize);
                 self.active_field = 0;
             }
@@ -1973,7 +2006,7 @@ impl App {
 
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
 
-            KeyCode::Char(c @ '1'..='4') => {
+            KeyCode::Char(c @ '1'..='5') => {
                 self.active_tab = (c as usize) - ('1' as usize);
                 self.active_field = 0;
             }

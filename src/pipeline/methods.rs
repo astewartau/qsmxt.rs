@@ -115,12 +115,22 @@ const CITE_BIAS: Citation = Citation {
     text: "Eckstein, K., Trattnig, S., Robinson, S.D. (2019). \"A Simple Homogeneity Correction for Neuroimaging at 7T.\" *Proc. ISMRM 27th Annual Meeting*.",
 };
 
+const CITE_QSMXT: Citation = Citation {
+    key: "stewart2026",
+    text: "Stewart, A. (2026). QSMxT.rs. https://github.com/astewartau/qsmxt.rs",
+};
+
 /// Generate a methods description and citation list from a pipeline configuration.
 pub fn generate_methods(config: &PipelineConfig) -> String {
     let mut sentences = Vec::new();
     let mut citations: Vec<&Citation> = Vec::new();
 
-    sentences.push("QSM processing was performed using qsmxt.rs (https://github.com/astewartau/qsmxt.rs).".to_string());
+    if config.do_qsm {
+        sentences.push("QSM processing was performed using qsmxt.rs (Stewart, 2026).".to_string());
+    } else {
+        sentences.push("MRI processing was performed using qsmxt.rs (Stewart, 2026).".to_string());
+    }
+    add_citation(&mut citations, &CITE_QSMXT);
 
     // Inhomogeneity correction
     if config.inhomogeneity_correction {
@@ -196,7 +206,7 @@ pub fn generate_methods(config: &PipelineConfig) -> String {
         // Referencing
         match config.qsm_reference {
             QsmReference::Mean => {
-                sentences.push("The susceptibility map was mean-referenced within the brain mask.".to_string());
+                sentences.push("The resulting susceptibility map was mean-referenced within the brain mask.".to_string());
             }
             QsmReference::None => {
                 sentences.push("No susceptibility referencing was applied.".to_string());

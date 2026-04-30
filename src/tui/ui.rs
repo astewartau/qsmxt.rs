@@ -111,6 +111,10 @@ fn draw_form(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         draw_pipeline_tab(f, app, area);
         return;
     }
+    if app.active_tab == 4 {
+        draw_methods_tab(f, app, area);
+        return;
+    }
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -838,6 +842,103 @@ fn draw_pipeline_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
             }
         }
     }
+}
+
+fn draw_methods_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+    let config = command::config_from_app(app);
+    let methods_text = crate::pipeline::methods::generate_methods(&config);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Methods ");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut lines: Vec<Line> = Vec::new();
+    for raw_line in methods_text.lines() {
+        if raw_line.starts_with("# ") {
+            lines.push(Line::from(Span::styled(
+                raw_line.to_string(),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )));
+        } else if raw_line.starts_with("## ") {
+            lines.push(Line::from(Span::styled(
+                raw_line.to_string(),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            )));
+        } else if raw_line.starts_with("- ") {
+            let prefix = "  - ";
+            let content = &raw_line[2..];
+            let width = inner.width as usize;
+            let content_width = width.saturating_sub(prefix.len());
+            if content_width > 0 && content.len() > content_width {
+                let words: Vec<&str> = content.split_whitespace().collect();
+                let mut current_line = String::new();
+                let mut first = true;
+                for word in words {
+                    if current_line.is_empty() {
+                        current_line = word.to_string();
+                    } else if current_line.len() + 1 + word.len() <= content_width {
+                        current_line.push(' ');
+                        current_line.push_str(word);
+                    } else {
+                        if first {
+                            lines.push(Line::from(vec![
+                                Span::styled(prefix, Style::default().fg(Color::Green)),
+                                Span::raw(current_line),
+                            ]));
+                            first = false;
+                        } else {
+                            lines.push(Line::from(format!("{}{}", " ".repeat(prefix.len()), current_line)));
+                        }
+                        current_line = word.to_string();
+                    }
+                }
+                if !current_line.is_empty() {
+                    if first {
+                        lines.push(Line::from(vec![
+                            Span::styled(prefix, Style::default().fg(Color::Green)),
+                            Span::raw(current_line),
+                        ]));
+                    } else {
+                        lines.push(Line::from(format!("{}{}", " ".repeat(prefix.len()), current_line)));
+                    }
+                }
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(Color::Green)),
+                    Span::raw(content.to_string()),
+                ]));
+            }
+        } else if raw_line.is_empty() {
+            lines.push(Line::from(""));
+        } else {
+            // Wrap long paragraph text to inner width
+            let width = inner.width as usize;
+            if width > 0 && raw_line.len() > width {
+                let words: Vec<&str> = raw_line.split_whitespace().collect();
+                let mut current_line = String::new();
+                for word in words {
+                    if current_line.is_empty() {
+                        current_line = word.to_string();
+                    } else if current_line.len() + 1 + word.len() <= width {
+                        current_line.push(' ');
+                        current_line.push_str(word);
+                    } else {
+                        lines.push(Line::from(current_line));
+                        current_line = word.to_string();
+                    }
+                }
+                if !current_line.is_empty() {
+                    lines.push(Line::from(current_line));
+                }
+            } else {
+                lines.push(Line::from(raw_line.to_string()));
+            }
+        }
+    }
+
+    render_scrollable(f, inner, lines, &mut app.methods_scroll_offset, None);
 }
 
 fn draw_command_preview_with(f: &mut Frame, cmd: &str, area: ratatui::layout::Rect) {
