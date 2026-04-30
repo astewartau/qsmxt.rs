@@ -34,7 +34,11 @@ esac
 
 # Get latest release tag
 echo "Fetching latest release..."
-TAG=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+CURL_OPTS="-fsSL"
+if [ -n "$GITHUB_TOKEN" ]; then
+    CURL_OPTS="$CURL_OPTS -H \"Authorization: token $GITHUB_TOKEN\""
+fi
+TAG=$(eval curl $CURL_OPTS "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
 
 if [ -z "$TAG" ]; then
     echo "Error: could not determine latest release"

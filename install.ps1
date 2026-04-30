@@ -11,7 +11,11 @@ $installDir = "$env:USERPROFILE\.qsmxt\bin"
 
 # Get latest release tag
 Write-Host "Fetching latest release..."
-$release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest"
+$headers = @{}
+if ($env:GITHUB_TOKEN) {
+    $headers["Authorization"] = "token $env:GITHUB_TOKEN"
+}
+$release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers $headers
 $tag = $release.tag_name
 
 if (-not $tag) {
