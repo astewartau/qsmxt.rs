@@ -46,20 +46,7 @@ pub fn generate_all_slurm(
             None => String::new(),
         };
 
-        let session_flag = match &run.key.session {
-            Some(ses) => format!("--sessions {}", shell_quote(ses)),
-            None => String::new(),
-        };
-
-        let run_flag = match &run.key.run {
-            Some(r) => format!("--runs {}", shell_quote(r)),
-            None => String::new(),
-        };
-
-        let acq_flag = match &run.key.acquisition {
-            Some(a) => format!("--acquisitions {}", shell_quote(a)),
-            None => String::new(),
-        };
+        let run_key = run.key.to_string();
 
         let script = format!(
             r#"#!/bin/bash
@@ -74,10 +61,7 @@ pub fn generate_all_slurm(
 
 {binary} run {bids_dir} {output_dir} \
   --config {config} \
-  --subjects {subject} \
-  {session_flag} \
-  {run_flag} \
-  {acq_flag} \
+  --include {include} \
   --n-procs {cpus}
 "#,
             job_name = job_name,
@@ -90,10 +74,7 @@ pub fn generate_all_slurm(
             bids_dir = shell_quote(&bids_dir.display().to_string()),
             output_dir = shell_quote(&output_dir.display().to_string()),
             config = shell_quote(&config_path.display().to_string()),
-            subject = shell_quote(&run.key.subject),
-            session_flag = session_flag,
-            run_flag = run_flag,
-            acq_flag = acq_flag,
+            include = shell_quote(&run_key),
         );
 
         std::fs::write(&script_path, script)?;
@@ -208,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn test_slurm_script_session_flag_included() {
+    fn test_slurm_script_include_flag() {
         let dir = tempfile::tempdir().unwrap();
         let runs = vec![dummy_run_with_key("01", Some("pre"))];
         let config = PipelineConfig::default();
@@ -226,7 +207,7 @@ mod tests {
         .unwrap();
 
         let content = std::fs::read_to_string(&scripts[0]).unwrap();
-        assert!(content.contains("--sessions 'pre'"), "Should contain quoted session flag");
+        assert!(content.contains("--include 'sub-01_ses-pre_MEGRE'"), "Should contain --include with run key");
     }
 
     #[test]
