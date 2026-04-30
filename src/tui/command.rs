@@ -264,8 +264,8 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         BfAlgorithmArg::Sharp,
     ];
     Ok(RunArgs {
-        bids_dir: PathBuf::from(&form.bids_dir),
-        output_dir: if form.output_dir.is_empty() { None } else { Some(PathBuf::from(&form.output_dir)) },
+        bids_dir: expand_tilde(&form.bids_dir),
+        output_dir: if form.output_dir.is_empty() { None } else { Some(expand_tilde(&form.output_dir)) },
         config: parse_optional_path(&form.config_file),
         include: app.filter_state.get_include_exclude().0,
         exclude: app.filter_state.get_include_exclude().1,
@@ -426,12 +426,23 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
     })
 }
 
+fn expand_tilde(s: &str) -> PathBuf {
+    let home = || std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("~"));
+    if s == "~" {
+        home()
+    } else if let Some(rest) = s.strip_prefix("~/") {
+        home().join(rest)
+    } else {
+        PathBuf::from(s)
+    }
+}
+
 fn parse_optional_path(s: &str) -> Option<PathBuf> {
     let trimmed = s.trim();
     if trimmed.is_empty() {
         None
     } else {
-        Some(PathBuf::from(trimmed))
+        Some(expand_tilde(trimmed))
     }
 }
 
@@ -479,8 +490,8 @@ pub fn build_slurm_args(app: &App) -> crate::Result<SlurmArgs> {
     let defaults = super::app::RunForm::default();
     let (include, exclude) = app.filter_state.get_include_exclude();
     Ok(SlurmArgs {
-        bids_dir: PathBuf::from(&form.bids_dir),
-        output_dir: if form.output_dir.is_empty() { None } else { Some(PathBuf::from(&form.output_dir)) },
+        bids_dir: expand_tilde(&form.bids_dir),
+        output_dir: if form.output_dir.is_empty() { None } else { Some(expand_tilde(&form.output_dir)) },
         account: form.slurm_account.trim().to_string(),
         partition: if form.slurm_partition.trim().is_empty() { None } else { Some(form.slurm_partition.trim().to_string()) },
         config: parse_optional_path(&form.config_file),

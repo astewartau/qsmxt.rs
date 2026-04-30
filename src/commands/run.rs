@@ -166,6 +166,10 @@ pub fn execute(args: RunArgs) -> crate::Result<()> {
     let config_path = derivatives_dir.join("pipeline_config.toml");
     std::fs::write(&config_path, config.to_annotated_toml())?;
 
+    // Save methods description
+    let methods_path = derivatives_dir.join("methods.md");
+    std::fs::write(&methods_path, crate::pipeline::methods::generate_methods(&config))?;
+
     // Execute
     let exec_config = executor::local::ExecutionConfig {
         n_procs,
