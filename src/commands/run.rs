@@ -65,8 +65,23 @@ pub fn execute(args: RunArgs) -> crate::Result<()> {
     };
 
     if args.dry {
-        println!("Pipeline: {}", config.description);
-        println!("Algorithm: {:?}", config.qsm_algorithm);
+        println!("Pipeline:");
+        println!("  Phase Combination: {}", if config.combine_phase { "MCPC-3D-S" } else { "Linear Fit" });
+        if config.inhomogeneity_correction {
+            println!("  Inhomogeneity:     enabled");
+        }
+        println!("  Masking:           {}", config.mask_sections.iter()
+            .map(|s| format!("{}", s))
+            .collect::<Vec<_>>()
+            .join(" | "));
+        if let Some(ref unwrap) = config.unwrapping_algorithm {
+            println!("  Unwrapping:        {:?}", unwrap);
+        }
+        if let Some(ref bf) = config.bf_algorithm {
+            println!("  BG Removal:        {:?}", bf);
+        }
+        println!("  QSM Algorithm:     {:?}", config.qsm_algorithm);
+        println!("  QSM Reference:     {:?}", config.qsm_reference);
         println!();
         for run in &runs {
             let (nx, ny, nz) = run.dims;

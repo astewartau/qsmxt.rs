@@ -33,6 +33,15 @@ impl MaskSection {
     }
 }
 
+impl fmt::Display for MaskSection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let parts: Vec<String> = std::iter::once(format!("{}", self.input))
+            .chain(self.all_ops().iter().map(|op| format!("{}", op)))
+            .collect();
+        write!(f, "{}", parts.join(","))
+    }
+}
+
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
