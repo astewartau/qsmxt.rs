@@ -22,6 +22,7 @@ env_logger = "0.11"
 thiserror = "2"
 indicatif = "0.17"
 chrono = "0.4"
+dicom = "0.9"
 ratatui = "0.29"
 crossterm = "0.28"
 

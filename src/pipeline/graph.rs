@@ -96,8 +96,9 @@ impl PipelineState {
     /// Check if a step is completed, outputs exist, and params haven't changed.
     ///
     /// If `expected_params_hash` is provided, the cached step must match it.
-    /// Steps cached without a hash (legacy state files) are always considered valid.
-    pub fn is_step_cached_with_hash(&self, step_name: &str, expected_params_hash: Option<&str>) -> bool {
+    /// When a parameter mismatch is detected, the step AND all downstream steps
+    /// are invalidated so they will be re-executed.
+    pub fn is_step_cached_with_hash(&mut self, step_name: &str, expected_params_hash: Option<&str>) -> bool {
         if let Some(record) = self.completed_steps.get(step_name) {
             // Verify all output files still exist
             if !record.outputs.iter().all(|p| p.exists()) {
@@ -109,10 +110,12 @@ impl PipelineState {
                     Some(stored) if stored == expected => {}
                     Some(_) => {
                         log::info!("Step '{}' parameters changed — invalidating cache", step_name);
+                        self.invalidate(step_name);
                         return false;
                     }
                     None => {
                         log::info!("Step '{}' missing params hash (legacy cache) — invalidating", step_name);
+                        self.invalidate(step_name);
                         return false;
                     }
                 }
@@ -124,7 +127,7 @@ impl PipelineState {
     }
 
     /// Check if a step is completed and its outputs still exist (no param check).
-    pub fn is_step_cached(&self, step_name: &str) -> bool {
+    pub fn is_step_cached(&mut self, step_name: &str) -> bool {
         self.is_step_cached_with_hash(step_name, None)
     }
 
@@ -440,7 +443,7 @@ mod tests {
         state.save(&path).unwrap();
 
         // Loading with different config should preserve existing steps
-        let loaded = PipelineState::load_or_create(&path, &config2, &key, false);
+        let mut loaded = PipelineState::load_or_create(&path, &config2, &key, false);
         assert!(loaded.completed_steps.contains_key("load"));
 
         // Step with matching params_hash is still cached

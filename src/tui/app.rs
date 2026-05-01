@@ -1,9 +1,229 @@
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::bids::discovery::{self, BidsTree};
+use crate::dicom;
+
+// ─── Input mode ───
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputMode {
+    Bids,
+    DicomToBids,
+}
+
+// ─── DICOM conversion state ───
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DicomFocus {
+    Series(usize), // index into flat series list
+    ConvertButton,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConvertStatus {
+    Idle,
+    Converting,
+    Done,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanStatus {
+    Idle,
+    Scanning,
+    Done,
+    Error,
+}
+
+pub struct DicomConvertState {
+    pub session: Option<dicom::DicomSession>,
+    pub convert_status: ConvertStatus,
+    pub convert_log: Vec<String>,
+    pub convert_errors: Vec<String>,
+    pub focus: DicomFocus,
+    pub scanned_dir: Option<String>,
+    pub scroll_offset: usize,
+    pub dicom_dir: String,
+    pub output_dir: String,
+    pub scan_status: ScanStatus,
+    pub scan_error: Option<String>,
+    scan_receiver: Option<mpsc::Receiver<Result<dicom::DicomSession, String>>>,
+    scan_progress: Arc<AtomicUsize>,
+    convert_receiver: Option<mpsc::Receiver<dicom::convert::ConvertMessage>>,
+}
+
+impl Default for DicomConvertState {
+    fn default() -> Self {
+        Self {
+            session: None,
+            convert_status: ConvertStatus::Idle,
+            convert_log: Vec::new(),
+            convert_errors: Vec::new(),
+            focus: DicomFocus::Series(0),
+            scanned_dir: None,
+            scroll_offset: 0,
+            dicom_dir: String::new(),
+            output_dir: String::new(),
+            scan_status: ScanStatus::Idle,
+            scan_error: None,
+            scan_receiver: None,
+            scan_progress: Arc::new(AtomicUsize::new(0)),
+            convert_receiver: None,
+        }
+    }
+}
+
+impl DicomConvertState {
+    /// Kick off a background scan if the directory changed. Non-blocking.
+    /// Also polls for completion of any in-progress scan.
+    pub fn maybe_rescan(&mut self) {
+        // Always poll for background scan completion first
+        self.poll_scan();
+
+        let trimmed = self.dicom_dir.trim();
+        let dir = if let Some(rest) = trimmed.strip_prefix("~/") {
+            if let Some(home) = std::env::var_os("HOME") {
+                format!("{}/{}", home.to_string_lossy(), rest)
+            } else {
+                trimmed.to_string()
+            }
+        } else {
+            trimmed.to_string()
+        };
+        if dir.is_empty() {
+            return;
+        }
+        // Don't start a new scan if one is already running
+        if self.scan_status == ScanStatus::Scanning {
+            return;
+        }
+        // Don't rescan the same directory
+        if self.scanned_dir.as_deref() == Some(&dir) {
+            return;
+        }
+        // Only scan if path is actually a directory
+        if !Path::new(&dir).is_dir() {
+            return;
+        }
+
+        // Launch background scan
+        let (tx, rx) = mpsc::channel();
+        let dir_clone = dir.clone();
+        self.scan_progress = Arc::new(AtomicUsize::new(0));
+        let progress = Arc::clone(&self.scan_progress);
+        std::thread::spawn(move || {
+            let result = dicom::scan_dicom_directory(Path::new(&dir_clone), progress);
+            let _ = tx.send(result);
+        });
+
+        self.scan_receiver = Some(rx);
+        self.scan_status = ScanStatus::Scanning;
+        self.scan_error = None;
+        self.session = None;
+        self.scanned_dir = Some(dir);
+    }
+
+    /// Number of files examined so far during a scan.
+    pub fn scan_files_examined(&self) -> usize {
+        self.scan_progress.load(Ordering::Relaxed)
+    }
+
+    /// Poll for background conversion messages. Called each frame.
+    pub fn poll_convert(&mut self) -> Option<std::path::PathBuf> {
+        let rx = self.convert_receiver.as_ref()?;
+        let mut completed_bids_dir = None;
+        // Drain all available messages
+        loop {
+            match rx.try_recv() {
+                Ok(dicom::convert::ConvertMessage::Log(line)) => {
+                    self.convert_log.push(line);
+                }
+                Ok(dicom::convert::ConvertMessage::Error(err)) => {
+                    self.convert_log.push(format!("ERROR: {}", err));
+                    self.convert_errors.push(err);
+                }
+                Ok(dicom::convert::ConvertMessage::Done { bids_dir }) => {
+                    if self.convert_errors.is_empty() {
+                        self.convert_status = ConvertStatus::Done;
+                    } else {
+                        self.convert_status = ConvertStatus::Error;
+                    }
+                    self.convert_receiver = None;
+                    completed_bids_dir = Some(bids_dir);
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.convert_status = ConvertStatus::Error;
+                    self.convert_log.push("ERROR: Conversion thread crashed".to_string());
+                    self.convert_receiver = None;
+                    break;
+                }
+            }
+        }
+        completed_bids_dir
+    }
+
+    /// Poll for background scan completion. Called each frame.
+    pub fn poll_scan(&mut self) {
+        let Some(ref rx) = self.scan_receiver else { return };
+        match rx.try_recv() {
+            Ok(Ok(session)) => {
+                self.session = Some(session);
+                self.focus = DicomFocus::Series(0);
+                self.scan_status = ScanStatus::Done;
+                self.scan_receiver = None;
+            }
+            Ok(Err(e)) => {
+                self.session = None;
+                self.scan_status = ScanStatus::Error;
+                self.scan_error = Some(e);
+                self.scan_receiver = None;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                // Still scanning
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.scan_status = ScanStatus::Error;
+                self.scan_error = Some("Scan thread crashed".to_string());
+                self.scan_receiver = None;
+            }
+        }
+    }
+
+    pub fn focus_next(&mut self) {
+        let series_count = self.session.as_ref().map(|s| s.total_series()).unwrap_or(0);
+        match self.focus {
+            DicomFocus::Series(i) => {
+                if i + 1 < series_count {
+                    self.focus = DicomFocus::Series(i + 1);
+                } else {
+                    self.focus = DicomFocus::ConvertButton;
+                }
+            }
+            DicomFocus::ConvertButton => {}
+        }
+    }
+
+    pub fn focus_prev(&mut self) {
+        match self.focus {
+            DicomFocus::Series(0) => {} // at top of series, handle_dicom_tab_key goes to IO
+            DicomFocus::Series(i) => self.focus = DicomFocus::Series(i - 1),
+            DicomFocus::ConvertButton => {
+                let series_count = self.session.as_ref().map(|s| s.total_series()).unwrap_or(0);
+                if series_count > 0 {
+                    self.focus = DicomFocus::Series(series_count - 1);
+                }
+            }
+        }
+    }
+}
 
 pub const TAB_NAMES: [&str; 5] = [
     "Input",
@@ -1222,6 +1442,8 @@ pub struct App {
     pub form_scroll_offset: usize,
     pub methods_scroll_offset: usize,
     pub error_message: Option<String>,
+    pub input_mode: InputMode,
+    pub dicom_state: DicomConvertState,
 }
 
 pub struct RunForm {
@@ -1412,6 +1634,8 @@ impl App {
             form_scroll_offset: 0,
             methods_scroll_offset: 0,
             error_message: None,
+            input_mode: InputMode::Bids,
+            dicom_state: DicomConvertState::default(),
         }
     }
 
@@ -1426,6 +1650,15 @@ impl App {
     /// Validate required fields and either set should_run or show error.
     pub fn try_run(&mut self) {
         self.error_message = None;
+
+        // If in DICOM mode, must convert first
+        if self.input_mode == InputMode::DicomToBids
+            && self.dicom_state.convert_status != ConvertStatus::Done
+        {
+            self.error_message = Some("Convert DICOM to BIDS first (Enter on Convert button)".to_string());
+            self.active_tab = 0;
+            return;
+        }
 
         // BIDS directory is always required
         if self.form.bids_dir.trim().is_empty() {
@@ -1555,16 +1788,34 @@ impl App {
     // ─── Filter tab key handling ───
 
     /// Number of IO fields at the top of the Input tab
-    pub const INPUT_IO_FIELDS: usize = 3; // bids_dir, output_dir, config_file
+    /// Field 0: Input Mode selector, Fields 1-3: text fields
+    pub const INPUT_IO_FIELDS: usize = 4; // mode, bids_dir/dicom_dir, output_dir, config_file
 
     fn handle_input_tab_key(&mut self, key: KeyEvent) {
-        // IO fields are at active_field 0-3, filter tree starts at 4+
+        // If in DICOM mode and past the IO fields, delegate to DICOM handler
+        if self.input_mode == InputMode::DicomToBids && self.active_field >= Self::INPUT_IO_FIELDS {
+            self.handle_dicom_tab_key(key);
+            return;
+        }
+
         let in_io = self.active_field < Self::INPUT_IO_FIELDS;
 
         if in_io {
-            // Handle IO field editing
-            if self.editing {
+            // Handle IO field editing (not for field 0 which is a selector)
+            if self.editing && self.active_field > 0 {
+                let was_editing = self.editing;
                 self.handle_editing_key(key);
+                let stopped_editing = was_editing && !self.editing;
+
+                // BIDS mode: rescan on every keystroke (fast, just globs)
+                // DICOM mode: only rescan when editing finishes (slow, reads files)
+                if self.input_mode == InputMode::Bids {
+                    let bids_dir = self.form.bids_dir.clone();
+                    self.filter_state.maybe_rescan(&bids_dir);
+                } else if stopped_editing && self.active_field == 1 {
+                    // Only scan when user finishes editing the DICOM directory field
+                    self.dicom_state.maybe_rescan();
+                }
                 return;
             }
             match key.code {
@@ -1586,57 +1837,85 @@ impl App {
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     if self.active_field + 1 < Self::INPUT_IO_FIELDS {
-                        // Move within IO fields
                         self.active_field += 1;
-                    } else if self.filter_state.tree.is_some() {
-                        // Enter filter tree (only if BIDS dir is loaded)
-                        self.active_field = Self::INPUT_IO_FIELDS;
+                    } else {
+                        let has_content = match self.input_mode {
+                            InputMode::Bids => self.filter_state.tree.is_some(),
+                            InputMode::DicomToBids => self.dicom_state.session.is_some(),
+                        };
+                        if has_content {
+                            self.active_field = Self::INPUT_IO_FIELDS;
+                        }
                     }
                 }
                 KeyCode::Enter | KeyCode::Char(' ') => self.interact_io_field(),
                 KeyCode::Left => self.adjust_io_select(-1),
                 KeyCode::Right => self.adjust_io_select(1),
-                // Reset focused IO field
                 KeyCode::Char('r') => self.reset_current_field(),
-                // Reset all IO fields
                 KeyCode::Char('R') => self.reset_current_tab(),
                 KeyCode::F(5) => self.try_run(),
                 _ => {}
             }
-            // Trigger BIDS rescan when bids_dir changes
-            let bids_dir = self.form.bids_dir.clone();
-            self.filter_state.maybe_rescan(&bids_dir);
-        } else {
-            // Delegate to filter tree handler, but intercept Up at the top to go back to IO
+            // Trigger rescan
+            if self.input_mode == InputMode::Bids {
+                let bids_dir = self.form.bids_dir.clone();
+                self.filter_state.maybe_rescan(&bids_dir);
+            } else {
+                self.dicom_state.maybe_rescan();
+            }
+        } else if self.input_mode == InputMode::Bids {
+            // BIDS filter tree
             if self.filter_state.include_editing || self.filter_state.exclude_editing || self.filter_state.num_echoes_editing {
-                // Let filter handle its own editing
                 self.handle_filter_key(key);
                 return;
             }
             match key.code {
                 KeyCode::Up | KeyCode::Char('k') if self.filter_state.focus == FilterFocus::Include => {
-                    // At top of filter tree, go back to IO fields
                     self.active_field = Self::INPUT_IO_FIELDS - 1;
                 }
                 _ => self.handle_filter_key(key),
             }
+        } else {
+            // DICOM series tree (active_field >= INPUT_IO_FIELDS)
+            self.handle_dicom_tab_key(key);
         }
     }
 
     fn interact_io_field(&mut self) {
-        if let 0..=2 = self.active_field { // Text fields: bids_dir, output_dir, config_file
-            self.editing = true;
-            self.cursor_pos = match self.active_field {
-                0 => self.form.bids_dir.len(),
-                1 => self.form.output_dir.len(),
-                2 => self.form.config_file.len(),
-                _ => 0,
-            };
+        if self.active_field == 0 {
+            // Mode selector: toggle on Enter/Space
+            self.toggle_input_mode();
+            return;
+        }
+        // Text fields (1-3)
+        self.editing = true;
+        self.cursor_pos = match self.active_field {
+            1 => if self.input_mode == InputMode::Bids { self.form.bids_dir.len() } else { self.dicom_state.dicom_dir.len() },
+            2 => if self.input_mode == InputMode::Bids { self.form.output_dir.len() } else { self.dicom_state.output_dir.len() },
+            3 => self.form.config_file.len(),
+            _ => 0,
+        };
+    }
+
+    fn adjust_io_select(&mut self, delta: isize) {
+        if self.active_field == 0 {
+            // Mode selector: Left/Right toggles
+            if delta != 0 {
+                self.toggle_input_mode();
+            }
         }
     }
 
-    fn adjust_io_select(&mut self, _delta: isize) {
-        // No select fields in IO section
+    fn toggle_input_mode(&mut self) {
+        match self.input_mode {
+            InputMode::Bids => {
+                self.input_mode = InputMode::DicomToBids;
+            }
+            InputMode::DicomToBids => {
+                self.input_mode = InputMode::Bids;
+            }
+        }
+        self.form_scroll_offset = 0;
     }
 
     /// Reset the focused field on a generic form tab to its default.
@@ -1644,9 +1923,24 @@ impl App {
         let defaults = RunForm::default();
         match (self.active_tab, self.active_field) {
             // Tab 0 (Input) IO fields
-            (0, 0) => self.form.bids_dir = defaults.bids_dir.clone(),
-            (0, 1) => self.form.output_dir = defaults.output_dir.clone(),
-            (0, 2) => self.form.config_file = defaults.config_file.clone(),
+            (0, 0) => self.input_mode = InputMode::Bids,
+            (0, 1) => {
+                if self.input_mode == InputMode::Bids {
+                    self.form.bids_dir = defaults.bids_dir.clone();
+                } else {
+                    self.dicom_state.dicom_dir = String::new();
+                    self.dicom_state.scanned_dir = None;
+                    self.dicom_state.session = None;
+                }
+            }
+            (0, 2) => {
+                if self.input_mode == InputMode::Bids {
+                    self.form.output_dir = defaults.output_dir.clone();
+                } else {
+                    self.dicom_state.output_dir = String::new();
+                }
+            }
+            (0, 3) => self.form.config_file = defaults.config_file.clone(),
             // Tab 2 (Supplementary)
             (2, 0) => self.form.do_swi = defaults.do_swi,
             (2, 1) => self.form.swi_scaling = defaults.swi_scaling,
@@ -1677,9 +1971,11 @@ impl App {
         let defaults = RunForm::default();
         match self.active_tab {
             0 => {
+                self.input_mode = InputMode::Bids;
                 self.form.bids_dir = defaults.bids_dir.clone();
                 self.form.output_dir = defaults.output_dir.clone();
                 self.form.config_file = defaults.config_file.clone();
+                self.dicom_state = DicomConvertState::default();
             }
             2 => {
                 self.form.do_swi = defaults.do_swi;
@@ -1902,6 +2198,145 @@ impl App {
             KeyCode::End => fs.num_echoes_cursor = fs.num_echoes.len(),
             _ => {}
         }
+    }
+
+    // ─── DICOM series tree key handling ───
+    // Handles navigation within the DICOM series tree area (active_field >= INPUT_IO_FIELDS).
+    // IO fields (mode selector, directories) are handled by handle_input_tab_key.
+
+    fn handle_dicom_tab_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+
+            KeyCode::Char(c @ '1'..='5') => {
+                self.active_tab = (c as usize) - ('1' as usize);
+                self.active_field = 0;
+            }
+            KeyCode::Tab => {
+                self.active_tab = (self.active_tab + 1) % TAB_NAMES.len();
+                self.active_field = 0;
+            }
+            KeyCode::BackTab => {
+                self.active_tab = (self.active_tab + TAB_NAMES.len() - 1) % TAB_NAMES.len();
+                self.active_field = 0;
+            }
+
+            // Navigation
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.dicom_state.focus == DicomFocus::Series(0) {
+                    // Go back to IO fields
+                    self.active_field = Self::INPUT_IO_FIELDS - 1;
+                } else {
+                    self.dicom_state.focus_prev();
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => self.dicom_state.focus_next(),
+
+            // Cycle series type
+            KeyCode::Left => {
+                if let DicomFocus::Series(i) = self.dicom_state.focus {
+                    if let Some(ref mut session) = self.dicom_state.session {
+                        let flat = session.flat_series();
+                        if let Some(r) = flat.get(i) {
+                            let s = session.series_mut(r);
+                            s.series_type = s.series_type.prev();
+                        }
+                    }
+                }
+            }
+            KeyCode::Right => {
+                if let DicomFocus::Series(i) = self.dicom_state.focus {
+                    if let Some(ref mut session) = self.dicom_state.session {
+                        let flat = session.flat_series();
+                        if let Some(r) = flat.get(i) {
+                            let s = session.series_mut(r);
+                            s.series_type = s.series_type.next();
+                        }
+                    }
+                }
+            }
+
+            // Interact
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                match self.dicom_state.focus {
+                    DicomFocus::Series(i) => {
+                        if let Some(ref mut session) = self.dicom_state.session {
+                            let flat = session.flat_series();
+                            if let Some(r) = flat.get(i) {
+                                let s = session.series_mut(r);
+                                s.series_type = s.series_type.next();
+                            }
+                        }
+                    }
+                    DicomFocus::ConvertButton => {
+                        self.run_dicom_conversion();
+                    }
+                }
+            }
+
+            KeyCode::F(5) => self.try_run(),
+
+            _ => {}
+        }
+    }
+
+    /// Launch the DICOM → BIDS conversion in a background thread.
+    fn run_dicom_conversion(&mut self) {
+        if self.dicom_state.session.is_none() {
+            self.error_message = Some("No DICOM session loaded".to_string());
+            return;
+        }
+
+        if dicom::convert::find_dcm2niix().is_none() {
+            self.error_message = Some("dcm2niix not found in PATH. Please install it.".to_string());
+            return;
+        }
+
+        if self.dicom_state.convert_status == ConvertStatus::Converting {
+            return; // already running
+        }
+
+        // Determine output directory
+        let output_dir = if self.dicom_state.output_dir.trim().is_empty() {
+            let dicom_dir = self.dicom_state.dicom_dir.trim().to_string();
+            let expanded = if let Some(rest) = dicom_dir.strip_prefix("~/") {
+                if let Some(home) = std::env::var_os("HOME") {
+                    format!("{}/{}", home.to_string_lossy(), rest)
+                } else {
+                    dicom_dir.clone()
+                }
+            } else {
+                dicom_dir.clone()
+            };
+            let p = std::path::Path::new(&expanded);
+            let parent = p.parent().unwrap_or(p);
+            parent.join("bids_output").to_string_lossy().to_string()
+        } else {
+            let d = self.dicom_state.output_dir.trim().to_string();
+            if let Some(rest) = d.strip_prefix("~/") {
+                if let Some(home) = std::env::var_os("HOME") {
+                    format!("{}/{}", home.to_string_lossy(), rest)
+                } else {
+                    d
+                }
+            } else {
+                d
+            }
+        };
+
+        self.dicom_state.convert_status = ConvertStatus::Converting;
+        self.dicom_state.convert_log.clear();
+        self.dicom_state.convert_errors.clear();
+        self.dicom_state.convert_log.push("Starting DICOM to BIDS conversion...".to_string());
+
+        let session = self.dicom_state.session.clone().unwrap();
+        let output_path = std::path::PathBuf::from(&output_dir);
+        let (tx, rx) = mpsc::channel();
+        self.dicom_state.convert_receiver = Some(rx);
+
+        std::thread::spawn(move || {
+            dicom::convert::convert_session_streaming(&session, &output_path, &tx);
+        });
     }
 
     // ─── Pipeline tab key handling ───
@@ -2288,9 +2723,13 @@ impl App {
 
     pub fn text_value(&self) -> &str {
         match (self.active_tab, self.active_field) {
-            (0, 0) => &self.form.bids_dir,
-            (0, 1) => &self.form.output_dir,
-            (0, 2) => &self.form.config_file,
+            (0, 1) => {
+                if self.input_mode == InputMode::Bids { &self.form.bids_dir } else { &self.dicom_state.dicom_dir }
+            }
+            (0, 2) => {
+                if self.input_mode == InputMode::Bids { &self.form.output_dir } else { &self.dicom_state.output_dir }
+            }
+            (0, 3) => &self.form.config_file,
             (2, 2) => &self.form.swi_strength,
             (2, 3) => &self.form.swi_hp_sigma_x,
             (2, 4) => &self.form.swi_hp_sigma_y,
@@ -2308,9 +2747,13 @@ impl App {
 
     fn text_value_mut(&mut self) -> &mut String {
         match (self.active_tab, self.active_field) {
-            (0, 0) => &mut self.form.bids_dir,
-            (0, 1) => &mut self.form.output_dir,
-            (0, 2) => &mut self.form.config_file,
+            (0, 1) => {
+                if self.input_mode == InputMode::Bids { &mut self.form.bids_dir } else { &mut self.dicom_state.dicom_dir }
+            }
+            (0, 2) => {
+                if self.input_mode == InputMode::Bids { &mut self.form.output_dir } else { &mut self.dicom_state.output_dir }
+            }
+            (0, 3) => &mut self.form.config_file,
             (2, 2) => &mut self.form.swi_strength,
             (2, 3) => &mut self.form.swi_hp_sigma_x,
             (2, 4) => &mut self.form.swi_hp_sigma_y,
@@ -2501,7 +2944,8 @@ mod tests {
     #[test]
     fn test_enter_editing_text_field() {
         let mut app = App::new();
-        // Tab 0, field 0 is BIDS Directory (Text)
+        // Tab 0, field 1 is BIDS Directory (Text) — field 0 is mode selector
+        app.active_field = 1;
         app.handle_key(key(KeyCode::Enter));
         assert!(app.editing);
     }
@@ -2509,6 +2953,7 @@ mod tests {
     #[test]
     fn test_type_characters() {
         let mut app = App::new();
+        app.active_field = 1; // BIDS Directory
         app.handle_key(key(KeyCode::Enter)); // enter editing
         app.handle_key(key(KeyCode::Char('/')));
         app.handle_key(key(KeyCode::Char('d')));
@@ -2522,6 +2967,7 @@ mod tests {
     #[test]
     fn test_backspace() {
         let mut app = App::new();
+        app.active_field = 1;
         app.form.bids_dir = "abc".to_string();
         app.handle_key(key(KeyCode::Enter)); // enter editing, cursor at end (3)
         app.handle_key(key(KeyCode::Backspace));
@@ -2542,6 +2988,7 @@ mod tests {
     #[test]
     fn test_delete_key() {
         let mut app = App::new();
+        app.active_field = 1;
         app.form.bids_dir = "abc".to_string();
         app.editing = true;
         app.cursor_pos = 0;
@@ -2552,6 +2999,7 @@ mod tests {
     #[test]
     fn test_cursor_left_right() {
         let mut app = App::new();
+        app.active_field = 1;
         app.form.bids_dir = "abc".to_string();
         app.editing = true;
         app.cursor_pos = 2;
@@ -2573,6 +3021,7 @@ mod tests {
     #[test]
     fn test_home_end_keys() {
         let mut app = App::new();
+        app.active_field = 1;
         app.form.bids_dir = "abcdef".to_string();
         app.editing = true;
         app.cursor_pos = 3;
@@ -2585,6 +3034,7 @@ mod tests {
     #[test]
     fn test_esc_exits_editing() {
         let mut app = App::new();
+        app.active_field = 1;
         app.editing = true;
         app.handle_key(key(KeyCode::Esc));
         assert!(!app.editing);
@@ -2595,6 +3045,7 @@ mod tests {
     #[test]
     fn test_enter_exits_editing() {
         let mut app = App::new();
+        app.active_field = 1;
         app.editing = true;
         app.handle_key(key(KeyCode::Enter));
         assert!(!app.editing);
@@ -2732,7 +3183,7 @@ mod tests {
     #[test]
     fn test_edit_output_dir() {
         let mut app = App::new();
-        app.active_field = 1; // output_dir
+        app.active_field = 2; // output_dir (field 0=mode, 1=bids_dir, 2=output_dir)
         app.handle_key(key(KeyCode::Enter));
         app.handle_key(key(KeyCode::Char('/')));
         app.handle_key(key(KeyCode::Char('o')));
@@ -2746,7 +3197,7 @@ mod tests {
     #[test]
     fn test_edit_config_file() {
         let mut app = App::new();
-        app.active_field = 2; // config_file
+        app.active_field = 3; // config_file (field 0=mode, 1=bids_dir, 2=output_dir, 3=config)
         app.handle_key(key(KeyCode::Enter));
         app.handle_key(key(KeyCode::Char('c')));
         assert_eq!(app.form.config_file, "c");
@@ -3080,10 +3531,10 @@ mod tests {
     fn test_input_tab_no_tree_cursor_stays() {
         let mut app = App::new();
         app.active_tab = 0;
-        app.active_field = 2; // Config File
+        app.active_field = 3; // Config File (field 0=mode, 1=bids_dir, 2=output_dir, 3=config)
         // No BIDS tree loaded
         assert!(app.filter_state.tree.is_none());
         app.handle_key(key(KeyCode::Down));
-        assert_eq!(app.active_field, 2); // Should stay on Config File
+        assert_eq!(app.active_field, 3); // Should stay on Config File
     }
 }

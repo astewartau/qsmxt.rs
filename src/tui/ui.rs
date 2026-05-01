@@ -259,32 +259,81 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 
     let io_field_count = super::app::App::INPUT_IO_FIELDS;
     let in_io = app.active_field < io_field_count;
+    let is_bids = app.input_mode == super::app::InputMode::Bids;
 
     // Build lines for IO fields
     let mut lines: Vec<Line> = Vec::new();
-    let io_labels = ["BIDS Directory", "Output Directory", "Config File"];
 
-    for (i, io_label) in io_labels.iter().enumerate().take(io_field_count) {
-        let focused = in_io && i == app.active_field;
+    // Field 0: Mode selector
+    let mode_focused = in_io && app.active_field == 0;
+    let mode_label_style = if mode_focused {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let (bids_style, dicom_style) = if is_bids {
+        (Style::default().fg(Color::Cyan), Style::default().fg(Color::DarkGray))
+    } else {
+        (Style::default().fg(Color::DarkGray), Style::default().fg(Color::Cyan))
+    };
+    if mode_focused {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {:22}", "Input Mode:"), mode_label_style),
+            Span::styled("< ", Style::default().fg(Color::DarkGray)),
+            if is_bids {
+                Span::styled("BIDS", bids_style.add_modifier(Modifier::BOLD))
+            } else {
+                Span::styled("DICOM -> BIDS", dicom_style.add_modifier(Modifier::BOLD))
+            },
+            Span::styled(" >", Style::default().fg(Color::DarkGray)),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {:22}", "Input Mode:"), mode_label_style),
+            if is_bids {
+                Span::styled("BIDS", bids_style)
+            } else {
+                Span::styled("DICOM -> BIDS", dicom_style)
+            },
+        ]));
+    }
+
+    // Fields 1-3: directory/config fields (labels change based on mode)
+    let io_labels = if is_bids {
+        ["BIDS Directory", "Output Directory", "Config File"]
+    } else {
+        ["DICOM Directory", "Output BIDS Dir", "Config File"]
+    };
+
+    // Fields 1-3 are the text IO fields
+    for (label_idx, io_label) in io_labels.iter().enumerate() {
+        let field_idx = label_idx + 1; // field 0 is mode selector
+        let focused = in_io && field_idx == app.active_field;
         let label_style = if focused {
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
 
-        // Text field
-        let value = match i {
-            0 => &app.form.bids_dir,
-            1 => &app.form.output_dir,
-            2 => &app.form.config_file,
+        // Text field - pull value from the right source based on mode
+        let value: &str = match (label_idx, is_bids) {
+            (0, true) => &app.form.bids_dir,
+            (0, false) => &app.dicom_state.dicom_dir,
+            (1, true) => &app.form.output_dir,
+            (1, false) => &app.dicom_state.output_dir,
+            (2, _) => &app.form.config_file,
             _ => "",
         };
         let val_style = if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::Gray) };
-        // For output_dir, show bids_dir as placeholder when empty
-        let display_val = if i == 1 && value.is_empty() && !app.form.bids_dir.is_empty() && !(focused && app.editing) {
-            Span::styled(&app.form.bids_dir, Style::default().fg(Color::DarkGray))
-        } else if i == 0 && value.is_empty() && !(focused && app.editing) {
-            // BIDS Directory is required
+        // Placeholder logic
+        let primary_dir = if is_bids { &app.form.bids_dir } else { &app.dicom_state.dicom_dir };
+        let display_val = if label_idx == 1 && value.is_empty() && !primary_dir.is_empty() && !(focused && app.editing) {
+            if is_bids {
+                Span::styled(primary_dir.to_string(), Style::default().fg(Color::DarkGray))
+            } else {
+                Span::styled("(auto: bids_output/)", Style::default().fg(Color::DarkGray))
+            }
+        } else if label_idx == 0 && value.is_empty() && !(focused && app.editing) {
             Span::styled("(required)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
         } else if value.is_empty() && !(focused && app.editing) {
             Span::styled("(empty)", Style::default().fg(Color::DarkGray))
@@ -298,163 +347,207 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         lines.push(line);
     }
 
-    // Separator
+    // Separator + mode-specific content below IO fields
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  ── Filters ──",
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-    )));
 
-    // Filter tree content
-    if app.form.bids_dir.trim().is_empty() {
+    if is_bids {
+        // ─── BIDS mode: filters + tree ───
         lines.push(Line::from(Span::styled(
-            "  Set BIDS directory above first",
-            Style::default().fg(Color::DarkGray),
+            "  -- Filters --",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
         )));
-    } else {
-        let has_runs = app.filter_state.tree.as_ref().is_some_and(|t| !t.subjects.is_empty());
-        if !has_runs {
+
+        if app.form.bids_dir.trim().is_empty() {
             lines.push(Line::from(Span::styled(
-                "  No QSM-compatible runs found",
+                "  Set BIDS directory above first",
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
-            let tree = app.filter_state.tree.as_ref().unwrap();
-
-            // Include pattern
-            let include_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::Include;
-            let include_label = Span::styled(
-                "  Include:  ",
-                if include_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
-                else { Style::default().fg(Color::White) },
-            );
-            let include_val = Span::styled(&app.filter_state.include_pattern, Style::default().fg(Color::Cyan));
-            lines.push(Line::from(vec![include_label, include_val]));
-
-            // Exclude pattern
-            let exclude_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::Exclude;
-            let exclude_label = Span::styled(
-                "  Exclude:  ",
-                if exclude_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
-                else { Style::default().fg(Color::White) },
-            );
-            let exclude_val = if app.filter_state.exclude_pattern.is_empty() && !app.filter_state.exclude_editing {
-                Span::styled("(empty)", Style::default().fg(Color::DarkGray))
+            let has_runs = app.filter_state.tree.as_ref().is_some_and(|t| !t.subjects.is_empty());
+            if !has_runs {
+                lines.push(Line::from(Span::styled(
+                    "  No QSM-compatible runs found",
+                    Style::default().fg(Color::DarkGray),
+                )));
             } else {
-                Span::styled(&app.filter_state.exclude_pattern, Style::default().fg(Color::Cyan))
-            };
-            lines.push(Line::from(vec![exclude_label, exclude_val]));
-            lines.push(Line::from(""));
+                let tree = app.filter_state.tree.as_ref().unwrap();
 
-            // Tree rows
-            let visible = app.filter_state.visible_rows();
-            for (i, row) in visible.iter().enumerate() {
-                let focused = !in_io && app.filter_state.focus == super::app::FilterFocus::TreeNode(i);
-                let line = match row {
-                    super::app::TreeRow::Subject(si) => {
-                        let sub = &tree.subjects[*si];
-                        let collapsed = app.filter_state.collapsed.contains(&format!("sub-{}", sub.name));
-                        let arrow = if collapsed { "▶" } else { "▼" };
-                        let sel = sub.selected_runs();
-                        let total = sub.total_runs();
-                        let sel_info = if sel == total { "all selected".to_string() } else { format!("{}/{} selected", sel, total) };
-                        let style = if focused {
-                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
-                        };
-                        Line::from(Span::styled(
-                            format!("  {} sub-{} ({} run{}, {})", arrow, sub.name, total, if total == 1 { "" } else { "s" }, sel_info),
-                            style,
-                        ))
-                    }
-                    super::app::TreeRow::Session(si, sei) => {
-                        let sub = &tree.subjects[*si];
-                        let ses = &sub.sessions[*sei];
-                        let collapsed = app.filter_state.collapsed.contains(&format!("sub-{}/ses-{}", sub.name, ses.name));
-                        let arrow = if collapsed { "▶" } else { "▼" };
-                        let style = if focused {
-                            Style::default().fg(Color::Yellow)
-                        } else {
-                            Style::default().fg(Color::White)
-                        };
-                        Line::from(Span::styled(format!("    {} ses-{}", arrow, ses.name), style))
-                    }
-                    super::app::TreeRow::Run { sub, ses, run } => {
-                        let leaf = match ses {
-                            Some(sei) => &tree.subjects[*sub].sessions[*sei].runs[*run],
-                            None => &tree.subjects[*sub].runs[*run],
-                        };
-                        let indent = if ses.is_some() { "      " } else { "    " };
-                        let (marker, color) = if leaf.selected { ("[x]", Color::Green) } else { ("[ ]", Color::Gray) };
-                        let style = if focused {
-                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default().fg(color)
-                        };
-                        Line::from(Span::styled(format!("{}{} {}", indent, marker, leaf.display), style))
-                    }
+                let include_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::Include;
+                let include_label = Span::styled(
+                    "  Include:  ",
+                    if include_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
+                    else { Style::default().fg(Color::White) },
+                );
+                let include_val = Span::styled(&app.filter_state.include_pattern, Style::default().fg(Color::Cyan));
+                lines.push(Line::from(vec![include_label, include_val]));
+
+                let exclude_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::Exclude;
+                let exclude_label = Span::styled(
+                    "  Exclude:  ",
+                    if exclude_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
+                    else { Style::default().fg(Color::White) },
+                );
+                let exclude_val = if app.filter_state.exclude_pattern.is_empty() && !app.filter_state.exclude_editing {
+                    Span::styled("(empty)", Style::default().fg(Color::DarkGray))
+                } else {
+                    Span::styled(&app.filter_state.exclude_pattern, Style::default().fg(Color::Cyan))
                 };
-                lines.push(line);
+                lines.push(Line::from(vec![exclude_label, exclude_val]));
+                lines.push(Line::from(""));
+
+                let visible = app.filter_state.visible_rows();
+                for (i, row) in visible.iter().enumerate() {
+                    let focused = !in_io && app.filter_state.focus == super::app::FilterFocus::TreeNode(i);
+                    let line = match row {
+                        super::app::TreeRow::Subject(si) => {
+                            let sub = &tree.subjects[*si];
+                            let collapsed = app.filter_state.collapsed.contains(&format!("sub-{}", sub.name));
+                            let arrow = if collapsed { "▶" } else { "▼" };
+                            let sel = sub.selected_runs();
+                            let total = sub.total_runs();
+                            let sel_info = if sel == total { "all selected".to_string() } else { format!("{}/{} selected", sel, total) };
+                            let style = if focused {
+                                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                            };
+                            Line::from(Span::styled(
+                                format!("  {} sub-{} ({} run{}, {})", arrow, sub.name, total, if total == 1 { "" } else { "s" }, sel_info),
+                                style,
+                            ))
+                        }
+                        super::app::TreeRow::Session(si, sei) => {
+                            let sub = &tree.subjects[*si];
+                            let ses = &sub.sessions[*sei];
+                            let collapsed = app.filter_state.collapsed.contains(&format!("sub-{}/ses-{}", sub.name, ses.name));
+                            let arrow = if collapsed { "▶" } else { "▼" };
+                            let style = if focused {
+                                Style::default().fg(Color::Yellow)
+                            } else {
+                                Style::default().fg(Color::White)
+                            };
+                            Line::from(Span::styled(format!("    {} ses-{}", arrow, ses.name), style))
+                        }
+                        super::app::TreeRow::Run { sub, ses, run } => {
+                            let leaf = match ses {
+                                Some(sei) => &tree.subjects[*sub].sessions[*sei].runs[*run],
+                                None => &tree.subjects[*sub].runs[*run],
+                            };
+                            let indent = if ses.is_some() { "      " } else { "    " };
+                            let (marker, color) = if leaf.selected { ("[x]", Color::Green) } else { ("[ ]", Color::Gray) };
+                            let style = if focused {
+                                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default().fg(color)
+                            };
+                            Line::from(Span::styled(format!("{}{} {}", indent, marker, leaf.display), style))
+                        }
+                    };
+                    lines.push(line);
+                }
+
+                lines.push(Line::from(""));
+                let ne_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::NumEchoes;
+                let ne_label = Span::styled(
+                    "  Num Echoes: ",
+                    if ne_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
+                    else { Style::default().fg(Color::White) },
+                );
+                let ne_val = if app.filter_state.num_echoes.is_empty() && !app.filter_state.num_echoes_editing {
+                    Span::styled("(all)", Style::default().fg(Color::DarkGray))
+                } else {
+                    Span::styled(&app.filter_state.num_echoes, Style::default().fg(Color::Cyan))
+                };
+                lines.push(Line::from(vec![ne_label, ne_val]));
+
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!("  {} run(s), {} selected", tree.total_runs(), tree.selected_runs()),
+                    Style::default().fg(Color::DarkGray),
+                )));
             }
-
-            // Num Echoes
-            lines.push(Line::from(""));
-            let ne_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::NumEchoes;
-            let ne_label = Span::styled(
-                "  Num Echoes: ",
-                if ne_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
-                else { Style::default().fg(Color::White) },
-            );
-            let ne_val = if app.filter_state.num_echoes.is_empty() && !app.filter_state.num_echoes_editing {
-                Span::styled("(all)", Style::default().fg(Color::DarkGray))
-            } else {
-                Span::styled(&app.filter_state.num_echoes, Style::default().fg(Color::Cyan))
-            };
-            lines.push(Line::from(vec![ne_label, ne_val]));
-
-            // Summary
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                format!("  {} run(s), {} selected", tree.total_runs(), tree.selected_runs()),
-                Style::default().fg(Color::DarkGray),
-            )));
         }
+    } else {
+        // ─── DICOM mode: series classification ───
+        draw_dicom_series_section(&app.dicom_state, &mut lines, in_io);
     }
 
-    // Determine focused line for scroll
+    // IO fields: mode(1) + dir fields(3) = 4 lines total (no blank between mode and dirs)
     let focused_line = if in_io {
-        Some(app.active_field)
-    } else {
+        Some(app.active_field) // field 0 = mode line, 1-3 = dirs
+    } else if is_bids {
         // Filter area starts after IO fields + separator + header
-        let offset = io_field_count + 2;
+        let offset = io_field_count + 2; // +2 for blank + header
         match app.filter_state.focus {
             super::app::FilterFocus::Include => Some(offset),
             super::app::FilterFocus::Exclude => Some(offset + 1),
-            super::app::FilterFocus::TreeNode(i) => Some(offset + i + 3), // +3 for include, exclude, blank line
+            super::app::FilterFocus::TreeNode(i) => Some(offset + i + 3),
             super::app::FilterFocus::NumEchoes => {
                 let vis_len = app.filter_state.visible_rows().len();
-                Some(offset + vis_len + 4) // +4 for include, exclude, blank, tree rows
+                Some(offset + vis_len + 4)
             }
+        }
+    } else {
+        // DICOM series area
+        let offset = io_field_count + 2; // blank + header
+        match app.dicom_state.focus {
+            super::app::DicomFocus::Series(i) => {
+                // Count acq headers before series i
+                if let Some(ref session) = app.dicom_state.session {
+                    let mut line_offset = offset;
+                    let mut current_flat = 0usize;
+                    let mut found = None;
+                    'outer: for subject in &session.subjects {
+                        for study in &subject.studies {
+                            for acq in &study.acquisitions {
+                                line_offset += 1; // acq header
+                                for _series in &acq.series {
+                                    if current_flat == i {
+                                        found = Some(line_offset);
+                                        break 'outer;
+                                    }
+                                    line_offset += 1;
+                                    current_flat += 1;
+                                }
+                            }
+                        }
+                    }
+                    found
+                } else {
+                    None
+                }
+            }
+            super::app::DicomFocus::ConvertButton => Some(lines.len().saturating_sub(1)),
         }
     };
 
-    render_scrollable(f, content_area, lines, &mut app.form_scroll_offset, focused_line);
+    let scroll_offset = if is_bids {
+        &mut app.form_scroll_offset
+    } else {
+        &mut app.dicom_state.scroll_offset
+    };
+    render_scrollable(f, content_area, lines, scroll_offset, focused_line);
 
-    // Help text for focused field
+    // Help text
     let help_text = if in_io {
         match app.active_field {
-            0 => "Path to BIDS-formatted dataset directory",
-            1 => "Output directory (defaults to BIDS directory)",
-            2 => "Optional pipeline configuration file (TOML)",
+            0 => "Left/Right to switch between BIDS and DICOM input modes",
+            1 => if is_bids { "Path to BIDS-formatted dataset directory" } else { "Path to directory containing DICOM files" },
+            2 => if is_bids { "Output directory (defaults to BIDS directory)" } else { "Output BIDS directory (empty = auto-generate)" },
+            3 => "Optional pipeline configuration file (TOML)",
             _ => "",
         }
-    } else {
+    } else if is_bids {
         match app.filter_state.focus {
             super::app::FilterFocus::Include => "Glob patterns to include (space-separated, e.g. sub-1* *ses-pre*)",
             super::app::FilterFocus::Exclude => "Glob patterns to exclude (space-separated, e.g. *mygrea*)",
             super::app::FilterFocus::TreeNode(_) => "Space: toggle, Enter: expand/collapse",
             super::app::FilterFocus::NumEchoes => "Limit number of echoes to process",
+        }
+    } else {
+        match app.dicom_state.focus {
+            super::app::DicomFocus::Series(_) => "Left/Right: change type, Enter: cycle type",
+            super::app::DicomFocus::ConvertButton => "Enter: run dcm2niix conversion",
         }
     };
     if !help_text.is_empty() {
@@ -465,38 +558,37 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         f.render_widget(help_para, help_area);
     }
 
-    // Set cursor if editing IO field
-    if app.editing && in_io {
-        let scroll = app.form_scroll_offset;
-        if app.active_field >= scroll && app.active_field < scroll + content_area.height as usize {
-            let y = content_area.y + (app.active_field - scroll) as u16;
+    // Set cursor if editing IO text field
+    if app.editing && in_io && app.active_field > 0 {
+        let scroll = if is_bids { app.form_scroll_offset } else { app.dicom_state.scroll_offset };
+        let line = app.active_field;
+        if line >= scroll && line < scroll + content_area.height as usize {
+            let y = content_area.y + (line - scroll) as u16;
             let x = content_area.x + 24 + app.cursor_pos as u16;
             f.set_cursor_position((x, y));
         }
     }
-    // Set cursor if editing filter include/exclude/num_echoes
-    if app.filter_state.include_editing {
-        let offset = io_field_count + 2; // after IO fields + separator + header
+    // Set cursor if editing filter include/exclude/num_echoes (BIDS mode only)
+    if is_bids && app.filter_state.include_editing {
+        let offset = io_field_count + 2;
         let scroll = app.form_scroll_offset;
-        let line = offset;
-        if line >= scroll && line < scroll + content_area.height as usize {
-            let y = content_area.y + (line - scroll) as u16;
+        if offset >= scroll && offset < scroll + content_area.height as usize {
+            let y = content_area.y + (offset - scroll) as u16;
             let x = content_area.x + 12 + app.filter_state.include_cursor as u16;
             f.set_cursor_position((x, y));
         }
-    } else if app.filter_state.exclude_editing {
-        let offset = io_field_count + 2 + 1; // include line + exclude line
+    } else if is_bids && app.filter_state.exclude_editing {
+        let offset = io_field_count + 2 + 1;
         let scroll = app.form_scroll_offset;
-        let line = offset;
-        if line >= scroll && line < scroll + content_area.height as usize {
-            let y = content_area.y + (line - scroll) as u16;
+        if offset >= scroll && offset < scroll + content_area.height as usize {
+            let y = content_area.y + (offset - scroll) as u16;
             let x = content_area.x + 12 + app.filter_state.exclude_cursor as u16;
             f.set_cursor_position((x, y));
         }
-    } else if app.filter_state.num_echoes_editing {
-        let offset = io_field_count + 2 + 1; // include + exclude
+    } else if is_bids && app.filter_state.num_echoes_editing {
+        let offset = io_field_count + 2 + 1;
         let vis_len = app.filter_state.visible_rows().len();
-        let line = offset + vis_len + 2; // +2 for blank line + tree rows
+        let line = offset + vis_len + 2;
         let scroll = app.form_scroll_offset;
         if line >= scroll && line < scroll + content_area.height as usize {
             let y = content_area.y + (line - scroll) as u16;
@@ -506,6 +598,155 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     }
 }
 
+/// Render the DICOM series classification section (used within the unified input tab).
+fn draw_dicom_series_section(
+    ds: &super::app::DicomConvertState,
+    lines: &mut Vec<Line<'_>>,
+    in_io: bool,
+) {
+    if ds.dicom_dir.trim().is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  Set DICOM directory above first",
+            Style::default().fg(Color::DarkGray),
+        )));
+        return;
+    }
+
+    if ds.scan_status == super::app::ScanStatus::Scanning {
+        let n = ds.scan_files_examined();
+        lines.push(Line::from(Span::styled(
+            format!("  Scanning DICOM directory... ({} files examined)", n),
+            Style::default().fg(Color::Yellow),
+        )));
+        return;
+    }
+
+    if let Some(ref err) = ds.scan_error {
+        lines.push(Line::from(Span::styled(
+            format!("  Scan error: {}", err),
+            Style::default().fg(Color::Red),
+        )));
+        return;
+    }
+
+    let Some(ref session) = ds.session else {
+        lines.push(Line::from(Span::styled(
+            "  No DICOM files found in directory",
+            Style::default().fg(Color::DarkGray),
+        )));
+        return;
+    };
+
+    lines.push(Line::from(Span::styled(
+        "  -- Series Classification --",
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+    )));
+
+    let mut flat_idx = 0;
+    for subject in &session.subjects {
+        for study in &subject.studies {
+            for acq in &study.acquisitions {
+                let run_label = if acq.run_number > 1 {
+                    format!(" (run {})", acq.run_number)
+                } else {
+                    String::new()
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("  acq-{}{} ({} series)", acq.name, run_label, acq.series.len()),
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                )));
+
+                for series in &acq.series {
+                    let series_focused = !in_io && ds.focus == super::app::DicomFocus::Series(flat_idx);
+                    let type_label = series.series_type.label();
+                    let echo_info = series.echo_time
+                        .map(|et| format!(" TE={:.1}ms", et))
+                        .unwrap_or_default();
+
+                    let style = if series_focused {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    };
+
+                    let type_style = match series.series_type {
+                        crate::dicom::SeriesType::Skip => Style::default().fg(Color::DarkGray),
+                        crate::dicom::SeriesType::Phase => Style::default().fg(Color::Cyan),
+                        crate::dicom::SeriesType::Magnitude => Style::default().fg(Color::Green),
+                        crate::dicom::SeriesType::T1w => Style::default().fg(Color::Magenta),
+                        _ => Style::default().fg(Color::White),
+                    };
+
+                    let line = if series_focused {
+                        Line::from(vec![
+                            Span::styled(
+                                format!("    {:30}", format!("{}{}", series.description, echo_info)),
+                                style,
+                            ),
+                            Span::styled("< ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(type_label, type_style.add_modifier(Modifier::BOLD)),
+                            Span::styled(" >", Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                format!("  ({} files)", series.num_files),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                        ])
+                    } else {
+                        Line::from(vec![
+                            Span::styled(
+                                format!("    {:30}", format!("{}{}", series.description, echo_info)),
+                                style,
+                            ),
+                            Span::styled(format!("[{}]", type_label), type_style),
+                            Span::styled(
+                                format!("  ({} files)", series.num_files),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                        ])
+                    };
+                    lines.push(line);
+                    flat_idx += 1;
+                }
+            }
+        }
+    }
+
+    // Convert button
+    lines.push(Line::from(""));
+    let convert_focused = !in_io && ds.focus == super::app::DicomFocus::ConvertButton;
+    let convert_style = if convert_focused {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let status_span = match ds.convert_status {
+        super::app::ConvertStatus::Idle => Span::styled("  Ready", Style::default().fg(Color::DarkGray)),
+        super::app::ConvertStatus::Converting => Span::styled("  Converting...", Style::default().fg(Color::Yellow)),
+        super::app::ConvertStatus::Done => Span::styled("  Done!", Style::default().fg(Color::Green)),
+        super::app::ConvertStatus::Error => Span::styled("  Error (see log)", Style::default().fg(Color::Red)),
+    };
+    lines.push(Line::from(vec![
+        Span::styled("  [ Convert to BIDS ]", convert_style),
+        status_span,
+    ]));
+
+    // Conversion log
+    if !ds.convert_log.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  -- Conversion Log --",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        )));
+        for log_line in &ds.convert_log {
+            let style = if log_line.starts_with("ERROR:") {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            lines.push(Line::from(Span::styled(format!("  {}", log_line), style)));
+        }
+    }
+}
 
 fn draw_pipeline_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let block = Block::default()

@@ -1,6 +1,7 @@
 mod bids;
 mod cli;
 mod commands;
+mod dicom;
 mod error;
 mod executor;
 mod pipeline;

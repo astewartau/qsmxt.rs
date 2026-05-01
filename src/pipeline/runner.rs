@@ -37,12 +37,12 @@ struct StageContext<'a> {
 }
 
 impl StageContext<'_> {
-    fn is_cached_with_params(&self, step: &str, algorithm: Option<&str>, params: &serde_json::Value) -> bool {
+    fn is_cached_with_params(&mut self, step: &str, algorithm: Option<&str>, params: &serde_json::Value) -> bool {
         let hash = crate::pipeline::graph::step_params_hash(algorithm, params);
         self.state.is_step_cached_with_hash(step, Some(&hash))
     }
 
-    fn is_cached(&self, step: &str) -> bool {
+    fn is_cached(&mut self, step: &str) -> bool {
         self.state.is_step_cached(step)
     }
 
