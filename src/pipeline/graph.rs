@@ -26,6 +26,9 @@ pub struct StepRecord {
     pub outputs: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+    /// Hash of the step's algorithm + parameters for cache invalidation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params_hash: Option<String>,
 }
 
 /// Persistent pipeline state, serialised to JSON.
@@ -69,15 +72,8 @@ impl PipelineState {
 
         if let Ok(text) = std::fs::read_to_string(state_path) {
             if let Ok(state) = serde_json::from_str::<PipelineState>(&text) {
-                let expected_hash = config_hash(config);
-                if state.config_hash == expected_hash {
-                    log::info!("Resuming from cached pipeline state");
-                    return state;
-                } else {
-                    log::warn!(
-                        "Pipeline config changed (hash mismatch). Re-running from scratch."
-                    );
-                }
+                log::info!("Resuming from cached pipeline state");
+                return state;
             } else {
                 log::warn!("Could not parse pipeline state file. Starting fresh.");
             }
@@ -97,14 +93,39 @@ impl PipelineState {
         Ok(())
     }
 
-    /// Check if a step is completed and its outputs still exist.
-    pub fn is_step_cached(&self, step_name: &str) -> bool {
+    /// Check if a step is completed, outputs exist, and params haven't changed.
+    ///
+    /// If `expected_params_hash` is provided, the cached step must match it.
+    /// Steps cached without a hash (legacy state files) are always considered valid.
+    pub fn is_step_cached_with_hash(&self, step_name: &str, expected_params_hash: Option<&str>) -> bool {
         if let Some(record) = self.completed_steps.get(step_name) {
             // Verify all output files still exist
-            record.outputs.iter().all(|p| p.exists())
+            if !record.outputs.iter().all(|p| p.exists()) {
+                return false;
+            }
+            // If caller provides an expected hash, the stored hash must exist and match
+            if let Some(expected) = expected_params_hash {
+                match &record.params_hash {
+                    Some(stored) if stored == expected => {}
+                    Some(_) => {
+                        log::info!("Step '{}' parameters changed — invalidating cache", step_name);
+                        return false;
+                    }
+                    None => {
+                        log::info!("Step '{}' missing params hash (legacy cache) — invalidating", step_name);
+                        return false;
+                    }
+                }
+            }
+            true
         } else {
             false
         }
+    }
+
+    /// Check if a step is completed and its outputs still exist (no param check).
+    pub fn is_step_cached(&self, step_name: &str) -> bool {
+        self.is_step_cached_with_hash(step_name, None)
     }
 
     /// Mark a step as the current one being processed.
@@ -114,31 +135,14 @@ impl PipelineState {
         self.current_step = Some(step_name.to_string());
     }
 
-    /// Mark a step as completed with its output paths.
-    pub fn mark_completed(&mut self, step_name: &str, outputs: Vec<PathBuf>) {
+    /// Mark a step as completed with its output paths and parameter hash.
+    pub fn mark_completed(&mut self, step_name: &str, outputs: Vec<PathBuf>, params_hash: Option<String>) {
         self.completed_steps.insert(
             step_name.to_string(),
             StepRecord {
                 outputs,
                 metadata: None,
-            },
-        );
-        self.current_step = None;
-    }
-
-    /// Mark a step as completed with metadata (e.g., load step stores dims/echo_times).
-    #[allow(dead_code)]
-    pub fn mark_completed_with_metadata(
-        &mut self,
-        step_name: &str,
-        outputs: Vec<PathBuf>,
-        metadata: serde_json::Value,
-    ) {
-        self.completed_steps.insert(
-            step_name.to_string(),
-            StepRecord {
-                outputs,
-                metadata: Some(metadata),
+                params_hash,
             },
         );
         self.current_step = None;
@@ -180,6 +184,12 @@ impl PipelineState {
 fn config_hash(config: &PipelineConfig) -> String {
     let toml = config.to_annotated_toml();
     format!("{:x}", md5_simple(&toml))
+}
+
+/// Compute a hash of step parameters (algorithm + params JSON) for per-step cache invalidation.
+pub fn step_params_hash(algorithm: Option<&str>, params: &serde_json::Value) -> String {
+    let s = format!("{}:{}", algorithm.unwrap_or(""), params);
+    format!("{:x}", md5_simple(&s))
 }
 
 /// Simple hash (not cryptographic, just for change detection).
@@ -264,7 +274,23 @@ pub fn state_file_path(output_dir: &Path, key: &AcquisitionKey) -> PathBuf {
     if let Some(ref ses) = key.session {
         dir = dir.join(format!("ses-{}", ses));
     }
-    dir.join("anat").join(".pipeline_state.json")
+    let mut parts = Vec::new();
+    if let Some(ref acq) = key.acquisition {
+        parts.push(format!("acq-{}", acq));
+    }
+    if let Some(ref rec) = key.reconstruction {
+        parts.push(format!("rec-{}", rec));
+    }
+    if let Some(ref inv) = key.inversion {
+        parts.push(format!("inv-{}", inv));
+    }
+    if let Some(ref run) = key.run {
+        parts.push(format!("run-{}", run));
+    }
+    if !parts.is_empty() {
+        dir = dir.join(parts.join("_"));
+    }
+    dir.join(".pipeline_state.json")
 }
 
 /// Remove intermediate files (workflow dir), keeping only final outputs.
@@ -327,11 +353,11 @@ mod tests {
         assert!(!state.is_step_cached("mask"));
 
         // Mark completed with no file paths (metadata-only step)
-        state.mark_completed("load", vec![]);
+        state.mark_completed("load", vec![], None);
         assert!(state.is_step_cached("load"));
 
         // Mark completed with a file that doesn't exist — should not be cached
-        state.mark_completed("mask", vec![PathBuf::from("/nonexistent/mask.nii")]);
+        state.mark_completed("mask", vec![PathBuf::from("/nonexistent/mask.nii")], None);
         assert!(!state.is_step_cached("mask"));
     }
 
@@ -348,10 +374,10 @@ mod tests {
             suffix: "MEGRE".to_string(),
         };
         let mut state = PipelineState::new(&config, &key);
-        state.mark_completed("load", vec![]);
-        state.mark_completed("mask", vec![]);
-        state.mark_completed("unwrap", vec![]);
-        state.mark_completed("bgremove", vec![]);
+        state.mark_completed("load", vec![], None);
+        state.mark_completed("mask", vec![], None);
+        state.mark_completed("unwrap", vec![], None);
+        state.mark_completed("bgremove", vec![], None);
 
         // Invalidating mask should also remove unwrap, bgremove
         state.invalidate("mask");
@@ -374,8 +400,8 @@ mod tests {
             suffix: "MEGRE".to_string(),
         };
         let mut state = PipelineState::new(&config, &key);
-        state.mark_completed("load", vec![]);
-        state.mark_completed("mask", vec![PathBuf::from("/tmp/mask.nii")]);
+        state.mark_completed("load", vec![], None);
+        state.mark_completed("mask", vec![PathBuf::from("/tmp/mask.nii")], None);
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state.json");
@@ -388,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_change_invalidates() {
+    fn test_config_change_preserves_state_with_per_step_invalidation() {
         let config1 = PipelineConfig::default();
         let config2 = PipelineConfig {
             qsm_algorithm: crate::pipeline::config::QsmAlgorithm::Tkd,
@@ -406,15 +432,23 @@ mod tests {
         };
 
         let mut state = PipelineState::new(&config1, &key);
-        state.mark_completed("load", vec![]);
+        let hash = step_params_hash(None, &serde_json::json!({}));
+        state.mark_completed("load", vec![], Some(hash.clone()));
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state.json");
         state.save(&path).unwrap();
 
-        // Loading with different config should start fresh
+        // Loading with different config should preserve existing steps
         let loaded = PipelineState::load_or_create(&path, &config2, &key, false);
-        assert!(loaded.completed_steps.is_empty());
+        assert!(loaded.completed_steps.contains_key("load"));
+
+        // Step with matching params_hash is still cached
+        assert!(loaded.is_step_cached_with_hash("load", Some(&hash)));
+
+        // Step with different params_hash is not cached
+        let different_hash = step_params_hash(Some("tkd"), &serde_json::json!({"threshold": 0.1}));
+        assert!(!loaded.is_step_cached_with_hash("load", Some(&different_hash)));
     }
 
     #[test]
@@ -436,25 +470,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mark_completed_with_metadata() {
-        let config = PipelineConfig::default();
-        let key = AcquisitionKey {
-            subject: "01".to_string(),
-            session: None,
-            acquisition: None,
-            reconstruction: None,
-            inversion: None,
-            run: None,
-            suffix: "MEGRE".to_string(),
-        };
-        let mut state = PipelineState::new(&config, &key);
-        let meta = serde_json::json!({"dims": [64, 64, 64]});
-        state.mark_completed_with_metadata("load", vec![], meta.clone());
-        let record = state.completed_steps.get("load").unwrap();
-        assert_eq!(record.metadata, Some(meta));
-    }
-
-    #[test]
     fn test_step_outputs() {
         let config = PipelineConfig::default();
         let key = AcquisitionKey {
@@ -468,7 +483,7 @@ mod tests {
         };
         let mut state = PipelineState::new(&config, &key);
         assert!(state.step_outputs("mask").is_none());
-        state.mark_completed("mask", vec![PathBuf::from("/tmp/mask.nii")]);
+        state.mark_completed("mask", vec![PathBuf::from("/tmp/mask.nii")], None);
         let outputs = state.step_outputs("mask").unwrap();
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0], PathBuf::from("/tmp/mask.nii"));
@@ -487,8 +502,8 @@ mod tests {
             suffix: "MEGRE".to_string(),
         };
         let mut state = PipelineState::new(&config, &key);
-        state.mark_completed("load", vec![]);
-        state.mark_completed("mask", vec![]);
+        state.mark_completed("load", vec![], None);
+        state.mark_completed("mask", vec![], None);
         let names = state.completed_step_names();
         assert!(names.contains("load"));
         assert!(names.contains("mask"));
@@ -525,7 +540,7 @@ mod tests {
             suffix: "MEGRE".to_string(),
         };
         let path = state_file_path(Path::new("/out"), &key);
-        assert_eq!(path, PathBuf::from("/out/workflow/sub-01/ses-pre/anat/.pipeline_state.json"));
+        assert_eq!(path, PathBuf::from("/out/workflow/sub-01/ses-pre/.pipeline_state.json"));
     }
 
     #[test]
@@ -566,12 +581,12 @@ mod tests {
         // Create a fake intermediate file
         let intermediate = dir.path().join("unwrapped.nii");
         std::fs::write(&intermediate, "fake").unwrap();
-        state.mark_completed("unwrap", vec![intermediate.clone()]);
+        state.mark_completed("unwrap", vec![intermediate.clone()], None);
 
         // Create a fake final output
         let final_output = dir.path().join("qsm.nii");
         std::fs::write(&final_output, "fake").unwrap();
-        state.mark_completed("reference", vec![final_output.clone()]);
+        state.mark_completed("reference", vec![final_output.clone()], None);
 
         clean_intermediates(&state, dir.path(), &key);
 
@@ -615,7 +630,7 @@ mod tests {
         };
 
         let mut state = PipelineState::new(&config, &key);
-        state.mark_completed("load", vec![]);
+        state.mark_completed("load", vec![], None);
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state.json");

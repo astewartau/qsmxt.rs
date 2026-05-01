@@ -609,6 +609,97 @@ mod integration_tests {
     }
 
     #[test]
+    fn test_run_caching() {
+        let dir = tempfile::tempdir().unwrap();
+        let bids = dir.path().join("bids");
+        let out = dir.path().join("out");
+        testutils::create_single_echo_bids(&bids);
+
+        let make_args = || {
+            let mut args = default_run_args(bids.clone(), out.clone());
+            args.qsm_algorithm = Some(QsmAlgorithmArg::Tkd);
+            args.unwrapping_algorithm = Some(UnwrapAlgorithmArg::Laplacian);
+            args.bf_algorithm = Some(BfAlgorithmArg::Vsharp);
+            args.masking_algorithm = Some(MaskAlgorithmArg::Threshold);
+            args.masking_input = Some(MaskInputArg::MagnitudeFirst);
+            args.mask_erosions = Some(vec![1]);
+            args.dry = false;
+            args.no_mem_limit = true;
+            args
+        };
+
+        // First run: produces all outputs
+        super::run::execute(make_args()).unwrap();
+
+        let deriv = out.join("derivatives/qsmxt.rs");
+        let qsm = deriv.join("sub-1/anat/sub-1_Chimap.nii");
+        let mask = deriv.join("sub-1/anat/sub-1_mask.nii");
+        let mag = deriv.join("sub-1/anat/sub-1_magnitude.nii");
+        assert!(qsm.exists());
+        assert!(mask.exists());
+        assert!(mag.exists());
+
+        // Record modification times
+        let qsm_mtime = std::fs::metadata(&qsm).unwrap().modified().unwrap();
+        let mask_mtime = std::fs::metadata(&mask).unwrap().modified().unwrap();
+
+        // Brief pause so any re-written files would have a different mtime
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Second run: should skip all cached steps
+        super::run::execute(make_args()).unwrap();
+
+        // Outputs should still exist
+        assert!(qsm.exists());
+        assert!(mask.exists());
+        assert!(mag.exists());
+
+        // Files should NOT have been rewritten (mtimes unchanged)
+        assert_eq!(std::fs::metadata(&qsm).unwrap().modified().unwrap(), qsm_mtime);
+        assert_eq!(std::fs::metadata(&mask).unwrap().modified().unwrap(), mask_mtime);
+    }
+
+    #[test]
+    fn test_run_caching_survives_unrelated_config_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let bids = dir.path().join("bids");
+        let out = dir.path().join("out");
+        testutils::create_multi_echo_bids(&bids);
+
+        let make_args = |do_t2star: bool| {
+            let mut args = default_run_args(bids.clone(), out.clone());
+            args.qsm_algorithm = Some(QsmAlgorithmArg::Tkd);
+            args.unwrapping_algorithm = Some(UnwrapAlgorithmArg::Laplacian);
+            args.bf_algorithm = Some(BfAlgorithmArg::Vsharp);
+            args.masking_algorithm = Some(MaskAlgorithmArg::Threshold);
+            args.masking_input = Some(MaskInputArg::Magnitude);
+            args.mask_erosions = Some(vec![1]);
+            args.dry = false;
+            args.no_mem_limit = true;
+            args.do_t2starmap = do_t2star;
+            args
+        };
+
+        // First run: QSM only (no T2*)
+        super::run::execute(make_args(false)).unwrap();
+
+        let deriv = out.join("derivatives/qsmxt.rs");
+        let qsm = deriv.join("sub-1/anat/sub-1_Chimap.nii");
+        assert!(qsm.exists());
+        let qsm_mtime = std::fs::metadata(&qsm).unwrap().modified().unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Second run: add --do-t2starmap — should reuse cached QSM steps
+        super::run::execute(make_args(true)).unwrap();
+
+        // QSM should not have been rewritten
+        assert_eq!(std::fs::metadata(&qsm).unwrap().modified().unwrap(), qsm_mtime);
+        // T2* should now exist
+        assert!(deriv.join("sub-1/anat/sub-1_T2starmap.nii").exists());
+    }
+
+    #[test]
     fn test_run_multi_echo_with_extras() {
         let dir = tempfile::tempdir().unwrap();
         let bids = dir.path().join("bids");

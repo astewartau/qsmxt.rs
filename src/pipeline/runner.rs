@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use qsm_core::nifti_io::{self, NiftiData};
+use serde::Serialize;
 
 use crate::bids::derivatives::DerivativeOutputs;
 use crate::bids::discovery::QsmRun;
@@ -11,6 +12,19 @@ use crate::pipeline::graph::{PipelineState, RunMetadata};
 use crate::pipeline::memory;
 use crate::pipeline::phase;
 use crate::error::QsmxtError;
+
+/// Provenance record written to each workflow step directory.
+#[derive(Serialize)]
+struct Provenance {
+    step: String,
+    algorithm: Option<String>,
+    parameters: serde_json::Value,
+    inputs: Vec<String>,
+    outputs: Vec<String>,
+    duration_secs: f64,
+    peak_memory_bytes: usize,
+    timestamp: String,
+}
 
 /// Bundles references needed by every pipeline stage.
 struct StageContext<'a> {
@@ -23,17 +37,53 @@ struct StageContext<'a> {
 }
 
 impl StageContext<'_> {
+    fn is_cached_with_params(&self, step: &str, algorithm: Option<&str>, params: &serde_json::Value) -> bool {
+        let hash = crate::pipeline::graph::step_params_hash(algorithm, params);
+        self.state.is_step_cached_with_hash(step, Some(&hash))
+    }
+
     fn is_cached(&self, step: &str) -> bool {
         self.state.is_step_cached(step)
     }
 
-    fn mark_done(&mut self, step: &str, outputs: Vec<PathBuf>) -> crate::Result<()> {
-        self.state.mark_completed(step, outputs);
-        self.state.save(self.state_path)
-    }
-
     fn dims(&self) -> (usize, usize, usize) { self.meta.dims }
     fn voxel_size(&self) -> (f64, f64, f64) { self.meta.voxel_size }
+
+    /// Write provenance.json, record params hash, and save pipeline state.
+    fn complete_step(
+        &mut self,
+        step: &str,
+        algorithm: Option<&str>,
+        parameters: serde_json::Value,
+        inputs: &[&Path],
+        output_paths: Vec<PathBuf>,
+        start: Instant,
+    ) -> crate::Result<()> {
+        // Write provenance.json
+        let output_refs: Vec<String> = output_paths.iter().map(|p| p.display().to_string()).collect();
+        let prov = Provenance {
+            step: step.to_string(),
+            algorithm: algorithm.map(|s| s.to_string()),
+            parameters: parameters.clone(),
+            inputs: inputs.iter().map(|p| p.display().to_string()).collect(),
+            outputs: output_refs,
+            duration_secs: start.elapsed().as_secs_f64(),
+            peak_memory_bytes: memory::process_rss_bytes(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+        let prov_path = self.output.provenance_path(&self.run.key, step);
+        if let Some(parent) = prov_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(&prov)
+            .map_err(|e| QsmxtError::Config(format!("Failed to serialize provenance: {}", e)))?;
+        std::fs::write(&prov_path, json)?;
+
+        // Mark step done with params hash
+        let hash = crate::pipeline::graph::step_params_hash(algorithm, &parameters);
+        self.state.mark_completed(step, output_paths, Some(hash));
+        self.state.save(self.state_path)
+    }
 }
 
 /// Global multi-progress for coordinating parallel progress bars.
@@ -241,7 +291,7 @@ fn stage_load(
             meta.voxel_size.0, meta.n_echoes, meta.field_strength, meta.echo_times,
         );
         state.run_metadata = Some(meta.clone());
-        state.mark_completed("load", vec![]);
+        state.mark_completed("load", vec![], None);
         state.save(state_path)?;
         log_step_done("Load", t);
         Ok(meta)
@@ -287,14 +337,21 @@ fn stage_scale_phase(ctx: &mut StageContext, progress: &dyn Fn(&str)) -> crate::
     }
 
     let mut all_paths = phase_paths;
-    all_paths.extend(mag_paths);
-    ctx.mark_done("scale_phase", all_paths)?;
+    all_paths.extend(mag_paths.clone());
+    let input_paths: Vec<PathBuf> = ctx.run.echoes.iter().map(|e| e.phase_nifti.clone()).collect();
+    let input_refs: Vec<&Path> = input_paths.iter().map(|p| p.as_path()).collect();
+    ctx.complete_step("scale_phase", None, serde_json::json!({}), &input_refs, all_paths, t)?;
     log_step_done("Rescale phase", t);
     Ok(())
 }
 
 fn stage_magnitude(ctx: &mut StageContext, progress: &dyn Fn(&str)) -> crate::Result<()> {
-    if ctx.is_cached("magnitude") {
+    let mag_params = serde_json::json!({
+        "inhomogeneity_correction": ctx.config.inhomogeneity_correction,
+        "homogeneity_sigma_mm": ctx.config.homogeneity_sigma_mm,
+        "homogeneity_nbox": ctx.config.homogeneity_nbox,
+    });
+    if ctx.is_cached_with_params("magnitude", Some("rss"), &mag_params) {
         log::info!("Skipping magnitude (cached)");
         return Ok(());
     }
@@ -334,14 +391,19 @@ fn stage_magnitude(ctx: &mut StageContext, progress: &dyn Fn(&str)) -> crate::Re
 
         let combined_path = ctx.output.magnitude_path(&ctx.run.key);
         save_volume(&combined_path, &combined, ctx.meta)?;
-        ctx.mark_done("magnitude", vec![combined_path])?;
+        let mag_inputs: Vec<PathBuf> = (0..ctx.meta.n_echoes).map(|i| ctx.output.mag_path(&ctx.run.key, i + 1)).collect();
+        let input_refs: Vec<&Path> = mag_inputs.iter().map(|p| p.as_path()).collect();
+        ctx.complete_step("magnitude", Some("rss"), mag_params, &input_refs, vec![combined_path], t)?;
     }
     log_step_done("RSS magnitude", t);
     Ok(())
 }
 
 fn stage_mask(ctx: &mut StageContext, mask_path: &Path, progress: &dyn Fn(&str)) -> crate::Result<()> {
-    if ctx.is_cached("mask") {
+    let mask_params = serde_json::json!({
+        "sections": ctx.config.mask_sections.iter().map(|s| format!("{}", s)).collect::<Vec<_>>(),
+    });
+    if ctx.is_cached_with_params("mask", None, &mask_params) {
         log::info!("Skipping mask (cached)");
         return Ok(());
     }
@@ -371,7 +433,8 @@ fn stage_mask(ctx: &mut StageContext, mask_path: &Path, progress: &dyn Fn(&str))
         &ctx.config.mask_sections, &phases, &magnitude, nx, ny, nz, vsx, vsy, vsz, &ctx.meta.echo_times,
     )?;
     save_mask(mask_path, &working_mask, ctx.meta)?;
-    ctx.mark_done("mask", vec![mask_path.to_path_buf()])?;
+    let mag_path = ctx.output.magnitude_path(&ctx.run.key);
+    ctx.complete_step("mask", None, mask_params, &[mag_path.as_path()], vec![mask_path.to_path_buf()], t)?;
     log_step_done("Mask creation", t);
     Ok(())
 }
@@ -423,7 +486,13 @@ fn resolve_mask_magnitude(ctx: &StageContext) -> crate::Result<Vec<NiftiData>> {
 }
 
 fn stage_swi(ctx: &mut StageContext, mask_path: &Path, progress: &dyn Fn(&str)) -> crate::Result<()> {
-    if ctx.is_cached("swi") {
+    let swi_params = serde_json::json!({
+        "scaling": ctx.config.swi_scaling,
+        "strength": ctx.config.swi_strength,
+        "hp_sigma": ctx.config.swi_hp_sigma,
+        "mip_window": ctx.config.swi_mip_window,
+    });
+    if ctx.is_cached_with_params("swi", Some("clear-swi"), &swi_params) {
         log::info!("Skipping swi (cached)");
         return Ok(());
     }
@@ -454,13 +523,19 @@ fn stage_swi(ctx: &mut StageContext, mask_path: &Path, progress: &dyn Fn(&str)) 
     let mip_path = ctx.output.swi_mip_path(&ctx.run.key);
     save_volume(&swi_path, &swi, ctx.meta)?;
     save_volume(&mip_path, &mip, ctx.meta)?;
-    ctx.mark_done("swi", vec![swi_path, mip_path])?;
+    let phase_path = ctx.output.phase_scaled_path(&ctx.run.key, 1);
+    let mag_input = ctx.output.magnitude_path(&ctx.run.key);
+    ctx.complete_step("swi", Some("clear-swi"), swi_params, &[phase_path.as_path(), mag_input.as_path(), mask_path], vec![swi_path, mip_path], t)?;
     log_step_done("SWI", t);
     Ok(())
 }
 
 fn stage_t2star_r2star(ctx: &mut StageContext, mask_path: &Path, progress: &dyn Fn(&str)) -> crate::Result<()> {
-    if ctx.is_cached("t2star_r2star") {
+    let t2r2_params = serde_json::json!({
+        "n_echoes": ctx.meta.n_echoes,
+        "echo_times": ctx.meta.echo_times,
+    });
+    if ctx.is_cached_with_params("t2star_r2star", Some("arlo"), &t2r2_params) {
         log::info!("Skipping t2star_r2star (cached)");
         return Ok(());
     }
@@ -490,21 +565,15 @@ fn stage_t2star_r2star(ctx: &mut StageContext, mask_path: &Path, progress: &dyn 
     );
     drop(interleaved);
 
-    let mut paths = Vec::new();
-    if ctx.config.do_r2starmap {
-        let p = ctx.output.r2star_path(&ctx.run.key);
-        save_volume(&p, &r2star_map, ctx.meta)?;
-        paths.push(p);
-    }
-    if ctx.config.do_t2starmap {
-        let t2star: Vec<f64> = r2star_map.iter().zip(mask.iter())
-            .map(|(&r2, &m)| if m > 0 && r2 > 0.0 { 1.0 / r2 } else { 0.0 })
-            .collect();
-        let p = ctx.output.t2star_path(&ctx.run.key);
-        save_volume(&p, &t2star, ctx.meta)?;
-        paths.push(p);
-    }
-    ctx.mark_done("t2star_r2star", paths)?;
+    // Always compute and save both maps — T2* is trivially derived from R2*
+    let r2_path = ctx.output.r2star_path(&ctx.run.key);
+    save_volume(&r2_path, &r2star_map, ctx.meta)?;
+    let t2star: Vec<f64> = r2star_map.iter().zip(mask.iter())
+        .map(|(&r2, &m)| if m > 0 && r2 > 0.0 { 1.0 / r2 } else { 0.0 })
+        .collect();
+    let t2_path = ctx.output.t2star_path(&ctx.run.key);
+    save_volume(&t2_path, &t2star, ctx.meta)?;
+    ctx.complete_step("t2star_r2star", Some("arlo"), t2r2_params, &[mask_path], vec![r2_path, t2_path], t)?;
     log_step_done("T2*/R2* mapping", t);
     Ok(())
 }
@@ -512,14 +581,21 @@ fn stage_t2star_r2star(ctx: &mut StageContext, mask_path: &Path, progress: &dyn 
 fn stage_unwrap(
     ctx: &mut StageContext, mask_path: &Path, field_path: &Path, progress: &dyn Fn(&str),
 ) -> crate::Result<()> {
-    if ctx.is_cached("unwrap") {
+    let unwrap_name = ctx.config.unwrapping_algorithm.map(|a| format!("{}", a)).unwrap_or("laplacian".to_string());
+    let unwrap_alg = if ctx.meta.n_echoes > 1 && ctx.config.combine_phase { "mcpc3ds" } else { &unwrap_name };
+    let unwrap_params = serde_json::json!({
+        "n_echoes": ctx.meta.n_echoes,
+        "combine_phase": ctx.config.combine_phase,
+        "echo_times": ctx.meta.echo_times,
+        "field_strength": ctx.meta.field_strength,
+    });
+    if ctx.is_cached_with_params("unwrap", Some(unwrap_alg), &unwrap_params) {
         log::info!("Skipping unwrap (cached)");
         return Ok(());
     }
     let t = Instant::now();
     let (nx, ny, nz) = ctx.dims();
     let (vsx, vsy, vsz) = ctx.voxel_size();
-    let unwrap_name = ctx.config.unwrapping_algorithm.map(|a| format!("{}", a)).unwrap_or("laplacian".to_string());
     if ctx.meta.n_echoes > 1 && ctx.config.combine_phase {
         log::info!("Phase combination (MCPC-3D-S, {} echoes, weighted B0)", ctx.meta.n_echoes);
     } else if ctx.meta.n_echoes > 1 {
@@ -598,7 +674,9 @@ fn stage_unwrap(
     };
 
     save_volume(field_path, &field_ppm, ctx.meta)?;
-    ctx.mark_done("unwrap", vec![field_path.to_path_buf()])?;
+    let phase_inputs: Vec<PathBuf> = (0..ctx.meta.n_echoes).map(|i| ctx.output.phase_scaled_path(&ctx.run.key, i + 1)).collect();
+    let input_refs: Vec<&Path> = phase_inputs.iter().map(|p| p.as_path()).chain(std::iter::once(mask_path)).collect();
+    ctx.complete_step("unwrap", Some(unwrap_alg), unwrap_params, &input_refs, vec![field_path.to_path_buf()], t)?;
     log_step_done("Phase unwrapping", t);
     Ok(())
 }
@@ -607,7 +685,16 @@ fn stage_tgv(
     ctx: &mut StageContext, mask_path: &Path, field_path: &Path, progress: &dyn Fn(&str),
 ) -> crate::Result<()> {
     let chi_raw_path = ctx.output.chi_raw_path(&ctx.run.key);
-    if ctx.is_cached("tgv") {
+    let tgv_params = serde_json::json!({
+        "iterations": ctx.config.tgv_iterations,
+        "alphas": ctx.config.tgv_alphas,
+        "erosions": ctx.config.tgv_erosions,
+        "step_size": ctx.config.tgv_step_size,
+        "tol": ctx.config.tgv_tol,
+        "te_ms": ctx.meta.echo_times[0] * 1000.0,
+        "field_strength": ctx.meta.field_strength,
+    });
+    if ctx.is_cached_with_params("tgv", Some("tgv"), &tgv_params) {
         log::info!("Skipping tgv (cached)");
         return Ok(());
     }
@@ -667,7 +754,7 @@ fn stage_tgv(
     let chi: Vec<f64> = chi_f32.iter().map(|&v| v as f64).collect();
 
     save_volume(&chi_raw_path, &chi, ctx.meta)?;
-    ctx.mark_done("tgv", vec![chi_raw_path])?;
+    ctx.complete_step("tgv", Some("tgv"), tgv_params, &[mask_path, field_path], vec![chi_raw_path], t)?;
     log_step_done("TGV-QSM", t);
     Ok(())
 }
@@ -676,7 +763,13 @@ fn stage_qsmart(
     ctx: &mut StageContext, mask_path: &Path, field_path: &Path, progress: &dyn Fn(&str),
 ) -> crate::Result<()> {
     let chi_raw_path = ctx.output.chi_raw_path(&ctx.run.key);
-    if ctx.is_cached("qsmart") {
+    let qsmart_params = serde_json::json!({
+        "sdf_spatial_radius": ctx.config.qsmart_sdf_spatial_radius,
+        "vasc_sphere_radius": ctx.config.qsmart_vasc_sphere_radius,
+        "ilsqr_tol": ctx.config.qsmart_ilsqr_tol,
+        "ilsqr_max_iter": ctx.config.qsmart_ilsqr_max_iter,
+    });
+    if ctx.is_cached_with_params("qsmart", Some("qsmart"), &qsmart_params) {
         log::info!("Skipping qsmart (cached)");
         return Ok(());
     }
@@ -804,7 +897,7 @@ fn stage_qsmart(
     );
 
     save_volume(&chi_raw_path, &chi, ctx.meta)?;
-    ctx.mark_done("qsmart", vec![chi_raw_path])?;
+    ctx.complete_step("qsmart", Some("qsmart"), qsmart_params, &[mask_path, field_path], vec![chi_raw_path], t)?;
     log_step_done("QSMART", t);
     Ok(())
 }
@@ -819,12 +912,31 @@ fn stage_standard_qsm(
     let skip_bgremove = ctx.config.qsm_algorithm == QsmAlgorithm::Medi && ctx.config.medi_smv;
     let local_field_path = ctx.output.local_field_path(&ctx.run.key);
     let bg_mask_path = ctx.output.bg_mask_path(&ctx.run.key);
+    let bf_name = ctx.config.bf_algorithm.map(|a| format!("{}", a)).unwrap_or("none".to_string());
+    let bf_params = match ctx.config.bf_algorithm {
+        Some(BfAlgorithm::Vsharp) => serde_json::json!({
+            "max_radius_factor": ctx.config.vsharp_max_radius_factor,
+            "min_radius_factor": ctx.config.vsharp_min_radius_factor,
+            "threshold": ctx.config.vsharp_threshold,
+        }),
+        Some(BfAlgorithm::Pdf) => serde_json::json!({ "tol": ctx.config.pdf_tol }),
+        Some(BfAlgorithm::Lbv) => serde_json::json!({ "tol": ctx.config.lbv_tol }),
+        Some(BfAlgorithm::Ismv) => serde_json::json!({
+            "radius_factor": ctx.config.ismv_radius_factor,
+            "tol": ctx.config.ismv_tol,
+            "max_iter": ctx.config.ismv_max_iter,
+        }),
+        Some(BfAlgorithm::Sharp) => serde_json::json!({
+            "radius_factor": ctx.config.sharp_radius_factor,
+            "threshold": ctx.config.sharp_threshold,
+        }),
+        None => serde_json::json!({}),
+    };
     if skip_bgremove {
         log::info!("Skipping background removal (MEDI SMV handles it internally)");
     }
-    if !skip_bgremove && !ctx.is_cached("bgremove") {
+    if !skip_bgremove && !ctx.is_cached_with_params("bgremove", Some(&bf_name), &bf_params) {
         let t = Instant::now();
-        let bf_name = ctx.config.bf_algorithm.map(|a| format!("{}", a)).unwrap_or("none".to_string());
         progress("Background field removal");
         let field_ppm = load_volume(field_path)?;
         let mask = load_mask(mask_path)?;
@@ -879,7 +991,10 @@ fn stage_standard_qsm(
         };
         save_volume(&local_field_path, &local_field, ctx.meta)?;
         save_mask(&bg_mask_path, &eroded_mask, ctx.meta)?;
-        ctx.mark_done("bgremove", vec![local_field_path.clone(), bg_mask_path.clone()])?;
+        ctx.complete_step("bgremove", Some(&bf_name),
+            bf_params.clone(), &[field_path, mask_path],
+            vec![local_field_path.clone(), bg_mask_path.clone()], t,
+        )?;
         log_step_done(&format!("Background removal ({})", bf_name), t);
     } else if !skip_bgremove {
         log::info!("Skipping bgremove (cached)");
@@ -887,7 +1002,31 @@ fn stage_standard_qsm(
 
     // --- Dipole inversion ---
     let chi_raw_path = ctx.output.chi_raw_path(&ctx.run.key);
-    if !ctx.is_cached("invert") {
+    let alg_name = format!("{}", ctx.config.qsm_algorithm);
+    let invert_params = match ctx.config.qsm_algorithm {
+        QsmAlgorithm::Rts => serde_json::json!({
+            "delta": ctx.config.rts_delta, "mu": ctx.config.rts_mu,
+            "tol": ctx.config.rts_tol, "max_iter": ctx.config.rts_max_iter,
+        }),
+        QsmAlgorithm::Tv => serde_json::json!({
+            "lambda": ctx.config.tv_lambda, "max_iter": ctx.config.tv_max_iter,
+        }),
+        QsmAlgorithm::Tkd => serde_json::json!({ "threshold": ctx.config.tkd_threshold }),
+        QsmAlgorithm::Tsvd => serde_json::json!({ "threshold": ctx.config.tsvd_threshold }),
+        QsmAlgorithm::Ilsqr => serde_json::json!({
+            "tol": ctx.config.ilsqr_tol, "max_iter": ctx.config.ilsqr_max_iter,
+        }),
+        QsmAlgorithm::Tikhonov => serde_json::json!({ "lambda": ctx.config.tikhonov_lambda }),
+        QsmAlgorithm::Nltv => serde_json::json!({
+            "lambda": ctx.config.nltv_lambda, "max_iter": ctx.config.nltv_max_iter,
+        }),
+        QsmAlgorithm::Medi => serde_json::json!({
+            "lambda": ctx.config.medi_lambda, "max_iter": ctx.config.medi_max_iter,
+            "smv": ctx.config.medi_smv,
+        }),
+        _ => serde_json::json!({}),
+    };
+    if !ctx.is_cached_with_params("invert", Some(&alg_name), &invert_params) {
         let t = Instant::now();
         progress("Dipole inversion");
         let local_field = if skip_bgremove { load_volume(field_path)? } else { load_volume(&local_field_path)? };
@@ -961,7 +1100,11 @@ fn stage_standard_qsm(
             QsmAlgorithm::Qsmart => unreachable!("QSMART handled separately"),
         };
         save_volume(&chi_raw_path, &chi, ctx.meta)?;
-        ctx.mark_done("invert", vec![chi_raw_path])?;
+        let lf_input = if skip_bgremove { field_path } else { local_field_path.as_path() };
+        let mask_input = if skip_bgremove { mask_path } else { bg_mask_path.as_path() };
+        ctx.complete_step("invert", Some(&alg_name),
+            invert_params, &[lf_input, mask_input], vec![chi_raw_path], t,
+        )?;
         log_step_done(&format!("Dipole inversion ({})", ctx.config.qsm_algorithm), t);
     } else {
         log::info!("Skipping invert (cached)");
@@ -971,7 +1114,9 @@ fn stage_standard_qsm(
 
 fn stage_reference(ctx: &mut StageContext, mask_path: &Path, progress: &dyn Fn(&str)) -> crate::Result<()> {
     let qsm_path = ctx.output.qsm_path(&ctx.run.key);
-    if ctx.is_cached("reference") {
+    let ref_method = format!("{}", ctx.config.qsm_reference);
+    let ref_params = serde_json::json!({ "method": ref_method });
+    if ctx.is_cached_with_params("reference", Some(&ref_method), &ref_params) {
         log::info!("Skipping reference (cached)");
         return Ok(());
     }
@@ -983,7 +1128,7 @@ fn stage_reference(ctx: &mut StageContext, mask_path: &Path, progress: &dyn Fn(&
     let mask = load_mask(mask_path)?;
     let chi_final = apply_reference(&chi, &mask, ctx.config);
     save_volume(&qsm_path, &chi_final, ctx.meta)?;
-    ctx.mark_done("reference", vec![qsm_path])?;
+    ctx.complete_step("reference", Some(&ref_method), ref_params, &[chi_raw_path.as_path(), mask_path], vec![qsm_path], t)?;
     log_step_done("QSM referencing", t);
     Ok(())
 }
