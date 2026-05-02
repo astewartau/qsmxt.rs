@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;
 
-use super::{DicomSession, SeriesType};
+use super::{CoilType, DicomSession, SeriesType};
 
 /// Message sent from the conversion thread to the UI.
 pub enum ConvertMessage {
@@ -12,27 +12,13 @@ pub enum ConvertMessage {
     Done { bids_dir: PathBuf },
 }
 
-/// Result of a DICOM → BIDS conversion.
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct ConvertResult {
-    pub bids_dir: PathBuf,
-    pub log_lines: Vec<String>,
-    pub errors: Vec<String>,
-}
-
 /// Check if dcm2niix is available on PATH.
 pub fn find_dcm2niix() -> Option<PathBuf> {
-    which_dcm2niix()
-}
-
-fn which_dcm2niix() -> Option<PathBuf> {
     let output = Command::new("which").arg("dcm2niix").output().ok()?;
     if output.status.success() {
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if path.is_empty() { None } else { Some(PathBuf::from(path)) }
     } else {
-        // Try Windows-style
         let output = Command::new("where").arg("dcm2niix").output().ok()?;
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).lines().next()?.trim().to_string();
@@ -62,6 +48,104 @@ fn bids_part(series_type: SeriesType) -> Option<&'static str> {
     }
 }
 
+/// Parameters for building a BIDS filename.
+struct BidsNameParts<'a> {
+    sub: &'a str,
+    ses: Option<&'a str>,
+    acq: &'a str,
+    run: u32,
+    rec: Option<&'a str>,
+    echo: Option<u32>,
+    part: Option<&'a str>,
+    suffix: &'a str,
+    extension: &'a str,
+}
+
+/// Build the BIDS filename for a converted file.
+/// Order: sub-X[_ses-Y]_acq-Z[_rec-R][_run-N][_echo-N][_part-P]_SUFFIX
+fn build_bids_filename(p: &BidsNameParts) -> String {
+    let mut name = format!("sub-{}", p.sub);
+    if let Some(ses) = p.ses {
+        name.push_str(&format!("_ses-{}", ses));
+    }
+    name.push_str(&format!("_acq-{}", p.acq));
+    if let Some(rec) = p.rec {
+        name.push_str(&format!("_rec-{}", rec));
+    }
+    if p.run > 1 {
+        name.push_str(&format!("_run-{}", p.run));
+    }
+    if let Some(e) = p.echo {
+        name.push_str(&format!("_echo-{}", e));
+    }
+    if let Some(pt) = p.part {
+        name.push_str(&format!("_part-{}", pt));
+    }
+    name.push_str(&format!("_{}", p.suffix));
+    name.push_str(p.extension);
+    name
+}
+
+/// Parse dcm2niix suffixes from a temp output filename.
+/// dcm2niix appends things like `_e1`, `_e2`, `_ph`, `_e1_ph` to the base name.
+/// Returns (echo_number, is_phase).
+fn parse_dcm2niix_suffixes(filename: &str, base: &str) -> (Option<u32>, bool) {
+    let remainder = filename.strip_prefix(base).unwrap_or("");
+    let mut echo: Option<u32> = None;
+    let mut is_phase = false;
+
+    for part in remainder.split('_') {
+        if part.is_empty() {
+            continue;
+        }
+        if part == "ph" {
+            is_phase = true;
+        } else if let Some(num_str) = part.strip_prefix('e') {
+            if let Ok(n) = num_str.parse::<u32>() {
+                echo = Some(n);
+            }
+        }
+    }
+
+    (echo, is_phase)
+}
+
+// ─── 4D file detection ───
+
+/// Check if a NIfTI file is 4D by reading the header only.
+/// Returns the 4th dimension size if > 1.
+pub fn nifti_4d_size(path: &Path) -> Option<usize> {
+    use nifti::NiftiObject;
+    let obj = nifti::ReaderOptions::new().read_file(path).ok()?;
+    let header = obj.header();
+    if header.dim[0] >= 4 && header.dim[4] > 1 {
+        Some(header.dim[4] as usize)
+    } else {
+        None
+    }
+}
+
+// ─── JSON sidecar post-processing ───
+
+/// Convert a .nii.gz path to its .json sidecar path.
+pub fn nii_to_json_path(nii_path: &Path) -> PathBuf {
+    let s = nii_path.to_string_lossy();
+    let base = s.strip_suffix(".nii.gz")
+        .or_else(|| s.strip_suffix(".nii"))
+        .unwrap_or(&s);
+    PathBuf::from(format!("{}.json", base))
+}
+
+// ─── GE detection ───
+
+/// Check if a series is from a GE scanner.
+fn is_ge_manufacturer(manufacturer: &str) -> bool {
+    let m = manufacturer.to_uppercase();
+    m.contains("GE") || m.contains("GENERAL ELECTRIC")
+}
+
+// ─── Main conversion ───
+
 /// Convert a DICOM session to BIDS format using dcm2niix, streaming
 /// log/error messages via the provided channel. Sends `Done` when finished.
 pub fn convert_session_streaming(
@@ -87,6 +171,13 @@ pub fn convert_session_streaming(
                 Some(study.study_date.replace('-', ""))
             };
 
+            // Check if any acquisition has both combined and uncombined coils
+            let has_mixed_coils = study.acquisitions.iter().any(|acq| {
+                let has_combined = acq.series.iter().any(|s| s.coil_type == CoilType::Combined);
+                let has_uncombined = acq.series.iter().any(|s| s.coil_type == CoilType::Uncombined);
+                has_combined && has_uncombined
+            });
+
             for acq in &study.acquisitions {
                 for series in &acq.series {
                     if series.series_type == SeriesType::Skip {
@@ -94,12 +185,20 @@ pub fn convert_session_streaming(
                         continue;
                     }
 
+                    // Add _rec-uncombined only when both combined and uncombined exist
+                    let rec = if has_mixed_coils && series.coil_type == CoilType::Uncombined {
+                        Some("uncombined")
+                    } else {
+                        None
+                    };
+
                     let result = convert_series(
                         series,
                         sub_label,
                         ses_label.as_deref(),
                         &acq.name,
                         acq.run_number,
+                        rec,
                         output_dir,
                     );
 
@@ -122,72 +221,13 @@ struct SeriesConvertResult {
     errors: Vec<String>,
 }
 
-/// Parse dcm2niix suffixes from a temp output filename.
-/// dcm2niix appends things like `_e1`, `_e2`, `_ph`, `_e1_ph` to the base name.
-/// Returns (echo_number, is_phase).
-fn parse_dcm2niix_suffixes(filename: &str, base: &str) -> (Option<u32>, bool) {
-    // Strip the base prefix to get the suffix part
-    let remainder = filename.strip_prefix(base).unwrap_or("");
-    // remainder might be "_e1", "_e1_ph", "_ph", or ""
-    let mut echo: Option<u32> = None;
-    let mut is_phase = false;
-
-    for part in remainder.split('_') {
-        if part.is_empty() {
-            continue;
-        }
-        if part == "ph" {
-            is_phase = true;
-        } else if let Some(num_str) = part.strip_prefix('e') {
-            if let Ok(n) = num_str.parse::<u32>() {
-                echo = Some(n);
-            }
-        }
-    }
-
-    (echo, is_phase)
-}
-
-/// Parameters for building a BIDS filename.
-struct BidsNameParts<'a> {
-    sub: &'a str,
-    ses: Option<&'a str>,
-    acq: &'a str,
-    run: u32,
-    echo: Option<u32>,
-    part: Option<&'a str>,
-    suffix: &'a str,
-    extension: &'a str,
-}
-
-/// Build the BIDS filename for a converted file.
-/// Order: sub-X[_ses-Y]_acq-Z[_run-N][_echo-N][_part-P]_SUFFIX
-fn build_bids_filename(p: &BidsNameParts) -> String {
-    let mut name = format!("sub-{}", p.sub);
-    if let Some(ses) = p.ses {
-        name.push_str(&format!("_ses-{}", ses));
-    }
-    name.push_str(&format!("_acq-{}", p.acq));
-    if p.run > 1 {
-        name.push_str(&format!("_run-{}", p.run));
-    }
-    if let Some(e) = p.echo {
-        name.push_str(&format!("_echo-{}", e));
-    }
-    if let Some(pt) = p.part {
-        name.push_str(&format!("_part-{}", pt));
-    }
-    name.push_str(&format!("_{}", p.suffix));
-    name.push_str(p.extension);
-    name
-}
-
 fn convert_series(
     series: &super::DicomSeries,
     sub_label: &str,
     ses_label: Option<&str>,
     acq_name: &str,
     run_number: u32,
+    rec: Option<&str>,
     output_dir: &Path,
 ) -> SeriesConvertResult {
     let mut log_lines = Vec::new();
@@ -195,6 +235,7 @@ fn convert_series(
 
     let suffix = bids_suffix(series.series_type);
     let part = bids_part(series.series_type);
+    let is_ge = is_ge_manufacturer(&series.manufacturer);
 
     // Build output subdirectory
     let mut sub_dir = output_dir.join(format!("sub-{}", sub_label));
@@ -230,13 +271,17 @@ fn convert_series(
         series.description, series.num_files,
     ));
 
+    if is_ge {
+        log_lines.push("  Note: GE data detected — phase inversion will be applied".to_string());
+    }
+
     // Run dcm2niix with a temp filename — we'll rename outputs ourselves
     let temp_base = "temp_output";
     let dcm2niix_result = Command::new("dcm2niix")
         .args(["-o", &temp_dir.to_string_lossy()])
         .args(["-f", temp_base])
-        .args(["-z", "y"])  // gzip compress
-        .args(["-m", "o"])  // merge 2D slices into 3D
+        .args(["-z", "y"])
+        .args(["-m", "o"])
         .arg(&temp_dir)
         .output();
 
@@ -267,8 +312,52 @@ fn convert_series(
         }
     }
 
-    // Post-process: find dcm2niix outputs and rename to proper BIDS names
-    let temp_outputs: Vec<PathBuf> = fs::read_dir(&temp_dir)
+    // Check for 4D NIfTI files produced by dcm2niix
+    let nii_files: Vec<PathBuf> = fs::read_dir(&temp_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            name.starts_with(temp_base) && (name.ends_with(".nii.gz") || name.ends_with(".nii"))
+        })
+        .collect();
+
+    for nii_path in &nii_files {
+        if let Some(n_vols) = nifti_4d_size(nii_path) {
+            log_lines.push(format!(
+                "  Warning: 4D NIfTI detected ({} volumes) — dcm2niix merged echoes. \
+                 Re-running with -m n to produce separate files.",
+                n_vols
+            ));
+
+            // Re-run dcm2niix without merging
+            let _ = fs::remove_file(nii_path);
+            let json_path = nii_to_json_path(nii_path);
+            let _ = fs::remove_file(&json_path);
+
+            let rerun = Command::new("dcm2niix")
+                .args(["-o", &temp_dir.to_string_lossy()])
+                .args(["-f", temp_base])
+                .args(["-z", "y"])
+                .args(["-m", "n"]) // don't merge
+                .arg(&temp_dir)
+                .output();
+
+            if let Ok(output) = rerun {
+                for line in String::from_utf8_lossy(&output.stdout).lines() {
+                    if !line.trim().is_empty() {
+                        log_lines.push(format!("  dcm2niix (rerun): {}", line));
+                    }
+                }
+            }
+            break; // only need to rerun once
+        }
+    }
+
+    // Collect all dcm2niix output files
+    let final_outputs: Vec<PathBuf> = fs::read_dir(&temp_dir)
         .into_iter()
         .flatten()
         .flatten()
@@ -279,10 +368,10 @@ fn convert_series(
         })
         .collect();
 
-    for temp_path in &temp_outputs {
+    // Rename to proper BIDS names and move to anat directory
+    for temp_path in &final_outputs {
         let filename = temp_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        // Determine extension (.nii.gz, .json, .bval, .bvec)
         let (stem, extension) = if let Some(s) = filename.strip_suffix(".nii.gz") {
             (s, ".nii.gz")
         } else if let Some(s) = filename.strip_suffix(".json") {
@@ -292,27 +381,53 @@ fn convert_series(
         } else if let Some(s) = filename.strip_suffix(".bvec") {
             (s, ".bvec")
         } else {
-            continue; // skip unknown files (e.g. the copied DICOMs)
+            continue;
         };
 
-        // Parse dcm2niix suffixes from the stem
-        let (echo, is_phase) = parse_dcm2niix_suffixes(stem, temp_base);
-
-        // Determine part label: if dcm2niix flagged as phase (_ph suffix),
-        // use "phase"; otherwise use the series-level type
-        let file_part = if is_phase { Some("phase") } else { part };
+        // Parse dcm2niix suffixes
+        let (echo, is_phase_file) = parse_dcm2niix_suffixes(stem, temp_base);
+        let file_part = if is_phase_file { Some("phase") } else { part };
 
         let bids_name = build_bids_filename(&BidsNameParts {
             sub: sub_label, ses: ses_label, acq: acq_name, run: run_number,
-            echo, part: file_part, suffix, extension,
+            rec, echo, part: file_part, suffix, extension,
         });
 
         let dest = anat_dir.join(&bids_name);
         if let Err(e) = fs::rename(temp_path, &dest) {
-            // rename may fail across filesystems, fall back to copy
             if let Err(e2) = fs::copy(temp_path, &dest) {
                 errors.push(format!("Failed to move {} -> {}: {} / {}", filename, bids_name, e, e2));
                 continue;
+            }
+        }
+
+        // Post-process JSON sidecars: ensure EchoTime is in seconds
+        if extension == ".json" {
+            let Ok(content) = fs::read_to_string(&dest) else { continue };
+            let Ok(mut json): Result<serde_json::Value, _> = serde_json::from_str(&content) else { continue };
+
+            // Ensure EchoTime is in seconds (some scanners report in ms)
+            if let Some(et) = json.get("EchoTime").and_then(|v| v.as_f64()) {
+                if et > 1.0 {
+                    // Likely in milliseconds, convert to seconds
+                    json["EchoTime"] = serde_json::json!(et / 1000.0);
+                    if let Ok(output) = serde_json::to_string_pretty(&json) {
+                        let _ = fs::write(&dest, output);
+                    }
+                }
+            }
+
+            // For GE data, update ImageType in JSON if we have Real/Imag → Mag/Phase
+            if is_ge && matches!(series.series_type, SeriesType::Real | SeriesType::Imaginary) {
+                let new_type = if series.series_type == SeriesType::Real {
+                    "MAGNITUDE"
+                } else {
+                    "PHASE"
+                };
+                json["ImageType"] = serde_json::json!([new_type]);
+                if let Ok(output) = serde_json::to_string_pretty(&json) {
+                    let _ = fs::write(&dest, output);
+                }
             }
         }
 
@@ -342,7 +457,7 @@ mod tests {
     #[test]
     fn test_build_bids_filename_single_echo() {
         let name = build_bids_filename(&BidsNameParts {
-            sub: "01", ses: None, acq: "gre", run: 1,
+            sub: "01", ses: None, acq: "gre", run: 1, rec: None,
             echo: None, part: Some("mag"), suffix: "T2starw", extension: ".nii.gz",
         });
         assert_eq!(name, "sub-01_acq-gre_part-mag_T2starw.nii.gz");
@@ -351,7 +466,7 @@ mod tests {
     #[test]
     fn test_build_bids_filename_multi_echo() {
         let name = build_bids_filename(&BidsNameParts {
-            sub: "01", ses: Some("20240314"), acq: "gre", run: 1,
+            sub: "01", ses: Some("20240314"), acq: "gre", run: 1, rec: None,
             echo: Some(3), part: Some("phase"), suffix: "MEGRE", extension: ".json",
         });
         assert_eq!(name, "sub-01_ses-20240314_acq-gre_echo-3_part-phase_MEGRE.json");
@@ -360,9 +475,26 @@ mod tests {
     #[test]
     fn test_build_bids_filename_with_run() {
         let name = build_bids_filename(&BidsNameParts {
-            sub: "p025pre", ses: Some("20240314"), acq: "wip925B1mmPAT3eco6", run: 2,
+            sub: "p025pre", ses: Some("20240314"), acq: "wip925B1mmPAT3eco6", run: 2, rec: None,
             echo: Some(1), part: Some("mag"), suffix: "MEGRE", extension: ".nii.gz",
         });
         assert_eq!(name, "sub-p025pre_ses-20240314_acq-wip925B1mmPAT3eco6_run-2_echo-1_part-mag_MEGRE.nii.gz");
+    }
+
+    #[test]
+    fn test_build_bids_filename_with_rec() {
+        let name = build_bids_filename(&BidsNameParts {
+            sub: "01", ses: None, acq: "gre", run: 1, rec: Some("uncombined"),
+            echo: Some(1), part: Some("mag"), suffix: "MEGRE", extension: ".nii.gz",
+        });
+        assert_eq!(name, "sub-01_acq-gre_rec-uncombined_echo-1_part-mag_MEGRE.nii.gz");
+    }
+
+    #[test]
+    fn test_is_ge() {
+        assert!(is_ge_manufacturer("GE MEDICAL SYSTEMS"));
+        assert!(is_ge_manufacturer("GENERAL ELECTRIC"));
+        assert!(!is_ge_manufacturer("SIEMENS"));
+        assert!(!is_ge_manufacturer("Philips"));
     }
 }

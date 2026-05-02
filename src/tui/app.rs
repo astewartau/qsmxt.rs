@@ -8,12 +8,14 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::bids::discovery::{self, BidsTree};
 use crate::dicom;
+use crate::nifti;
 
 // ─── Input mode ───
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
     Bids,
+    NIfTI,
     DicomToBids,
 }
 
@@ -222,6 +224,248 @@ impl DicomConvertState {
                 }
             }
         }
+    }
+}
+
+// ─── NIfTI input state ───
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NiftiFocus {
+    InputDir,
+    AddMagnitude,
+    MagFile(usize),
+    AddPhase,
+    PhaseFile(usize),
+    EchoTimes,
+    FieldStrength,
+    B0Direction,
+    ConvertButton,
+}
+
+pub struct NiftiState {
+    pub input_dir: String,
+    pub output_dir: String,
+    pub magnitude_files: Vec<std::path::PathBuf>,
+    pub phase_files: Vec<std::path::PathBuf>,
+    pub echo_times: String,
+    pub field_strength: String,
+    pub b0_direction: String,
+    pub focus: NiftiFocus,
+    pub editing: bool,
+    pub cursor: usize,
+    pub scroll_offset: usize,
+    pub add_pattern: String,
+    pub adding_to: Option<nifti::convert::NiftiPartType>,
+    pub scan_log: Vec<String>,
+    pub convert_status: ConvertStatus,
+    pub convert_log: Vec<String>,
+}
+
+impl Default for NiftiState {
+    fn default() -> Self {
+        Self {
+            input_dir: String::new(),
+            output_dir: String::new(),
+            magnitude_files: Vec::new(),
+            phase_files: Vec::new(),
+            echo_times: String::new(),
+            field_strength: String::new(),
+            b0_direction: "0, 0, 1".to_string(),
+            focus: NiftiFocus::InputDir,
+            editing: false,
+            cursor: 0,
+            scroll_offset: 0,
+            add_pattern: String::new(),
+            adding_to: None,
+            scan_log: Vec::new(),
+            convert_status: ConvertStatus::Idle,
+            convert_log: Vec::new(),
+        }
+    }
+}
+
+impl NiftiState {
+    /// Scan input directory for NIfTI files, auto-classifying from JSON sidecars.
+    pub fn scan_input_directory(&mut self) {
+        let trimmed = self.input_dir.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let dir_str = if let Some(rest) = trimmed.strip_prefix("~/") {
+            if let Some(home) = std::env::var_os("HOME") {
+                format!("{}/{}", home.to_string_lossy(), rest)
+            } else {
+                trimmed.to_string()
+            }
+        } else {
+            trimmed.to_string()
+        };
+        let dir = std::path::Path::new(&dir_str);
+        if !dir.is_dir() {
+            return;
+        }
+
+        let result = nifti::convert::scan_nifti_directory(dir);
+        self.magnitude_files = result.magnitude_files;
+        self.phase_files = result.phase_files;
+
+        // Auto-fill echo times from scan (convert seconds to ms for display)
+        if !result.echo_times_s.is_empty() {
+            self.echo_times = result
+                .echo_times_s
+                .iter()
+                .map(|et| {
+                    let ms = et * 1000.0;
+                    if ms == ms.round() {
+                        format!("{:.0}", ms)
+                    } else {
+                        format!("{:.2}", ms)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+        }
+        if let Some(fs) = result.field_strength {
+            self.field_strength = format!("{}", fs);
+        }
+        if let Some(b0) = result.b0_dir {
+            self.b0_direction = b0.iter().map(|v| format!("{}", v)).collect::<Vec<_>>().join(", ");
+        }
+
+        self.scan_log.clear();
+        for path in &result.unclassified {
+            self.scan_log.push(format!(
+                "Unclassified: {}",
+                path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+            ));
+        }
+    }
+
+    /// Add files from a glob pattern or single path to the specified list.
+    pub fn add_files_from_pattern(&mut self, pattern: &str, part: nifti::convert::NiftiPartType) {
+        let expanded = if let Some(rest) = pattern.trim().strip_prefix("~/") {
+            if let Some(home) = std::env::var_os("HOME") {
+                format!("{}/{}", home.to_string_lossy(), rest)
+            } else {
+                pattern.trim().to_string()
+            }
+        } else {
+            pattern.trim().to_string()
+        };
+
+        let list = match part {
+            nifti::convert::NiftiPartType::Magnitude => &mut self.magnitude_files,
+            nifti::convert::NiftiPartType::Phase => &mut self.phase_files,
+        };
+
+        // Try glob expansion first
+        if let Ok(paths) = glob::glob(&expanded) {
+            let mut found = false;
+            for entry in paths.flatten() {
+                if entry.is_file() {
+                    list.push(entry);
+                    found = true;
+                }
+            }
+            if found {
+                // Try to auto-fill metadata from sidecars of newly added files
+                self.try_autofill_from_sidecars();
+                return;
+            }
+        }
+
+        // Fall back to treating as a single path
+        let path = std::path::PathBuf::from(&expanded);
+        if path.is_file() {
+            list.push(path);
+            self.try_autofill_from_sidecars();
+        }
+    }
+
+    /// Try to auto-fill echo times, field strength, and B0 direction from sidecars.
+    fn try_autofill_from_sidecars(&mut self) {
+        let mut echo_times: Vec<(usize, f64)> = Vec::new();
+
+        for (i, path) in self.magnitude_files.iter().enumerate() {
+            let json_path = crate::dicom::convert::nii_to_json_path(path);
+            if let Some(info) = nifti::convert::read_nifti_sidecar(&json_path) {
+                if let Some(et) = info.echo_time {
+                    echo_times.push((i, et));
+                }
+                if self.field_strength.is_empty() {
+                    if let Some(fs) = info.field_strength {
+                        self.field_strength = format!("{}", fs);
+                    }
+                }
+                if self.b0_direction == "0, 0, 1" {
+                    if let Some(ref b0) = info.b0_dir {
+                        if b0.len() == 3 {
+                            self.b0_direction = b0.iter().map(|v| format!("{}", v)).collect::<Vec<_>>().join(", ");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Auto-fill echo times if we got them for all magnitude files
+        if echo_times.len() == self.magnitude_files.len() && !echo_times.is_empty() {
+            // Sort magnitude files by echo time
+            echo_times.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            let sorted_files: Vec<_> = echo_times.iter().map(|(i, _)| self.magnitude_files[*i].clone()).collect();
+            self.magnitude_files = sorted_files;
+
+            self.echo_times = echo_times
+                .iter()
+                .map(|(_, et)| {
+                    let ms = et * 1000.0;
+                    if ms == ms.round() {
+                        format!("{:.0}", ms)
+                    } else {
+                        format!("{:.2}", ms)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+        }
+    }
+
+    /// Total number of focusable items in the NIfTI section.
+    pub fn focusable_items(&self) -> Vec<NiftiFocus> {
+        let mut items = vec![NiftiFocus::InputDir, NiftiFocus::AddMagnitude];
+        for i in 0..self.magnitude_files.len() {
+            items.push(NiftiFocus::MagFile(i));
+        }
+        items.push(NiftiFocus::AddPhase);
+        for i in 0..self.phase_files.len() {
+            items.push(NiftiFocus::PhaseFile(i));
+        }
+        items.extend_from_slice(&[
+            NiftiFocus::EchoTimes,
+            NiftiFocus::FieldStrength,
+            NiftiFocus::B0Direction,
+            NiftiFocus::ConvertButton,
+        ]);
+        items
+    }
+
+    pub fn focus_next(&mut self) {
+        let items = self.focusable_items();
+        if let Some(pos) = items.iter().position(|f| f == &self.focus) {
+            if pos + 1 < items.len() {
+                self.focus = items[pos + 1].clone();
+            }
+        }
+    }
+
+    pub fn focus_prev(&mut self) -> bool {
+        let items = self.focusable_items();
+        if let Some(pos) = items.iter().position(|f| f == &self.focus) {
+            if pos > 0 {
+                self.focus = items[pos - 1].clone();
+                return true;
+            }
+        }
+        false // at the top, caller should go back to IO fields
     }
 }
 
@@ -1444,6 +1688,7 @@ pub struct App {
     pub error_message: Option<String>,
     pub input_mode: InputMode,
     pub dicom_state: DicomConvertState,
+    pub nifti_state: NiftiState,
 }
 
 pub struct RunForm {
@@ -1636,6 +1881,7 @@ impl App {
             error_message: None,
             input_mode: InputMode::Bids,
             dicom_state: DicomConvertState::default(),
+            nifti_state: NiftiState::default(),
         }
     }
 
@@ -1656,6 +1902,15 @@ impl App {
             && self.dicom_state.convert_status != ConvertStatus::Done
         {
             self.error_message = Some("Convert DICOM to BIDS first (Enter on Convert button)".to_string());
+            self.active_tab = 0;
+            return;
+        }
+
+        // NIfTI mode: must convert first
+        if self.input_mode == InputMode::NIfTI
+            && self.nifti_state.convert_status != ConvertStatus::Done
+        {
+            self.error_message = Some("Convert NIfTI to BIDS first (Enter on Convert button)".to_string());
             self.active_tab = 0;
             return;
         }
@@ -1797,6 +2052,11 @@ impl App {
             self.handle_dicom_tab_key(key);
             return;
         }
+        // If in NIfTI mode and past the IO fields, delegate to NIfTI handler
+        if self.input_mode == InputMode::NIfTI && self.active_field >= Self::INPUT_IO_FIELDS {
+            self.handle_nifti_tab_key(key);
+            return;
+        }
 
         let in_io = self.active_field < Self::INPUT_IO_FIELDS;
 
@@ -1808,10 +2068,12 @@ impl App {
                 let stopped_editing = was_editing && !self.editing;
 
                 // BIDS mode: rescan on every keystroke (fast, just globs)
-                // DICOM mode: only rescan when editing finishes (slow, reads files)
+                // DICOM/NIfTI mode: only rescan when editing finishes (slow, reads files)
                 if self.input_mode == InputMode::Bids {
                     let bids_dir = self.form.bids_dir.clone();
                     self.filter_state.maybe_rescan(&bids_dir);
+                } else if self.input_mode == InputMode::NIfTI && stopped_editing && self.active_field == 1 {
+                    self.nifti_state.scan_input_directory();
                 } else if stopped_editing && self.active_field == 1 {
                     // Only scan when user finishes editing the DICOM directory field
                     self.dicom_state.maybe_rescan();
@@ -1841,6 +2103,7 @@ impl App {
                     } else {
                         let has_content = match self.input_mode {
                             InputMode::Bids => self.filter_state.tree.is_some(),
+                            InputMode::NIfTI => true, // always has NIfTI fields below
                             InputMode::DicomToBids => self.dicom_state.session.is_some(),
                         };
                         if has_content {
@@ -1860,9 +2123,10 @@ impl App {
             if self.input_mode == InputMode::Bids {
                 let bids_dir = self.form.bids_dir.clone();
                 self.filter_state.maybe_rescan(&bids_dir);
-            } else {
+            } else if self.input_mode == InputMode::DicomToBids {
                 self.dicom_state.maybe_rescan();
             }
+            // NIfTI mode: no auto-rescan on navigation, only on edit finish
         } else if self.input_mode == InputMode::Bids {
             // BIDS filter tree
             if self.filter_state.include_editing || self.filter_state.exclude_editing || self.filter_state.num_echoes_editing {
@@ -1890,8 +2154,16 @@ impl App {
         // Text fields (1-3)
         self.editing = true;
         self.cursor_pos = match self.active_field {
-            1 => if self.input_mode == InputMode::Bids { self.form.bids_dir.len() } else { self.dicom_state.dicom_dir.len() },
-            2 => if self.input_mode == InputMode::Bids { self.form.output_dir.len() } else { self.dicom_state.output_dir.len() },
+            1 => match self.input_mode {
+                InputMode::Bids => self.form.bids_dir.len(),
+                InputMode::NIfTI => self.nifti_state.input_dir.len(),
+                InputMode::DicomToBids => self.dicom_state.dicom_dir.len(),
+            },
+            2 => match self.input_mode {
+                InputMode::Bids => self.form.output_dir.len(),
+                InputMode::NIfTI => self.nifti_state.output_dir.len(),
+                InputMode::DicomToBids => self.dicom_state.output_dir.len(),
+            },
             3 => self.form.config_file.len(),
             _ => 0,
         };
@@ -1899,22 +2171,20 @@ impl App {
 
     fn adjust_io_select(&mut self, delta: isize) {
         if self.active_field == 0 {
-            // Mode selector: Left/Right toggles
-            if delta != 0 {
-                self.toggle_input_mode();
-            }
+            // Mode selector: Left/Right cycles through modes
+            self.cycle_input_mode(delta);
         }
     }
 
     fn toggle_input_mode(&mut self) {
-        match self.input_mode {
-            InputMode::Bids => {
-                self.input_mode = InputMode::DicomToBids;
-            }
-            InputMode::DicomToBids => {
-                self.input_mode = InputMode::Bids;
-            }
-        }
+        self.cycle_input_mode(1);
+    }
+
+    fn cycle_input_mode(&mut self, delta: isize) {
+        const MODES: [InputMode; 3] = [InputMode::Bids, InputMode::NIfTI, InputMode::DicomToBids];
+        let cur = MODES.iter().position(|m| *m == self.input_mode).unwrap_or(0) as isize;
+        let next = (cur + delta).rem_euclid(MODES.len() as isize) as usize;
+        self.input_mode = MODES[next];
         self.form_scroll_offset = 0;
     }
 
@@ -1924,22 +2194,26 @@ impl App {
         match (self.active_tab, self.active_field) {
             // Tab 0 (Input) IO fields
             (0, 0) => self.input_mode = InputMode::Bids,
-            (0, 1) => {
-                if self.input_mode == InputMode::Bids {
-                    self.form.bids_dir = defaults.bids_dir.clone();
-                } else {
+            (0, 1) => match self.input_mode {
+                InputMode::Bids => self.form.bids_dir = defaults.bids_dir.clone(),
+                InputMode::NIfTI => {
+                    self.nifti_state.input_dir = String::new();
+                    self.nifti_state.magnitude_files.clear();
+                    self.nifti_state.phase_files.clear();
+                    self.nifti_state.echo_times.clear();
+                    self.nifti_state.scan_log.clear();
+                }
+                InputMode::DicomToBids => {
                     self.dicom_state.dicom_dir = String::new();
                     self.dicom_state.scanned_dir = None;
                     self.dicom_state.session = None;
                 }
-            }
-            (0, 2) => {
-                if self.input_mode == InputMode::Bids {
-                    self.form.output_dir = defaults.output_dir.clone();
-                } else {
-                    self.dicom_state.output_dir = String::new();
-                }
-            }
+            },
+            (0, 2) => match self.input_mode {
+                InputMode::Bids => self.form.output_dir = defaults.output_dir.clone(),
+                InputMode::NIfTI => self.nifti_state.output_dir = String::new(),
+                InputMode::DicomToBids => self.dicom_state.output_dir = String::new(),
+            },
             (0, 3) => self.form.config_file = defaults.config_file.clone(),
             // Tab 2 (Supplementary)
             (2, 0) => self.form.do_swi = defaults.do_swi,
@@ -1976,6 +2250,7 @@ impl App {
                 self.form.output_dir = defaults.output_dir.clone();
                 self.form.config_file = defaults.config_file.clone();
                 self.dicom_state = DicomConvertState::default();
+                self.nifti_state = NiftiState::default();
             }
             2 => {
                 self.form.do_swi = defaults.do_swi;
@@ -2337,6 +2612,307 @@ impl App {
         std::thread::spawn(move || {
             dicom::convert::convert_session_streaming(&session, &output_path, &tx);
         });
+    }
+
+    /// Run the NIfTI → BIDS conversion synchronously (fast — just file copies + optional 4D split).
+    fn run_nifti_conversion(&mut self) {
+        if self.nifti_state.magnitude_files.is_empty() {
+            self.error_message = Some("Add at least one magnitude file".to_string());
+            return;
+        }
+        if self.nifti_state.phase_files.is_empty() {
+            self.error_message = Some("Add at least one phase file".to_string());
+            return;
+        }
+        if self.nifti_state.echo_times.trim().is_empty() {
+            self.error_message = Some("Echo times are required".to_string());
+            return;
+        }
+        if self.nifti_state.field_strength.trim().is_empty() {
+            self.error_message = Some("Field strength is required".to_string());
+            return;
+        }
+        let field_strength: f64 = match self.nifti_state.field_strength.trim().parse() {
+            Ok(v) => v,
+            Err(_) => {
+                self.error_message = Some("Field strength must be a number".to_string());
+                return;
+            }
+        };
+
+        if self.nifti_state.convert_status == ConvertStatus::Converting {
+            return;
+        }
+
+        let echo_times_s: Vec<f64> = self.nifti_state.echo_times
+            .split(',')
+            .filter_map(|s| s.trim().parse::<f64>().ok().map(|ms| ms / 1000.0))
+            .collect();
+
+        let b0_dir: Vec<f64> = self.nifti_state.b0_direction
+            .split(',')
+            .filter_map(|s| s.trim().parse::<f64>().ok())
+            .collect();
+        let b0_dir = if b0_dir.len() == 3 { b0_dir } else { vec![0.0, 0.0, 1.0] };
+
+        // Determine output directory
+        let output_dir_str = if self.nifti_state.output_dir.trim().is_empty() {
+            let input_dir = self.nifti_state.input_dir.trim();
+            if !input_dir.is_empty() {
+                let expanded = if let Some(rest) = input_dir.strip_prefix("~/") {
+                    if let Some(home) = std::env::var_os("HOME") {
+                        format!("{}/{}", home.to_string_lossy(), rest)
+                    } else {
+                        input_dir.to_string()
+                    }
+                } else {
+                    input_dir.to_string()
+                };
+                let p = std::path::Path::new(&expanded);
+                let parent = p.parent().unwrap_or(p);
+                parent.join("bids_output").to_string_lossy().to_string()
+            } else {
+                "bids_output".to_string()
+            }
+        } else {
+            let d = self.nifti_state.output_dir.trim().to_string();
+            if let Some(rest) = d.strip_prefix("~/") {
+                if let Some(home) = std::env::var_os("HOME") {
+                    format!("{}/{}", home.to_string_lossy(), rest)
+                } else {
+                    d
+                }
+            } else {
+                d
+            }
+        };
+
+        self.nifti_state.convert_status = ConvertStatus::Converting;
+        self.nifti_state.convert_log.clear();
+        self.nifti_state.convert_log.push("Converting NIfTI files to BIDS...".to_string());
+
+        let params = nifti::convert::NiftiToBidsParams {
+            magnitude_files: self.nifti_state.magnitude_files.clone(),
+            phase_files: self.nifti_state.phase_files.clone(),
+            echo_times_s,
+            field_strength,
+            b0_dir,
+            output_dir: std::path::PathBuf::from(&output_dir_str),
+        };
+
+        match nifti::convert::convert_to_bids(&params) {
+            Ok(bids_dir) => {
+                self.nifti_state.convert_log.push(format!("Done! BIDS directory: {}", bids_dir.display()));
+                self.nifti_state.convert_status = ConvertStatus::Done;
+                // Switch to BIDS mode with the generated directory
+                self.form.bids_dir = bids_dir.to_string_lossy().to_string();
+                self.input_mode = InputMode::Bids;
+                self.form_scroll_offset = 0;
+                self.filter_state.scanned_bids_dir = None; // force rescan
+            }
+            Err(e) => {
+                self.nifti_state.convert_log.push(format!("ERROR: {}", e));
+                self.nifti_state.convert_status = ConvertStatus::Error;
+                self.error_message = Some(format!("NIfTI conversion failed: {}", e));
+            }
+        }
+    }
+
+    // ─── NIfTI tab key handling ───
+
+    fn handle_nifti_tab_key(&mut self, key: KeyEvent) {
+        // Handle text editing mode
+        if self.nifti_state.editing {
+            self.handle_nifti_editing(key);
+            return;
+        }
+
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+
+            KeyCode::Char(c @ '1'..='5') => {
+                self.active_tab = (c as usize) - ('1' as usize);
+                self.active_field = 0;
+            }
+            KeyCode::Tab => {
+                self.active_tab = (self.active_tab + 1) % TAB_NAMES.len();
+                self.active_field = 0;
+            }
+            KeyCode::BackTab => {
+                self.active_tab = (self.active_tab + TAB_NAMES.len() - 1) % TAB_NAMES.len();
+                self.active_field = 0;
+            }
+
+            // Navigation
+            KeyCode::Up | KeyCode::Char('k') => {
+                if !self.nifti_state.focus_prev() {
+                    // At top of NIfTI section, go back to IO fields
+                    self.active_field = Self::INPUT_IO_FIELDS - 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => self.nifti_state.focus_next(),
+
+            // Reorder files
+            KeyCode::Char('K') => {
+                match &self.nifti_state.focus {
+                    NiftiFocus::MagFile(i) if *i > 0 => {
+                        let i = *i;
+                        self.nifti_state.magnitude_files.swap(i, i - 1);
+                        self.nifti_state.focus = NiftiFocus::MagFile(i - 1);
+                    }
+                    NiftiFocus::PhaseFile(i) if *i > 0 => {
+                        let i = *i;
+                        self.nifti_state.phase_files.swap(i, i - 1);
+                        self.nifti_state.focus = NiftiFocus::PhaseFile(i - 1);
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::Char('J') => {
+                match &self.nifti_state.focus {
+                    NiftiFocus::MagFile(i) if *i + 1 < self.nifti_state.magnitude_files.len() => {
+                        let i = *i;
+                        self.nifti_state.magnitude_files.swap(i, i + 1);
+                        self.nifti_state.focus = NiftiFocus::MagFile(i + 1);
+                    }
+                    NiftiFocus::PhaseFile(i) if *i + 1 < self.nifti_state.phase_files.len() => {
+                        let i = *i;
+                        self.nifti_state.phase_files.swap(i, i + 1);
+                        self.nifti_state.focus = NiftiFocus::PhaseFile(i + 1);
+                    }
+                    _ => {}
+                }
+            }
+
+            // Delete file
+            KeyCode::Delete | KeyCode::Char('d') => {
+                match &self.nifti_state.focus {
+                    NiftiFocus::MagFile(i) => {
+                        let i = *i;
+                        self.nifti_state.magnitude_files.remove(i);
+                        if self.nifti_state.magnitude_files.is_empty() {
+                            self.nifti_state.focus = NiftiFocus::AddMagnitude;
+                        } else if i >= self.nifti_state.magnitude_files.len() {
+                            self.nifti_state.focus = NiftiFocus::MagFile(self.nifti_state.magnitude_files.len() - 1);
+                        }
+                    }
+                    NiftiFocus::PhaseFile(i) => {
+                        let i = *i;
+                        self.nifti_state.phase_files.remove(i);
+                        if self.nifti_state.phase_files.is_empty() {
+                            self.nifti_state.focus = NiftiFocus::AddPhase;
+                        } else if i >= self.nifti_state.phase_files.len() {
+                            self.nifti_state.focus = NiftiFocus::PhaseFile(self.nifti_state.phase_files.len() - 1);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Enter: start editing text fields or add files
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                match &self.nifti_state.focus {
+                    NiftiFocus::InputDir => {
+                        // Trigger directory scan
+                        self.nifti_state.scan_input_directory();
+                    }
+                    NiftiFocus::AddMagnitude => {
+                        self.nifti_state.editing = true;
+                        self.nifti_state.add_pattern.clear();
+                        self.nifti_state.cursor = 0;
+                        self.nifti_state.adding_to = Some(nifti::convert::NiftiPartType::Magnitude);
+                    }
+                    NiftiFocus::AddPhase => {
+                        self.nifti_state.editing = true;
+                        self.nifti_state.add_pattern.clear();
+                        self.nifti_state.cursor = 0;
+                        self.nifti_state.adding_to = Some(nifti::convert::NiftiPartType::Phase);
+                    }
+                    NiftiFocus::EchoTimes => {
+                        self.nifti_state.editing = true;
+                        self.nifti_state.cursor = self.nifti_state.echo_times.len();
+                        self.nifti_state.adding_to = None;
+                    }
+                    NiftiFocus::FieldStrength => {
+                        self.nifti_state.editing = true;
+                        self.nifti_state.cursor = self.nifti_state.field_strength.len();
+                        self.nifti_state.adding_to = None;
+                    }
+                    NiftiFocus::B0Direction => {
+                        self.nifti_state.editing = true;
+                        self.nifti_state.cursor = self.nifti_state.b0_direction.len();
+                        self.nifti_state.adding_to = None;
+                    }
+                    NiftiFocus::MagFile(_) | NiftiFocus::PhaseFile(_) => {}
+                    NiftiFocus::ConvertButton => {
+                        self.run_nifti_conversion();
+                    }
+                }
+            }
+
+            KeyCode::F(5) => self.try_run(),
+
+            _ => {}
+        }
+    }
+
+    fn handle_nifti_editing(&mut self, key: KeyEvent) {
+        let is_adding_file = self.nifti_state.adding_to.is_some();
+
+        // Get a mutable reference to the string being edited
+        let (text, cursor) = if is_adding_file {
+            (&mut self.nifti_state.add_pattern, &mut self.nifti_state.cursor)
+        } else {
+            match &self.nifti_state.focus {
+                NiftiFocus::EchoTimes => (&mut self.nifti_state.echo_times, &mut self.nifti_state.cursor),
+                NiftiFocus::FieldStrength => (&mut self.nifti_state.field_strength, &mut self.nifti_state.cursor),
+                NiftiFocus::B0Direction => (&mut self.nifti_state.b0_direction, &mut self.nifti_state.cursor),
+                _ => {
+                    self.nifti_state.editing = false;
+                    return;
+                }
+            }
+        };
+
+        match key.code {
+            KeyCode::Esc => {
+                self.nifti_state.editing = false;
+                self.nifti_state.adding_to = None;
+            }
+            KeyCode::Enter => {
+                if is_adding_file {
+                    let pattern = self.nifti_state.add_pattern.clone();
+                    let part = self.nifti_state.adding_to.unwrap();
+                    self.nifti_state.add_files_from_pattern(&pattern, part);
+                    self.nifti_state.add_pattern.clear();
+                    self.nifti_state.adding_to = None;
+                }
+                self.nifti_state.editing = false;
+            }
+            KeyCode::Char(c) => {
+                text.insert(*cursor, c);
+                *cursor += 1;
+            }
+            KeyCode::Backspace if key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) && *cursor > 0 => {
+                let new_pos = word_boundary_left(text, *cursor);
+                text.drain(new_pos..*cursor);
+                *cursor = new_pos;
+            }
+            KeyCode::Backspace if *cursor > 0 => {
+                *cursor -= 1;
+                text.remove(*cursor);
+            }
+            KeyCode::Left => *cursor = cursor.saturating_sub(1),
+            KeyCode::Right => {
+                let len = text.len();
+                if *cursor < len {
+                    *cursor += 1;
+                }
+            }
+            KeyCode::Home => *cursor = 0,
+            KeyCode::End => *cursor = text.len(),
+            _ => {}
+        }
     }
 
     // ─── Pipeline tab key handling ───
@@ -2723,12 +3299,16 @@ impl App {
 
     pub fn text_value(&self) -> &str {
         match (self.active_tab, self.active_field) {
-            (0, 1) => {
-                if self.input_mode == InputMode::Bids { &self.form.bids_dir } else { &self.dicom_state.dicom_dir }
-            }
-            (0, 2) => {
-                if self.input_mode == InputMode::Bids { &self.form.output_dir } else { &self.dicom_state.output_dir }
-            }
+            (0, 1) => match self.input_mode {
+                InputMode::Bids => &self.form.bids_dir,
+                InputMode::NIfTI => &self.nifti_state.input_dir,
+                InputMode::DicomToBids => &self.dicom_state.dicom_dir,
+            },
+            (0, 2) => match self.input_mode {
+                InputMode::Bids => &self.form.output_dir,
+                InputMode::NIfTI => &self.nifti_state.output_dir,
+                InputMode::DicomToBids => &self.dicom_state.output_dir,
+            },
             (0, 3) => &self.form.config_file,
             (2, 2) => &self.form.swi_strength,
             (2, 3) => &self.form.swi_hp_sigma_x,
@@ -2747,12 +3327,16 @@ impl App {
 
     fn text_value_mut(&mut self) -> &mut String {
         match (self.active_tab, self.active_field) {
-            (0, 1) => {
-                if self.input_mode == InputMode::Bids { &mut self.form.bids_dir } else { &mut self.dicom_state.dicom_dir }
-            }
-            (0, 2) => {
-                if self.input_mode == InputMode::Bids { &mut self.form.output_dir } else { &mut self.dicom_state.output_dir }
-            }
+            (0, 1) => match self.input_mode {
+                InputMode::Bids => &mut self.form.bids_dir,
+                InputMode::NIfTI => &mut self.nifti_state.input_dir,
+                InputMode::DicomToBids => &mut self.dicom_state.dicom_dir,
+            },
+            (0, 2) => match self.input_mode {
+                InputMode::Bids => &mut self.form.output_dir,
+                InputMode::NIfTI => &mut self.nifti_state.output_dir,
+                InputMode::DicomToBids => &mut self.dicom_state.output_dir,
+            },
             (0, 3) => &mut self.form.config_file,
             (2, 2) => &mut self.form.swi_strength,
             (2, 3) => &mut self.form.swi_hp_sigma_x,

@@ -427,7 +427,7 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
     })
 }
 
-fn expand_tilde(s: &str) -> PathBuf {
+pub(super) fn expand_tilde(s: &str) -> PathBuf {
     let home = || std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("~"));
     if s == "~" {
         home()

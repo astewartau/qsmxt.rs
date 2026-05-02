@@ -260,6 +260,7 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let io_field_count = super::app::App::INPUT_IO_FIELDS;
     let in_io = app.active_field < io_field_count;
     let is_bids = app.input_mode == super::app::InputMode::Bids;
+    let is_nifti = app.input_mode == super::app::InputMode::NIfTI;
 
     // Build lines for IO fields
     let mut lines: Vec<Line> = Vec::new();
@@ -271,38 +272,31 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     } else {
         Style::default().fg(Color::White)
     };
-    let (bids_style, dicom_style) = if is_bids {
-        (Style::default().fg(Color::Cyan), Style::default().fg(Color::DarkGray))
-    } else {
-        (Style::default().fg(Color::DarkGray), Style::default().fg(Color::Cyan))
+    let mode_text = match app.input_mode {
+        super::app::InputMode::Bids => "BIDS",
+        super::app::InputMode::NIfTI => "NIfTI -> BIDS",
+        super::app::InputMode::DicomToBids => "DICOM -> BIDS",
     };
+    let mode_style = Style::default().fg(Color::Cyan);
     if mode_focused {
         lines.push(Line::from(vec![
             Span::styled(format!("  {:22}", "Input Mode:"), mode_label_style),
             Span::styled("< ", Style::default().fg(Color::DarkGray)),
-            if is_bids {
-                Span::styled("BIDS", bids_style.add_modifier(Modifier::BOLD))
-            } else {
-                Span::styled("DICOM -> BIDS", dicom_style.add_modifier(Modifier::BOLD))
-            },
+            Span::styled(mode_text, mode_style.add_modifier(Modifier::BOLD)),
             Span::styled(" >", Style::default().fg(Color::DarkGray)),
         ]));
     } else {
         lines.push(Line::from(vec![
             Span::styled(format!("  {:22}", "Input Mode:"), mode_label_style),
-            if is_bids {
-                Span::styled("BIDS", bids_style)
-            } else {
-                Span::styled("DICOM -> BIDS", dicom_style)
-            },
+            Span::styled(mode_text, mode_style),
         ]));
     }
 
     // Fields 1-3: directory/config fields (labels change based on mode)
-    let io_labels = if is_bids {
-        ["BIDS Directory", "Output Directory", "Config File"]
-    } else {
-        ["DICOM Directory", "Output BIDS Dir", "Config File"]
+    let io_labels = match app.input_mode {
+        super::app::InputMode::Bids => ["BIDS Directory", "Output Directory", "Config File"],
+        super::app::InputMode::NIfTI => ["Input Directory", "Output BIDS Dir", "Config File"],
+        super::app::InputMode::DicomToBids => ["DICOM Directory", "Output BIDS Dir", "Config File"],
     };
 
     // Fields 1-3 are the text IO fields
@@ -316,17 +310,23 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         };
 
         // Text field - pull value from the right source based on mode
-        let value: &str = match (label_idx, is_bids) {
-            (0, true) => &app.form.bids_dir,
-            (0, false) => &app.dicom_state.dicom_dir,
-            (1, true) => &app.form.output_dir,
-            (1, false) => &app.dicom_state.output_dir,
+        let value: &str = match (label_idx, app.input_mode) {
+            (0, super::app::InputMode::Bids) => &app.form.bids_dir,
+            (0, super::app::InputMode::NIfTI) => &app.nifti_state.input_dir,
+            (0, super::app::InputMode::DicomToBids) => &app.dicom_state.dicom_dir,
+            (1, super::app::InputMode::Bids) => &app.form.output_dir,
+            (1, super::app::InputMode::NIfTI) => &app.nifti_state.output_dir,
+            (1, super::app::InputMode::DicomToBids) => &app.dicom_state.output_dir,
             (2, _) => &app.form.config_file,
             _ => "",
         };
         let val_style = if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::Gray) };
         // Placeholder logic
-        let primary_dir = if is_bids { &app.form.bids_dir } else { &app.dicom_state.dicom_dir };
+        let primary_dir = match app.input_mode {
+            super::app::InputMode::Bids => &app.form.bids_dir,
+            super::app::InputMode::NIfTI => &app.nifti_state.input_dir,
+            super::app::InputMode::DicomToBids => &app.dicom_state.dicom_dir,
+        };
         let display_val = if label_idx == 1 && value.is_empty() && !primary_dir.is_empty() && !(focused && app.editing) {
             if is_bids {
                 Span::styled(primary_dir.to_string(), Style::default().fg(Color::DarkGray))
@@ -334,7 +334,11 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
                 Span::styled("(auto: bids_output/)", Style::default().fg(Color::DarkGray))
             }
         } else if label_idx == 0 && value.is_empty() && !(focused && app.editing) {
-            Span::styled("(required)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
+            if is_nifti {
+                Span::styled("(optional, for auto-scan)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
+            } else {
+                Span::styled("(required)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
+            }
         } else if value.is_empty() && !(focused && app.editing) {
             Span::styled("(empty)", Style::default().fg(Color::DarkGray))
         } else {
@@ -350,7 +354,10 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     // Separator + mode-specific content below IO fields
     lines.push(Line::from(""));
 
-    if is_bids {
+    if is_nifti {
+        // ─── NIfTI mode ───
+        draw_nifti_section(&app.nifti_state, in_io, &mut lines);
+    } else if is_bids {
         // ─── BIDS mode: filters + tree ───
         lines.push(Line::from(Span::styled(
             "  -- Filters --",
@@ -487,6 +494,33 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
                 Some(offset + vis_len + 4)
             }
         }
+    } else if is_nifti {
+        // NIfTI section: compute line position from focus
+        let offset = io_field_count + 2; // blank + header
+        let items = app.nifti_state.focusable_items();
+        if let Some(pos) = items.iter().position(|f| f == &app.nifti_state.focus) {
+            // Each focusable item is roughly one line, but we need to account for headers/blanks
+            // InputDir: offset+0, blank, AddMag header: offset+1, AddMag: offset+2, mag files...,
+            // blank, AddPhase header, AddPhase, phase files..., blank, params header, EchoTimes, FieldStrength, B0Direction
+            let mut line = offset;
+            for (idx, item) in items.iter().enumerate() {
+                if idx == pos { break; }
+                match item {
+                    super::app::NiftiFocus::InputDir => line += 2,      // line + blank + header
+                    super::app::NiftiFocus::AddMagnitude => line += 1,
+                    super::app::NiftiFocus::MagFile(_) => line += 1,
+                    super::app::NiftiFocus::AddPhase => line += 3,      // line + blank + header + add line
+                    super::app::NiftiFocus::PhaseFile(_) => line += 1,
+                    super::app::NiftiFocus::EchoTimes => line += 3,     // line + blank + header + param
+                    super::app::NiftiFocus::FieldStrength => line += 1,
+                    super::app::NiftiFocus::B0Direction => line += 1,
+                    super::app::NiftiFocus::ConvertButton => line += 2, // blank + button
+                }
+            }
+            Some(line)
+        } else {
+            None
+        }
     } else {
         // DICOM series area
         let offset = io_field_count + 2; // blank + header
@@ -521,21 +555,35 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         }
     };
 
-    let scroll_offset = if is_bids {
-        &mut app.form_scroll_offset
-    } else {
-        &mut app.dicom_state.scroll_offset
+    let scroll_offset = match app.input_mode {
+        super::app::InputMode::Bids => &mut app.form_scroll_offset,
+        super::app::InputMode::NIfTI => &mut app.nifti_state.scroll_offset,
+        super::app::InputMode::DicomToBids => &mut app.dicom_state.scroll_offset,
     };
     render_scrollable(f, content_area, lines, scroll_offset, focused_line);
 
     // Help text
     let help_text = if in_io {
         match app.active_field {
-            0 => "Left/Right to switch between BIDS and DICOM input modes",
-            1 => if is_bids { "Path to BIDS-formatted dataset directory" } else { "Path to directory containing DICOM files" },
+            0 => "Left/Right to switch input mode (BIDS / NIfTI / DICOM)",
+            1 => match app.input_mode {
+                super::app::InputMode::Bids => "Path to BIDS-formatted dataset directory",
+                super::app::InputMode::NIfTI => "Directory with NIfTI files + JSON sidecars (optional, for auto-scan)",
+                super::app::InputMode::DicomToBids => "Path to directory containing DICOM files",
+            },
             2 => if is_bids { "Output directory (defaults to BIDS directory)" } else { "Output BIDS directory (empty = auto-generate)" },
             3 => "Optional pipeline configuration file (TOML)",
             _ => "",
+        }
+    } else if is_nifti {
+        match &app.nifti_state.focus {
+            super::app::NiftiFocus::InputDir => "Enter: scan directory for NIfTI files and auto-classify",
+            super::app::NiftiFocus::AddMagnitude | super::app::NiftiFocus::AddPhase => "Enter: type glob/path to add files",
+            super::app::NiftiFocus::MagFile(_) | super::app::NiftiFocus::PhaseFile(_) => "Shift+J/K: reorder, d: remove",
+            super::app::NiftiFocus::EchoTimes => "Enter: edit echo times (comma-separated, in ms)",
+            super::app::NiftiFocus::FieldStrength => "Enter: edit field strength (in Tesla)",
+            super::app::NiftiFocus::B0Direction => "Enter: edit B0 direction (comma-separated x,y,z)",
+            super::app::NiftiFocus::ConvertButton => "Enter: convert NIfTI files to BIDS directory",
         }
     } else if is_bids {
         match app.filter_state.focus {
@@ -560,7 +608,11 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 
     // Set cursor if editing IO text field
     if app.editing && in_io && app.active_field > 0 {
-        let scroll = if is_bids { app.form_scroll_offset } else { app.dicom_state.scroll_offset };
+        let scroll = match app.input_mode {
+            super::app::InputMode::Bids => app.form_scroll_offset,
+            super::app::InputMode::NIfTI => app.nifti_state.scroll_offset,
+            super::app::InputMode::DicomToBids => app.dicom_state.scroll_offset,
+        };
         let line = app.active_field;
         if line >= scroll && line < scroll + content_area.height as usize {
             let y = content_area.y + (line - scroll) as u16;
@@ -595,6 +647,189 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
             let x = content_area.x + 14 + app.filter_state.num_echoes_cursor as u16;
             f.set_cursor_position((x, y));
         }
+    }
+}
+
+/// Render the NIfTI configuration section (used within the unified input tab).
+fn draw_nifti_section(
+    ns: &super::app::NiftiState,
+    in_io: bool,
+    lines: &mut Vec<Line<'_>>,
+) {
+    let focused = |f: &super::app::NiftiFocus| -> bool { !in_io && ns.focus == *f };
+
+    let label_style = |f: &super::app::NiftiFocus| -> Style {
+        if focused(f) {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        }
+    };
+
+    // Input Dir scan status
+    let scan_info = if !ns.magnitude_files.is_empty() || !ns.phase_files.is_empty() {
+        format!("  (found {} mag, {} phase)", ns.magnitude_files.len(), ns.phase_files.len())
+    } else if !ns.scan_log.is_empty() {
+        format!("  ({} unclassified)", ns.scan_log.len())
+    } else {
+        String::new()
+    };
+    if !scan_info.is_empty() {
+        lines.push(Line::from(Span::styled(
+            scan_info,
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    // ── Magnitude section ──
+    lines.push(Line::from(Span::styled(
+        format!("  -- Magnitude Files ({}) --", ns.magnitude_files.len()),
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+    )));
+
+    // Add magnitude button
+    let add_mag_focus = super::app::NiftiFocus::AddMagnitude;
+    if ns.editing && ns.adding_to == Some(crate::nifti::convert::NiftiPartType::Magnitude) {
+        lines.push(Line::from(vec![
+            Span::styled("  [+] ", label_style(&add_mag_focus)),
+            Span::styled(ns.add_pattern.clone(), Style::default().fg(Color::Cyan)),
+        ]));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  [+] Add files...",
+            label_style(&add_mag_focus),
+        )));
+    }
+
+    // Magnitude file list
+    for (i, path) in ns.magnitude_files.iter().enumerate() {
+        let f = super::app::NiftiFocus::MagFile(i);
+        let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+        let style = if focused(&f) {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::Green)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("    {}. {}", i + 1, basename),
+            style,
+        )));
+    }
+
+    lines.push(Line::from(""));
+
+    // ── Phase section ──
+    lines.push(Line::from(Span::styled(
+        format!("  -- Phase Files ({}) --", ns.phase_files.len()),
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+    )));
+
+    // Add phase button
+    let add_phase_focus = super::app::NiftiFocus::AddPhase;
+    if ns.editing && ns.adding_to == Some(crate::nifti::convert::NiftiPartType::Phase) {
+        lines.push(Line::from(vec![
+            Span::styled("  [+] ", label_style(&add_phase_focus)),
+            Span::styled(ns.add_pattern.clone(), Style::default().fg(Color::Cyan)),
+        ]));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  [+] Add files...",
+            label_style(&add_phase_focus),
+        )));
+    }
+
+    // Phase file list
+    for (i, path) in ns.phase_files.iter().enumerate() {
+        let f = super::app::NiftiFocus::PhaseFile(i);
+        let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+        let style = if focused(&f) {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("    {}. {}", i + 1, basename),
+            style,
+        )));
+    }
+
+    lines.push(Line::from(""));
+
+    // ── Parameters section ──
+    lines.push(Line::from(Span::styled(
+        "  -- Parameters --",
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+    )));
+
+    // Echo Times
+    let et_focus = super::app::NiftiFocus::EchoTimes;
+    let et_val = if ns.echo_times.is_empty() && !(ns.editing && focused(&et_focus)) {
+        Span::styled("(required)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
+    } else {
+        Span::styled(ns.echo_times.clone(), Style::default().fg(Color::Cyan))
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {:22}", "Echo Times (ms):"), label_style(&et_focus)),
+        et_val,
+    ]));
+
+    // Field Strength
+    let fs_focus = super::app::NiftiFocus::FieldStrength;
+    let fs_val = if ns.field_strength.is_empty() && !(ns.editing && focused(&fs_focus)) {
+        Span::styled("(required)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
+    } else {
+        Span::styled(ns.field_strength.clone(), Style::default().fg(Color::Cyan))
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {:22}", "Field Strength (T):"), label_style(&fs_focus)),
+        fs_val,
+    ]));
+
+    // B0 Direction
+    let b0_focus = super::app::NiftiFocus::B0Direction;
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {:22}", "B0 Direction:"), label_style(&b0_focus)),
+        Span::styled(ns.b0_direction.clone(), Style::default().fg(Color::Cyan)),
+    ]));
+
+    // Validation warnings
+    if !ns.magnitude_files.is_empty() && !ns.phase_files.is_empty()
+        && ns.magnitude_files.len() != ns.phase_files.len()
+    {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  Warning: {} magnitude vs {} phase files", ns.magnitude_files.len(), ns.phase_files.len()),
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    lines.push(Line::from(""));
+
+    // Convert button + status
+    let convert_focus = super::app::NiftiFocus::ConvertButton;
+    let btn_style = if focused(&convert_focus) {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        match ns.convert_status {
+            super::app::ConvertStatus::Done => Style::default().fg(Color::Green),
+            super::app::ConvertStatus::Error => Style::default().fg(Color::Red),
+            _ => Style::default().fg(Color::White),
+        }
+    };
+    let btn_label = match ns.convert_status {
+        super::app::ConvertStatus::Idle => "  [ Convert to BIDS ]",
+        super::app::ConvertStatus::Converting => "  [ Converting... ]",
+        super::app::ConvertStatus::Done => "  [ Done! ]",
+        super::app::ConvertStatus::Error => "  [ Error ]",
+    };
+    lines.push(Line::from(Span::styled(btn_label, btn_style)));
+
+    // Show conversion log
+    for msg in &ns.convert_log {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", msg),
+            Style::default().fg(Color::DarkGray),
+        )));
     }
 }
 

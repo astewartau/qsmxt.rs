@@ -3,6 +3,7 @@ mod cli;
 mod commands;
 mod dicom;
 mod error;
+mod nifti;
 mod executor;
 mod pipeline;
 #[cfg(test)]
