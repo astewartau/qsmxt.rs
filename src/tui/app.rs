@@ -4296,4 +4296,1796 @@ mod tests {
         ns.focus_next();
         assert_eq!(ns.focus, NiftiFocus::ConvertButton);
     }
+
+    // ========== Pipeline tab handler tests ==========
+
+    #[test]
+    fn test_pipeline_tab_navigate_down_up() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        assert_eq!(app.pipeline_state.focus, 0);
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.pipeline_state.focus, 1);
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.pipeline_state.focus, 2);
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.pipeline_state.focus, 1);
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.pipeline_state.focus, 0);
+        // Up at 0 stays at 0
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.pipeline_state.focus, 0);
+    }
+
+    #[test]
+    fn test_pipeline_tab_navigate_clamp_bottom() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        let max = app.pipeline_state.focusable_rows().len().saturating_sub(1);
+        app.pipeline_state.focus = max;
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.pipeline_state.focus, max);
+    }
+
+    #[test]
+    fn test_pipeline_tab_switch_from_pipeline() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.active_tab, 2);
+        app.active_tab = 1;
+        app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(app.active_tab, 0);
+    }
+
+    #[test]
+    fn test_pipeline_tab_number_switch() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        app.handle_key(key(KeyCode::Char('3')));
+        assert_eq!(app.active_tab, 2);
+    }
+
+    #[test]
+    fn test_pipeline_left_right_algo_select() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        // Focus 0 is "QSM Processing" toggle, focus 1 is "Phase Combination" select
+        // Find the focus index for the QSM Inversion AlgoSelect
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut qsm_inv_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::AlgoSelect { field: "qsm_algorithm", .. } = &rows[ri] {
+                qsm_inv_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = qsm_inv_focus.expect("qsm_algorithm row not found");
+        app.pipeline_state.focus = fi;
+        assert_eq!(app.pipeline_state.qsm_algorithm, 0); // rts
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.pipeline_state.qsm_algorithm, 1); // tv
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.pipeline_state.qsm_algorithm, 0); // rts
+    }
+
+    #[test]
+    fn test_pipeline_enter_cycles_algo_select() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        // Navigate to phase_combination AlgoSelect
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut pc_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::AlgoSelect { field: "phase_combination", .. } = &rows[ri] {
+                pc_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = pc_focus.expect("phase_combination row not found");
+        app.pipeline_state.focus = fi;
+        assert_eq!(app.pipeline_state.phase_combination, 0);
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.pipeline_state.phase_combination, 1);
+        // Wrap around
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.pipeline_state.phase_combination, 0);
+    }
+
+    #[test]
+    fn test_pipeline_edit_text_param() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        // Find the obliquity_threshold Param row
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut obl_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::Param { field: "obliquity_threshold", .. } = &rows[ri] {
+                obl_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = obl_focus.expect("obliquity_threshold row not found");
+        app.pipeline_state.focus = fi;
+        // Enter editing
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.pipeline_state.editing);
+        // Type some chars
+        app.handle_key(key(KeyCode::Home));
+        app.handle_key(key(KeyCode::End));
+        // Backspace to clear
+        for _ in 0..app.pipeline_state.get_param("obliquity_threshold").len() {
+            app.handle_key(key(KeyCode::Backspace));
+        }
+        app.handle_key(key(KeyCode::Char('5')));
+        assert_eq!(app.pipeline_state.get_param("obliquity_threshold"), "5");
+        // Escape exits editing
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.pipeline_state.editing);
+    }
+
+    #[test]
+    fn test_pipeline_toggle_do_qsm() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        // Focus 0 should be the do_qsm toggle
+        app.pipeline_state.focus = 0;
+        assert!(app.pipeline_state.do_qsm);
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.pipeline_state.do_qsm);
+        // Toggling back
+        app.handle_key(key(KeyCode::Char(' ')));
+        assert!(app.pipeline_state.do_qsm);
+    }
+
+    #[test]
+    fn test_pipeline_toggle_inhomogeneity_correction() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        // Find inhomogeneity_correction toggle
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut ic_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::Toggle { field: "inhomogeneity_correction", .. } = &rows[ri] {
+                ic_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = ic_focus.expect("inhomogeneity_correction not found");
+        app.pipeline_state.focus = fi;
+        assert!(app.pipeline_state.inhomogeneity_correction);
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.pipeline_state.inhomogeneity_correction);
+    }
+
+    #[test]
+    fn test_pipeline_quit_from_pipeline_tab() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        app.handle_key(key(KeyCode::Char('q')));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_pipeline_esc_from_pipeline_tab() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_pipeline_f5_from_pipeline_tab() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        app.form.bids_dir = "/tmp/bids".to_string();
+        app.handle_key(key(KeyCode::F(5)));
+        assert!(app.should_run);
+    }
+
+    #[test]
+    fn test_pipeline_reset_field() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        app.pipeline_state.qsm_algorithm = 5;
+        // Find qsm_algorithm focus
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut fi_found = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::AlgoSelect { field: "qsm_algorithm", .. } = &rows[ri] {
+                fi_found = Some(fi);
+                break;
+            }
+        }
+        let fi = fi_found.expect("qsm_algorithm not found");
+        app.pipeline_state.focus = fi;
+        app.handle_key(key(KeyCode::Char('r')));
+        assert_eq!(app.pipeline_state.qsm_algorithm, 0); // default
+    }
+
+    #[test]
+    fn test_pipeline_reset_tab() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        app.pipeline_state.qsm_algorithm = 5;
+        app.pipeline_state.bf_algorithm = 3;
+        app.handle_key(key(KeyCode::Char('R')));
+        assert_eq!(app.pipeline_state.qsm_algorithm, 0);
+        assert_eq!(app.pipeline_state.bf_algorithm, 0);
+    }
+
+    #[test]
+    fn test_pipeline_visible_rows_change_on_toggle() {
+        let mut app = App::new();
+        let rows_with_qsm = app.pipeline_state.visible_rows().len();
+        app.pipeline_state.do_qsm = false;
+        let rows_without_qsm = app.pipeline_state.visible_rows().len();
+        assert!(rows_without_qsm < rows_with_qsm);
+    }
+
+    #[test]
+    fn test_pipeline_editing_left_right_cursor() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        // Find obliquity_threshold param and edit it
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut fi = 0;
+        for (f, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::Param { field: "obliquity_threshold", .. } = &rows[ri] {
+                fi = f;
+                break;
+            }
+        }
+        app.pipeline_state.focus = fi;
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.pipeline_state.editing);
+        // Move cursor left and right
+        let len = app.pipeline_state.get_param("obliquity_threshold").len();
+        assert_eq!(app.pipeline_state.cursor, len);
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.pipeline_state.cursor, len - 1);
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.pipeline_state.cursor, len);
+        // Enter exits editing
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.pipeline_state.editing);
+    }
+
+    // ========== Supplementary tab handler tests ==========
+
+    #[test]
+    fn test_supplementary_toggle_swi() {
+        let mut app = App::new();
+        app.active_tab = 2;
+        app.active_field = 0; // Compute SWI checkbox
+        assert!(!app.form.do_swi);
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.form.do_swi);
+        app.handle_key(key(KeyCode::Char(' ')));
+        assert!(!app.form.do_swi);
+    }
+
+    #[test]
+    fn test_supplementary_toggle_t2star() {
+        let mut app = App::new();
+        app.active_tab = 2;
+        app.active_field = 7; // Compute T2* Map
+        assert!(!app.form.do_t2starmap);
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.form.do_t2starmap);
+    }
+
+    #[test]
+    fn test_supplementary_toggle_r2star() {
+        let mut app = App::new();
+        app.active_tab = 2;
+        app.active_field = 8; // Compute R2* Map
+        assert!(!app.form.do_r2starmap);
+        app.handle_key(key(KeyCode::Char(' ')));
+        assert!(app.form.do_r2starmap);
+    }
+
+    #[test]
+    fn test_supplementary_swi_scaling_select() {
+        let mut app = App::new();
+        app.active_tab = 2;
+        app.form.do_swi = true; // make SWI fields visible
+        app.active_field = 1; // SWI Scaling select
+        assert_eq!(app.form.swi_scaling, 0); // tanh
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.form.swi_scaling, 1); // negative-tanh
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.form.swi_scaling, 0);
+    }
+
+    #[test]
+    fn test_supplementary_edit_swi_strength() {
+        let mut app = App::new();
+        app.active_tab = 2;
+        app.form.do_swi = true;
+        app.active_field = 2; // SWI Strength text field
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.editing);
+        // Type something
+        app.handle_key(key(KeyCode::End));
+        app.handle_key(key(KeyCode::Char('0')));
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.editing);
+    }
+
+    #[test]
+    fn test_supplementary_navigate_fields() {
+        let mut app = App::new();
+        app.active_tab = 2;
+        app.active_field = 0;
+        // SWI fields are hidden when do_swi is false, so Down from 0 skips to 7
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.active_field, 7);
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.active_field, 8);
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.active_field, 7);
+    }
+
+    #[test]
+    fn test_supplementary_swi_visible_when_enabled() {
+        let mut app = App::new();
+        app.form.do_swi = true;
+        assert!(app.is_field_visible(2, 1)); // SWI Scaling
+        assert!(app.is_field_visible(2, 2)); // SWI Strength
+        assert!(app.is_field_visible(2, 6)); // SWI MIP Window
+    }
+
+    #[test]
+    fn test_supplementary_swi_hidden_when_disabled() {
+        let app = App::new();
+        assert!(!app.is_field_visible(2, 1));
+        assert!(!app.is_field_visible(2, 6));
+    }
+
+    #[test]
+    fn test_supplementary_tab_switch() {
+        let mut app = App::new();
+        app.active_tab = 2;
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.active_tab, 3);
+    }
+
+    #[test]
+    fn test_supplementary_reset_field() {
+        let mut app = App::new();
+        app.active_tab = 2;
+        app.active_field = 0;
+        app.form.do_swi = true;
+        app.handle_key(key(KeyCode::Char('r')));
+        assert!(!app.form.do_swi); // reset to default
+    }
+
+    #[test]
+    fn test_supplementary_reset_tab() {
+        let mut app = App::new();
+        app.active_tab = 2;
+        app.form.do_swi = true;
+        app.form.do_t2starmap = true;
+        app.form.do_r2starmap = true;
+        app.form.swi_scaling = 3;
+        app.handle_key(key(KeyCode::Char('R')));
+        assert!(!app.form.do_swi);
+        assert!(!app.form.do_t2starmap);
+        assert!(!app.form.do_r2starmap);
+        assert_eq!(app.form.swi_scaling, 0);
+    }
+
+    // ========== Execution tab handler tests ==========
+
+    #[test]
+    fn test_execution_mode_switch_with_left_right() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.active_field = 0; // Execution Mode select
+        assert_eq!(app.form.execution_mode, 0); // Local
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.form.execution_mode, 1); // SLURM
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.form.execution_mode, 0); // Local
+    }
+
+    #[test]
+    fn test_execution_mode_enter_cycles() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.active_field = 0;
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.form.execution_mode, 1); // SLURM
+        app.handle_key(key(KeyCode::Char(' ')));
+        assert_eq!(app.form.execution_mode, 0); // Local
+    }
+
+    #[test]
+    fn test_execution_toggle_dry_run() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.active_field = 1; // Dry Run checkbox
+        assert!(!app.form.dry_run);
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.form.dry_run);
+    }
+
+    #[test]
+    fn test_execution_toggle_debug() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.active_field = 2; // Debug checkbox
+        assert!(!app.form.debug);
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.form.debug);
+    }
+
+    #[test]
+    fn test_execution_edit_n_procs() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.active_field = 3; // Num Processes
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.editing);
+        app.handle_key(key(KeyCode::Char('4')));
+        assert_eq!(app.form.n_procs, "4");
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.editing);
+    }
+
+    #[test]
+    fn test_execution_edit_slurm_account() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.form.execution_mode = 1; // SLURM mode
+        app.active_field = 4; // SLURM Account
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.editing);
+        app.handle_key(key(KeyCode::Char('a')));
+        app.handle_key(key(KeyCode::Char('c')));
+        app.handle_key(key(KeyCode::Char('t')));
+        assert_eq!(app.form.slurm_account, "act");
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.editing);
+    }
+
+    #[test]
+    fn test_execution_edit_slurm_partition() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.form.execution_mode = 1;
+        app.active_field = 5;
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Char('g')));
+        app.handle_key(key(KeyCode::Char('p')));
+        app.handle_key(key(KeyCode::Char('u')));
+        assert_eq!(app.form.slurm_partition, "gpu");
+    }
+
+    #[test]
+    fn test_execution_edit_slurm_time() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.form.execution_mode = 1;
+        app.active_field = 6;
+        app.handle_key(key(KeyCode::Enter));
+        // Clear existing "02:00:00"
+        for _ in 0..8 {
+            app.handle_key(key(KeyCode::Backspace));
+        }
+        app.handle_key(key(KeyCode::Char('1')));
+        assert_eq!(app.form.slurm_time, "1");
+    }
+
+    #[test]
+    fn test_execution_toggle_auto_submit() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.form.execution_mode = 1;
+        app.active_field = 9; // Auto-Submit checkbox
+        assert!(!app.form.slurm_submit);
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.form.slurm_submit);
+    }
+
+    #[test]
+    fn test_execution_reset_field() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.active_field = 6; // SLURM Time
+        app.form.slurm_time = "99:99:99".to_string();
+        app.handle_key(key(KeyCode::Char('r')));
+        assert_eq!(app.form.slurm_time, "02:00:00");
+    }
+
+    #[test]
+    fn test_execution_reset_tab() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.form.execution_mode = 1;
+        app.form.dry_run = true;
+        app.form.debug = true;
+        app.form.slurm_account = "x".to_string();
+        app.handle_key(key(KeyCode::Char('R')));
+        assert_eq!(app.form.execution_mode, 0);
+        assert!(!app.form.dry_run);
+        assert!(!app.form.debug);
+        assert!(app.form.slurm_account.is_empty());
+    }
+
+    // ========== Methods tab handler tests ==========
+
+    #[test]
+    fn test_methods_tab_scroll_down() {
+        let mut app = App::new();
+        app.active_tab = 4;
+        assert_eq!(app.methods_scroll_offset, 0);
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.methods_scroll_offset, 1);
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.methods_scroll_offset, 2);
+    }
+
+    #[test]
+    fn test_methods_tab_scroll_up() {
+        let mut app = App::new();
+        app.active_tab = 4;
+        app.methods_scroll_offset = 3;
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.methods_scroll_offset, 2);
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.methods_scroll_offset, 1);
+    }
+
+    #[test]
+    fn test_methods_tab_scroll_up_at_zero() {
+        let mut app = App::new();
+        app.active_tab = 4;
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.methods_scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_methods_tab_quit() {
+        let mut app = App::new();
+        app.active_tab = 4;
+        app.handle_key(key(KeyCode::Char('q')));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_methods_tab_esc() {
+        let mut app = App::new();
+        app.active_tab = 4;
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_methods_tab_switch() {
+        let mut app = App::new();
+        app.active_tab = 4;
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.active_tab, 0);
+    }
+
+    #[test]
+    fn test_methods_tab_backtab() {
+        let mut app = App::new();
+        app.active_tab = 4;
+        app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(app.active_tab, 3);
+    }
+
+    #[test]
+    fn test_methods_tab_number_switch() {
+        let mut app = App::new();
+        app.active_tab = 4;
+        app.handle_key(key(KeyCode::Char('2')));
+        assert_eq!(app.active_tab, 1);
+    }
+
+    #[test]
+    fn test_methods_tab_f5_triggers_run() {
+        let mut app = App::new();
+        app.active_tab = 4;
+        app.form.bids_dir = "/tmp/bids".to_string();
+        app.handle_key(key(KeyCode::F(5)));
+        assert!(app.should_run);
+    }
+
+    #[test]
+    fn test_methods_tab_enter_triggers_run() {
+        let mut app = App::new();
+        app.active_tab = 4;
+        app.form.bids_dir = "/tmp/bids".to_string();
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.should_run);
+    }
+
+    // ========== Filter tree key handler tests ==========
+
+    #[test]
+    fn test_filter_enter_include_editing() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS; // in filter tree area
+        app.filter_state.tree = Some(crate::bids::discovery::BidsTree { subjects: vec![] });
+        app.filter_state.focus = FilterFocus::Include;
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.filter_state.include_editing);
+    }
+
+    #[test]
+    fn test_filter_enter_exclude_editing() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.tree = Some(crate::bids::discovery::BidsTree { subjects: vec![] });
+        app.filter_state.focus = FilterFocus::Exclude;
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.filter_state.exclude_editing);
+    }
+
+    #[test]
+    fn test_filter_type_in_include() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.tree = Some(crate::bids::discovery::BidsTree { subjects: vec![] });
+        app.filter_state.focus = FilterFocus::Include;
+        app.filter_state.include_editing = true;
+        app.filter_state.include_pattern.clear();
+        app.filter_state.include_cursor = 0;
+        app.handle_key(key(KeyCode::Char('s')));
+        app.handle_key(key(KeyCode::Char('u')));
+        app.handle_key(key(KeyCode::Char('b')));
+        assert_eq!(app.filter_state.include_pattern, "sub");
+        assert_eq!(app.filter_state.include_cursor, 3);
+    }
+
+    #[test]
+    fn test_filter_esc_stops_include_editing() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.tree = Some(crate::bids::discovery::BidsTree { subjects: vec![] });
+        app.filter_state.include_editing = true;
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.filter_state.include_editing);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn test_filter_enter_stops_include_editing_and_applies() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.tree = Some(crate::bids::discovery::BidsTree { subjects: vec![] });
+        app.filter_state.include_editing = true;
+        app.filter_state.include_pattern = "sub-1*".to_string();
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.filter_state.include_editing);
+    }
+
+    #[test]
+    fn test_filter_type_in_exclude() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.tree = Some(crate::bids::discovery::BidsTree { subjects: vec![] });
+        app.filter_state.focus = FilterFocus::Exclude;
+        app.filter_state.exclude_editing = true;
+        app.filter_state.exclude_cursor = 0;
+        app.handle_key(key(KeyCode::Char('x')));
+        assert_eq!(app.filter_state.exclude_pattern, "x");
+    }
+
+    #[test]
+    fn test_filter_text_backspace() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.tree = Some(crate::bids::discovery::BidsTree { subjects: vec![] });
+        app.filter_state.include_editing = true;
+        app.filter_state.include_pattern = "abc".to_string();
+        app.filter_state.include_cursor = 3;
+        app.handle_key(key(KeyCode::Backspace));
+        assert_eq!(app.filter_state.include_pattern, "ab");
+        assert_eq!(app.filter_state.include_cursor, 2);
+    }
+
+    #[test]
+    fn test_filter_text_delete() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.tree = Some(crate::bids::discovery::BidsTree { subjects: vec![] });
+        app.filter_state.include_editing = true;
+        app.filter_state.include_pattern = "abc".to_string();
+        app.filter_state.include_cursor = 0;
+        app.handle_key(key(KeyCode::Delete));
+        assert_eq!(app.filter_state.include_pattern, "bc");
+    }
+
+    #[test]
+    fn test_filter_text_home_end() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.tree = Some(crate::bids::discovery::BidsTree { subjects: vec![] });
+        app.filter_state.include_editing = true;
+        app.filter_state.include_pattern = "hello".to_string();
+        app.filter_state.include_cursor = 3;
+        app.handle_key(key(KeyCode::Home));
+        assert_eq!(app.filter_state.include_cursor, 0);
+        app.handle_key(key(KeyCode::End));
+        assert_eq!(app.filter_state.include_cursor, 5);
+    }
+
+    #[test]
+    fn test_filter_text_left_right() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.tree = Some(crate::bids::discovery::BidsTree { subjects: vec![] });
+        app.filter_state.include_editing = true;
+        app.filter_state.include_pattern = "abc".to_string();
+        app.filter_state.include_cursor = 2;
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.filter_state.include_cursor, 1);
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.filter_state.include_cursor, 2);
+    }
+
+    #[test]
+    fn test_filter_num_echoes_editing() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.tree = Some(crate::bids::discovery::BidsTree { subjects: vec![] });
+        app.filter_state.focus = FilterFocus::NumEchoes;
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.filter_state.num_echoes_editing);
+        app.handle_key(key(KeyCode::Char('2')));
+        assert_eq!(app.filter_state.num_echoes, "2");
+        app.handle_key(key(KeyCode::Backspace));
+        assert_eq!(app.filter_state.num_echoes, "");
+        app.handle_key(key(KeyCode::Char('4')));
+        app.handle_key(key(KeyCode::Home));
+        assert_eq!(app.filter_state.num_echoes_cursor, 0);
+        app.handle_key(key(KeyCode::End));
+        assert_eq!(app.filter_state.num_echoes_cursor, 1);
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.filter_state.num_echoes_cursor, 0);
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.filter_state.num_echoes_cursor, 1);
+        // Delete at cursor
+        app.handle_key(key(KeyCode::Home));
+        app.handle_key(key(KeyCode::Delete));
+        assert_eq!(app.filter_state.num_echoes, "");
+        // Enter exits editing
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.filter_state.num_echoes_editing);
+    }
+
+    #[test]
+    fn test_filter_select_all_via_key() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::testutils::create_single_echo_bids(dir.path());
+        let mut app = App::new();
+        app.filter_state.maybe_rescan(dir.path().to_str().unwrap());
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.focus = FilterFocus::TreeNode(0);
+        // Select none
+        app.handle_key(key(KeyCode::Char('n')));
+        assert!(app.filter_state.manual_override);
+        let tree = app.filter_state.tree.as_ref().unwrap();
+        assert_eq!(tree.selected_runs(), 0);
+        // Select all
+        app.handle_key(key(KeyCode::Char('a')));
+        let tree = app.filter_state.tree.as_ref().unwrap();
+        assert_eq!(tree.selected_runs(), tree.total_runs());
+    }
+
+    #[test]
+    fn test_filter_space_toggles_node() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::testutils::create_single_echo_bids(dir.path());
+        let mut app = App::new();
+        app.filter_state.maybe_rescan(dir.path().to_str().unwrap());
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        // Navigate to a run leaf
+        app.filter_state.focus = FilterFocus::Exclude;
+        app.filter_state.focus_next(); // TreeNode(0) subject
+        app.filter_state.focus_next(); // TreeNode(1) run
+        let tree = app.filter_state.tree.as_ref().unwrap();
+        let was_selected = tree.subjects[0].runs[0].selected;
+        app.handle_key(key(KeyCode::Char(' ')));
+        let tree = app.filter_state.tree.as_ref().unwrap();
+        assert_ne!(tree.subjects[0].runs[0].selected, was_selected);
+        assert!(app.filter_state.manual_override);
+    }
+
+    #[test]
+    fn test_filter_left_right_collapse() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::testutils::create_single_echo_bids(dir.path());
+        let mut app = App::new();
+        app.filter_state.maybe_rescan(dir.path().to_str().unwrap());
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.focus = FilterFocus::TreeNode(0); // subject
+        let rows_before = app.filter_state.visible_rows().len();
+        app.handle_key(key(KeyCode::Left));
+        let rows_after = app.filter_state.visible_rows().len();
+        assert!(rows_after < rows_before);
+        // Expand with Right
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.filter_state.visible_rows().len(), rows_before);
+    }
+
+    #[test]
+    fn test_filter_up_at_include_goes_to_io() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::testutils::create_single_echo_bids(dir.path());
+        let mut app = App::new();
+        app.filter_state.maybe_rescan(dir.path().to_str().unwrap());
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.focus = FilterFocus::Include;
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.active_field, App::INPUT_IO_FIELDS - 1);
+    }
+
+    #[test]
+    fn test_filter_tab_switch() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.tree = Some(crate::bids::discovery::BidsTree { subjects: vec![] });
+        app.filter_state.focus = FilterFocus::Exclude;
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.active_tab, 1);
+    }
+
+    #[test]
+    fn test_filter_f5() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.filter_state.tree = Some(crate::bids::discovery::BidsTree { subjects: vec![] });
+        app.filter_state.focus = FilterFocus::Include;
+        app.form.bids_dir = "/tmp/bids".to_string();
+        app.handle_key(key(KeyCode::F(5)));
+        assert!(app.should_run);
+    }
+
+    // ========== NIfTI handler tests (delete, reorder) ==========
+
+    #[test]
+    fn test_nifti_delete_magnitude_file() {
+        let mut app = App::new();
+        app.input_mode = InputMode::NIfTI;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.magnitude_files = vec![
+            std::path::PathBuf::from("/a.nii"),
+            std::path::PathBuf::from("/b.nii"),
+        ];
+        app.nifti_state.focus = NiftiFocus::MagFile(0);
+        app.handle_key(key(KeyCode::Delete));
+        assert_eq!(app.nifti_state.magnitude_files.len(), 1);
+        assert_eq!(app.nifti_state.magnitude_files[0], std::path::PathBuf::from("/b.nii"));
+    }
+
+    #[test]
+    fn test_nifti_delete_last_magnitude_resets_focus() {
+        let mut app = App::new();
+        app.input_mode = InputMode::NIfTI;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.magnitude_files = vec![std::path::PathBuf::from("/a.nii")];
+        app.nifti_state.focus = NiftiFocus::MagFile(0);
+        app.handle_key(key(KeyCode::Char('d')));
+        assert!(app.nifti_state.magnitude_files.is_empty());
+        assert_eq!(app.nifti_state.focus, NiftiFocus::AddMagnitude);
+    }
+
+    #[test]
+    fn test_nifti_delete_phase_file() {
+        let mut app = App::new();
+        app.input_mode = InputMode::NIfTI;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.phase_files = vec![
+            std::path::PathBuf::from("/p1.nii"),
+            std::path::PathBuf::from("/p2.nii"),
+        ];
+        app.nifti_state.focus = NiftiFocus::PhaseFile(1);
+        app.handle_key(key(KeyCode::Delete));
+        assert_eq!(app.nifti_state.phase_files.len(), 1);
+        // Focus should clamp to 0 since we deleted index 1
+        assert_eq!(app.nifti_state.focus, NiftiFocus::PhaseFile(0));
+    }
+
+    #[test]
+    fn test_nifti_delete_last_phase_resets_focus() {
+        let mut app = App::new();
+        app.input_mode = InputMode::NIfTI;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.phase_files = vec![std::path::PathBuf::from("/p.nii")];
+        app.nifti_state.focus = NiftiFocus::PhaseFile(0);
+        app.handle_key(key(KeyCode::Char('d')));
+        assert!(app.nifti_state.phase_files.is_empty());
+        assert_eq!(app.nifti_state.focus, NiftiFocus::AddPhase);
+    }
+
+    #[test]
+    fn test_nifti_reorder_magnitude_down() {
+        let mut app = App::new();
+        app.input_mode = InputMode::NIfTI;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.magnitude_files = vec![
+            std::path::PathBuf::from("/a.nii"),
+            std::path::PathBuf::from("/b.nii"),
+        ];
+        app.nifti_state.focus = NiftiFocus::MagFile(0);
+        app.handle_key(key(KeyCode::Char('J'))); // Shift+J = move down
+        assert_eq!(app.nifti_state.magnitude_files[0], std::path::PathBuf::from("/b.nii"));
+        assert_eq!(app.nifti_state.magnitude_files[1], std::path::PathBuf::from("/a.nii"));
+        assert_eq!(app.nifti_state.focus, NiftiFocus::MagFile(1));
+    }
+
+    #[test]
+    fn test_nifti_reorder_magnitude_up() {
+        let mut app = App::new();
+        app.input_mode = InputMode::NIfTI;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.magnitude_files = vec![
+            std::path::PathBuf::from("/a.nii"),
+            std::path::PathBuf::from("/b.nii"),
+        ];
+        app.nifti_state.focus = NiftiFocus::MagFile(1);
+        app.handle_key(key(KeyCode::Char('K'))); // Shift+K = move up
+        assert_eq!(app.nifti_state.magnitude_files[0], std::path::PathBuf::from("/b.nii"));
+        assert_eq!(app.nifti_state.magnitude_files[1], std::path::PathBuf::from("/a.nii"));
+        assert_eq!(app.nifti_state.focus, NiftiFocus::MagFile(0));
+    }
+
+    #[test]
+    fn test_nifti_reorder_phase_down() {
+        let mut app = App::new();
+        app.input_mode = InputMode::NIfTI;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.phase_files = vec![
+            std::path::PathBuf::from("/p1.nii"),
+            std::path::PathBuf::from("/p2.nii"),
+        ];
+        app.nifti_state.focus = NiftiFocus::PhaseFile(0);
+        app.handle_key(key(KeyCode::Char('J')));
+        assert_eq!(app.nifti_state.phase_files[0], std::path::PathBuf::from("/p2.nii"));
+        assert_eq!(app.nifti_state.focus, NiftiFocus::PhaseFile(1));
+    }
+
+    #[test]
+    fn test_nifti_reorder_phase_up() {
+        let mut app = App::new();
+        app.input_mode = InputMode::NIfTI;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.phase_files = vec![
+            std::path::PathBuf::from("/p1.nii"),
+            std::path::PathBuf::from("/p2.nii"),
+        ];
+        app.nifti_state.focus = NiftiFocus::PhaseFile(1);
+        app.handle_key(key(KeyCode::Char('K')));
+        assert_eq!(app.nifti_state.phase_files[0], std::path::PathBuf::from("/p2.nii"));
+        assert_eq!(app.nifti_state.focus, NiftiFocus::PhaseFile(0));
+    }
+
+    #[test]
+    fn test_nifti_up_at_top_goes_to_io() {
+        let mut app = App::new();
+        app.input_mode = InputMode::NIfTI;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.focus = NiftiFocus::AddMagnitude;
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.active_field, App::INPUT_IO_FIELDS - 1);
+    }
+
+    #[test]
+    fn test_nifti_tab_switch() {
+        let mut app = App::new();
+        app.input_mode = InputMode::NIfTI;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.active_tab, 1);
+    }
+
+    #[test]
+    fn test_nifti_quit() {
+        let mut app = App::new();
+        app.input_mode = InputMode::NIfTI;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.handle_key(key(KeyCode::Char('q')));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_nifti_editing_backspace_home_end_left_right() {
+        let mut app = App::new();
+        app.input_mode = InputMode::NIfTI;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.focus = NiftiFocus::EchoTimes;
+        app.nifti_state.echo_times = "12, 24".to_string();
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.nifti_state.editing);
+        // cursor at end = 6
+        app.handle_key(key(KeyCode::Home));
+        assert_eq!(app.nifti_state.cursor, 0);
+        app.handle_key(key(KeyCode::End));
+        assert_eq!(app.nifti_state.cursor, 6);
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.nifti_state.cursor, 5);
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.nifti_state.cursor, 6);
+        app.handle_key(key(KeyCode::Backspace));
+        assert_eq!(app.nifti_state.echo_times, "12, 2");
+    }
+
+    // ========== DICOM tab handler tests ==========
+
+    #[test]
+    fn test_dicom_tab_navigate_up_to_io() {
+        let mut app = App::new();
+        app.input_mode = InputMode::DicomToBids;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.dicom_state.focus = DicomFocus::Series(0);
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.active_field, App::INPUT_IO_FIELDS - 1);
+    }
+
+    #[test]
+    fn test_dicom_tab_switch() {
+        let mut app = App::new();
+        app.input_mode = InputMode::DicomToBids;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.active_tab, 1);
+    }
+
+    #[test]
+    fn test_dicom_tab_quit() {
+        let mut app = App::new();
+        app.input_mode = InputMode::DicomToBids;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.handle_key(key(KeyCode::Char('q')));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_dicom_focus_next_prev_no_session() {
+        let mut ds = DicomConvertState::default();
+        // No session, so focus_next from Series(0) goes to ConvertButton
+        ds.focus_next();
+        assert_eq!(ds.focus, DicomFocus::ConvertButton);
+        // focus_prev from ConvertButton with no session stays at ConvertButton
+        ds.focus_prev();
+        assert_eq!(ds.focus, DicomFocus::ConvertButton);
+    }
+
+    #[test]
+    fn test_dicom_navigate_down() {
+        let mut app = App::new();
+        app.input_mode = InputMode::DicomToBids;
+        app.active_tab = 0;
+        app.active_field = App::INPUT_IO_FIELDS;
+        // No session, so focus_next just goes to ConvertButton
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.dicom_state.focus, DicomFocus::ConvertButton);
+    }
+
+    // ========== IO select (input mode cycling) ==========
+
+    #[test]
+    fn test_adjust_io_select_cycles_mode() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = 0;
+        assert_eq!(app.input_mode, InputMode::Bids);
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.input_mode, InputMode::NIfTI);
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.input_mode, InputMode::DicomToBids);
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.input_mode, InputMode::Bids); // wraps around
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.input_mode, InputMode::DicomToBids); // wraps other way
+    }
+
+    #[test]
+    fn test_enter_on_io_mode_toggles() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = 0;
+        assert_eq!(app.input_mode, InputMode::Bids);
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.input_mode, InputMode::NIfTI);
+    }
+
+    // ========== try_run validation tests ==========
+
+    #[test]
+    fn test_try_run_dicom_not_converted() {
+        let mut app = App::new();
+        app.input_mode = InputMode::DicomToBids;
+        app.form.bids_dir = "/tmp/bids".to_string();
+        app.try_run();
+        assert!(!app.should_run);
+        assert!(app.error_message.as_deref().unwrap().contains("Convert DICOM"));
+    }
+
+    #[test]
+    fn test_try_run_nifti_not_converted() {
+        let mut app = App::new();
+        app.input_mode = InputMode::NIfTI;
+        app.form.bids_dir = "/tmp/bids".to_string();
+        app.try_run();
+        assert!(!app.should_run);
+        assert!(app.error_message.as_deref().unwrap().contains("Convert NIfTI"));
+    }
+
+    #[test]
+    fn test_try_run_empty_bids_dir() {
+        let mut app = App::new();
+        app.try_run();
+        assert!(!app.should_run);
+        assert!(app.error_message.as_deref().unwrap().contains("BIDS Directory"));
+        assert_eq!(app.active_tab, 0);
+        assert_eq!(app.active_field, 0);
+    }
+
+    #[test]
+    fn test_try_run_slurm_no_account() {
+        let mut app = App::new();
+        app.form.bids_dir = "/tmp/bids".to_string();
+        app.form.execution_mode = 1;
+        app.try_run();
+        assert!(!app.should_run);
+        assert!(app.error_message.as_deref().unwrap().contains("SLURM Account"));
+        assert_eq!(app.active_tab, 3);
+        assert_eq!(app.active_field, 4);
+    }
+
+    #[test]
+    fn test_try_run_slurm_with_account() {
+        let mut app = App::new();
+        app.form.bids_dir = "/tmp/bids".to_string();
+        app.form.execution_mode = 1;
+        app.form.slurm_account = "myacct".to_string();
+        app.try_run();
+        assert!(app.should_run);
+    }
+
+    // ========== Reset tests on various tabs ==========
+
+    #[test]
+    fn test_reset_input_mode_field() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = 0;
+        app.input_mode = InputMode::DicomToBids;
+        app.handle_key(key(KeyCode::Char('r')));
+        assert_eq!(app.input_mode, InputMode::Bids);
+    }
+
+    #[test]
+    fn test_reset_bids_dir_field() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = 1;
+        app.form.bids_dir = "/something".to_string();
+        app.handle_key(key(KeyCode::Char('r')));
+        assert!(app.form.bids_dir.is_empty());
+    }
+
+    #[test]
+    fn test_reset_output_dir_field() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = 2;
+        app.form.output_dir = "/out".to_string();
+        app.handle_key(key(KeyCode::Char('r')));
+        assert!(app.form.output_dir.is_empty());
+    }
+
+    #[test]
+    fn test_reset_config_file_field() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = 3;
+        app.form.config_file = "cfg.toml".to_string();
+        app.handle_key(key(KeyCode::Char('r')));
+        assert!(app.form.config_file.is_empty());
+    }
+
+    #[test]
+    fn test_reset_input_tab() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.input_mode = InputMode::DicomToBids;
+        app.form.bids_dir = "/x".to_string();
+        app.form.output_dir = "/y".to_string();
+        app.handle_key(key(KeyCode::Char('R')));
+        assert_eq!(app.input_mode, InputMode::Bids);
+        assert!(app.form.bids_dir.is_empty());
+        assert!(app.form.output_dir.is_empty());
+    }
+
+    #[test]
+    fn test_reset_nifti_input_dir() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = 1;
+        app.input_mode = InputMode::NIfTI;
+        app.nifti_state.input_dir = "/data".to_string();
+        app.nifti_state.magnitude_files.push(std::path::PathBuf::from("/a.nii"));
+        app.handle_key(key(KeyCode::Char('r')));
+        assert!(app.nifti_state.input_dir.is_empty());
+        assert!(app.nifti_state.magnitude_files.is_empty());
+    }
+
+    #[test]
+    fn test_reset_nifti_output_dir() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = 2;
+        app.input_mode = InputMode::NIfTI;
+        app.nifti_state.output_dir = "/out".to_string();
+        app.handle_key(key(KeyCode::Char('r')));
+        assert!(app.nifti_state.output_dir.is_empty());
+    }
+
+    #[test]
+    fn test_reset_dicom_dir() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = 1;
+        app.input_mode = InputMode::DicomToBids;
+        app.dicom_state.dicom_dir = "/dcm".to_string();
+        app.handle_key(key(KeyCode::Char('r')));
+        assert!(app.dicom_state.dicom_dir.is_empty());
+        assert!(app.dicom_state.scanned_dir.is_none());
+    }
+
+    #[test]
+    fn test_reset_dicom_output_dir() {
+        let mut app = App::new();
+        app.active_tab = 0;
+        app.active_field = 2;
+        app.input_mode = InputMode::DicomToBids;
+        app.dicom_state.output_dir = "/out".to_string();
+        app.handle_key(key(KeyCode::Char('r')));
+        assert!(app.dicom_state.output_dir.is_empty());
+    }
+
+    #[test]
+    fn test_reset_supplementary_fields() {
+        let mut app = App::new();
+        app.active_tab = 2;
+        app.active_field = 2;
+        app.form.swi_strength = "999".to_string();
+        app.handle_key(key(KeyCode::Char('r')));
+        let defaults = RunForm::default();
+        assert_eq!(app.form.swi_strength, defaults.swi_strength);
+    }
+
+    #[test]
+    fn test_reset_execution_fields() {
+        let mut app = App::new();
+        app.active_tab = 3;
+        app.active_field = 7;
+        app.form.slurm_mem = "999".to_string();
+        app.handle_key(key(KeyCode::Char('r')));
+        assert_eq!(app.form.slurm_mem, "32");
+    }
+
+    // ========== Pipeline mask operations ==========
+
+    #[test]
+    fn test_pipeline_mask_preset_switch() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        // Find mask_preset focus
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut mp_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::AlgoSelect { field: "mask_preset", .. } = &rows[ri] {
+                mp_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = mp_focus.expect("mask_preset not found");
+        app.pipeline_state.focus = fi;
+        assert_eq!(app.pipeline_state.mask_preset, 0); // robust threshold
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.pipeline_state.mask_preset, 1); // BET
+    }
+
+    #[test]
+    fn test_pipeline_mask_add_section() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        let initial_sections = app.pipeline_state.mask_sections.len();
+        // Find MaskOpAddSection focus
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut add_sec_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if matches!(&rows[ri], PipelineRow::MaskOpAddSection) {
+                add_sec_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = add_sec_focus.expect("MaskOpAddSection not found");
+        app.pipeline_state.focus = fi;
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.pipeline_state.mask_sections.len(), initial_sections + 1);
+    }
+
+    #[test]
+    fn test_pipeline_mask_add_step() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        let initial_refs = app.pipeline_state.mask_sections[0].refinements.len();
+        // Find MaskOpAddStep for section 0
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut add_step_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::MaskOpAddStep { section: 0 } = &rows[ri] {
+                add_step_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = add_step_focus.expect("MaskOpAddStep not found");
+        app.pipeline_state.focus = fi;
+        // Enter to start adding
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.pipeline_state.mask_ops_adding);
+        // Enter again to confirm the add
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.pipeline_state.mask_ops_adding);
+        assert_eq!(app.pipeline_state.mask_sections[0].refinements.len(), initial_refs + 1);
+    }
+
+    #[test]
+    fn test_pipeline_mask_add_step_cycle_ops() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut add_step_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::MaskOpAddStep { section: 0 } = &rows[ri] {
+                add_step_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = add_step_focus.expect("MaskOpAddStep not found");
+        app.pipeline_state.focus = fi;
+        app.handle_key(key(KeyCode::Enter)); // start adding
+        assert!(app.pipeline_state.mask_ops_adding);
+        assert_eq!(app.pipeline_state.mask_ops_add_idx, 0);
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.pipeline_state.mask_ops_add_idx, 1);
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.pipeline_state.mask_ops_add_idx, 0);
+        // Escape cancels
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.pipeline_state.mask_ops_adding);
+    }
+
+    #[test]
+    fn test_pipeline_mask_delete_refinement() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        let initial_refs = app.pipeline_state.mask_sections[0].refinements.len();
+        assert!(initial_refs > 0);
+        // Find first MaskOpEntry focus
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut entry_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::MaskOpEntry { section: 0, .. } = &rows[ri] {
+                entry_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = entry_focus.expect("MaskOpEntry not found");
+        app.pipeline_state.focus = fi;
+        app.handle_key(key(KeyCode::Char('d')));
+        assert_eq!(app.pipeline_state.mask_sections[0].refinements.len(), initial_refs - 1);
+    }
+
+    #[test]
+    fn test_pipeline_mask_adjust_op_left_right() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        // Find MaskOpEntry focus and adjust with Left/Right
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut entry_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::MaskOpEntry { section: 0, .. } = &rows[ri] {
+                entry_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = entry_focus.expect("MaskOpEntry not found");
+        app.pipeline_state.focus = fi;
+        // Just verify no crash from left/right
+        app.handle_key(key(KeyCode::Right));
+        app.handle_key(key(KeyCode::Left));
+    }
+
+    #[test]
+    fn test_pipeline_mask_generator_adjust() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        // Find MaskOpGenerator focus
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut gen_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::MaskOpGenerator { section: 0 } = &rows[ri] {
+                gen_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = gen_focus.expect("MaskOpGenerator not found");
+        app.pipeline_state.focus = fi;
+        // Switch generator threshold <-> bet
+        app.handle_key(key(KeyCode::Right));
+        assert!(matches!(
+            app.pipeline_state.mask_sections[0].generator,
+            crate::pipeline::config::MaskOp::Bet { .. }
+        ));
+        app.handle_key(key(KeyCode::Left));
+        assert!(matches!(
+            app.pipeline_state.mask_sections[0].generator,
+            crate::pipeline::config::MaskOp::Threshold { .. }
+        ));
+    }
+
+    #[test]
+    fn test_pipeline_mask_generator_param_adjust() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        // Find MaskOpGeneratorParam focus
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut gp_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::MaskOpGeneratorParam { section: 0 } = &rows[ri] {
+                gp_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = gp_focus.expect("MaskOpGeneratorParam not found");
+        app.pipeline_state.focus = fi;
+        // Adjust threshold method
+        app.handle_key(key(KeyCode::Right));
+        // Verify the method changed (Otsu -> Fixed)
+        if let crate::pipeline::config::MaskOp::Threshold { method, .. } = &app.pipeline_state.mask_sections[0].generator {
+            assert_eq!(*method, crate::pipeline::config::MaskThresholdMethod::Fixed);
+        }
+    }
+
+    #[test]
+    fn test_pipeline_mask_input_adjust() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        // Find MaskOpInput focus
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut inp_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::MaskOpInput { section: 0 } = &rows[ri] {
+                inp_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = inp_focus.expect("MaskOpInput not found");
+        app.pipeline_state.focus = fi;
+        let before = app.pipeline_state.mask_sections[0].input;
+        app.handle_key(key(KeyCode::Right));
+        // Should have cycled to a different input
+        assert_ne!(app.pipeline_state.mask_sections[0].input, before);
+    }
+
+    // ========== word_boundary_left tests ==========
+
+    #[test]
+    fn test_word_boundary_left() {
+        assert_eq!(word_boundary_left("hello world", 11), 6);
+        assert_eq!(word_boundary_left("hello world", 5), 0);
+        assert_eq!(word_boundary_left("a/b/c", 5), 4);
+        assert_eq!(word_boundary_left("", 0), 0);
+        assert_eq!(word_boundary_left("abc", 0), 0);
+    }
+
+    // ========== Error message clears on non-F5 key ==========
+
+    #[test]
+    fn test_error_clears_on_keypress() {
+        let mut app = App::new();
+        app.error_message = Some("test error".to_string());
+        app.handle_key(key(KeyCode::Down));
+        assert!(app.error_message.is_none());
+    }
+
+    #[test]
+    fn test_error_does_not_clear_on_f5() {
+        let mut app = App::new();
+        // F5 with no bids_dir sets an error
+        app.handle_key(key(KeyCode::F(5)));
+        assert!(app.error_message.is_some());
+    }
+
+    // ========== Pipeline reset_pipeline_field for Param and Toggle ==========
+
+    #[test]
+    fn test_reset_pipeline_param_field() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        // Find obliquity_threshold param
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut fi = 0;
+        for (f, &ri) in focusable.iter().enumerate() {
+            if let PipelineRow::Param { field: "obliquity_threshold", .. } = &rows[ri] {
+                fi = f;
+                break;
+            }
+        }
+        app.pipeline_state.focus = fi;
+        // Modify the value
+        if let Some(s) = app.pipeline_state.get_param_mut("obliquity_threshold") {
+            *s = "999".to_string();
+        }
+        // Reset
+        app.handle_key(key(KeyCode::Char('r')));
+        let defaults = PipelineFormState::default();
+        assert_eq!(
+            app.pipeline_state.get_param("obliquity_threshold"),
+            defaults.get_param("obliquity_threshold")
+        );
+    }
+
+    #[test]
+    fn test_reset_pipeline_toggle_field() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        // Focus 0 is do_qsm toggle
+        app.pipeline_state.focus = 0;
+        app.pipeline_state.do_qsm = false;
+        app.handle_key(key(KeyCode::Char('r')));
+        assert!(app.pipeline_state.do_qsm); // default is true
+    }
+
+    // ========== Supplementary: edit SWI fields ==========
+
+    #[test]
+    fn test_supplementary_edit_swi_hp_sigmas() {
+        let mut app = App::new();
+        app.active_tab = 2;
+        app.form.do_swi = true;
+        // Edit SWI HP Sigma X (field 3)
+        app.active_field = 3;
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.editing);
+        app.handle_key(key(KeyCode::End));
+        app.handle_key(key(KeyCode::Char('0')));
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.editing);
+
+        // Edit SWI HP Sigma Y (field 4)
+        app.active_field = 4;
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Char('1')));
+        app.handle_key(key(KeyCode::Esc));
+
+        // Edit SWI HP Sigma Z (field 5)
+        app.active_field = 5;
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Char('2')));
+        app.handle_key(key(KeyCode::Esc));
+
+        // Edit SWI MIP Window (field 6)
+        app.active_field = 6;
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Char('3')));
+        app.handle_key(key(KeyCode::Esc));
+    }
+
+    // ========== Pipeline: switch algorithms and verify row changes ==========
+
+    #[test]
+    fn test_pipeline_bf_algorithm_params() {
+        let mut ps = PipelineFormState::default();
+        // Switch through BG removal algorithms and verify rows change
+        for algo in 0..5 {
+            ps.bf_algorithm = algo;
+            let rows = ps.visible_rows();
+            assert!(!rows.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_pipeline_qsm_algorithm_all_params() {
+        let mut ps = PipelineFormState::default();
+        // Switch through all QSM algorithms
+        for algo in 0..10 {
+            ps.qsm_algorithm = algo;
+            let rows = ps.visible_rows();
+            assert!(!rows.is_empty());
+            let focusable = ps.focusable_rows();
+            assert!(!focusable.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_pipeline_medi_smv_hides_bg_removal() {
+        let ps = PipelineFormState {
+            qsm_algorithm: 7,
+            medi_smv: true,
+            ..Default::default()
+        };
+        let rows = ps.visible_rows();
+        // BG Removal should not be in rows
+        let has_bg = rows.iter().any(|r| matches!(r, PipelineRow::AlgoSelect { field: "bf_algorithm", .. }));
+        assert!(!has_bg, "MEDI+SMV should hide BG removal");
+    }
+
+    // ========== NIfTI: focusable_items with files ==========
+
+    #[test]
+    fn test_nifti_focusable_items_with_files() {
+        let ns = NiftiState {
+            magnitude_files: vec![
+                std::path::PathBuf::from("/a.nii"),
+                std::path::PathBuf::from("/b.nii"),
+            ],
+            phase_files: vec![
+                std::path::PathBuf::from("/p.nii"),
+            ],
+            ..Default::default()
+        };
+        let items = ns.focusable_items();
+        // AddMagnitude, MagFile(0), MagFile(1), AddPhase, PhaseFile(0),
+        // EchoTimes, FieldStrength, B0Direction, ConvertButton = 9
+        assert_eq!(items.len(), 9);
+    }
+
+    // ========== Pipeline threshold value editing ==========
+
+    #[test]
+    fn test_pipeline_threshold_value_editing() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        // Set generator to Fixed threshold to make MaskOpThresholdValue visible
+        app.pipeline_state.mask_sections[0].generator = crate::pipeline::config::MaskOp::Threshold {
+            method: crate::pipeline::config::MaskThresholdMethod::Fixed,
+            value: Some(0.5),
+        };
+        app.pipeline_state.mark_mask_custom();
+
+        // Find MaskOpThresholdValue focus
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut tv_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if matches!(&rows[ri], PipelineRow::MaskOpThresholdValue { .. }) {
+                tv_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = tv_focus.expect("MaskOpThresholdValue not found");
+        app.pipeline_state.focus = fi;
+        // Enter starts editing
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.pipeline_state.mask_threshold_editing);
+        // Type a new value -- clear via backspace from end
+        let buf_len = app.pipeline_state.mask_threshold_value_buf.len();
+        for _ in 0..buf_len {
+            app.handle_key(key(KeyCode::Backspace));
+        }
+        app.handle_key(key(KeyCode::Char('0')));
+        app.handle_key(key(KeyCode::Char('.')));
+        app.handle_key(key(KeyCode::Char('7')));
+        // Cursor movement
+        app.handle_key(key(KeyCode::Left));
+        app.handle_key(key(KeyCode::Right));
+        // Enter saves
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.pipeline_state.mask_threshold_editing);
+        if let crate::pipeline::config::MaskOp::Threshold { value, .. } = &app.pipeline_state.mask_sections[0].generator {
+            assert!((value.unwrap() - 0.7).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn test_pipeline_threshold_value_esc_cancels() {
+        let mut app = App::new();
+        app.active_tab = 1;
+        app.pipeline_state.mask_sections[0].generator = crate::pipeline::config::MaskOp::Threshold {
+            method: crate::pipeline::config::MaskThresholdMethod::Fixed,
+            value: Some(0.5),
+        };
+        app.pipeline_state.mark_mask_custom();
+        let rows = app.pipeline_state.visible_rows();
+        let focusable = app.pipeline_state.focusable_rows();
+        let mut tv_focus = None;
+        for (fi, &ri) in focusable.iter().enumerate() {
+            if matches!(&rows[ri], PipelineRow::MaskOpThresholdValue { .. }) {
+                tv_focus = Some(fi);
+                break;
+            }
+        }
+        let fi = tv_focus.expect("MaskOpThresholdValue not found");
+        app.pipeline_state.focus = fi;
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.pipeline_state.mask_threshold_editing);
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.pipeline_state.mask_threshold_editing);
+        // Value should be unchanged
+        if let crate::pipeline::config::MaskOp::Threshold { value, .. } = &app.pipeline_state.mask_sections[0].generator {
+            assert!((value.unwrap() - 0.5).abs() < 0.001);
+        }
+    }
+
+    // ========== get_include_exclude tests ==========
+
+    #[test]
+    fn test_filter_get_include_exclude_pattern_mode() {
+        let fs = FilterTreeState {
+            include_pattern: "sub-1*".to_string(),
+            exclude_pattern: "sub-2*".to_string(),
+            ..Default::default()
+        };
+        let (inc, exc) = fs.get_include_exclude();
+        assert_eq!(inc, Some(vec!["sub-1*".to_string()]));
+        assert_eq!(exc, Some(vec!["sub-2*".to_string()]));
+    }
+
+    #[test]
+    fn test_filter_get_include_exclude_star_only() {
+        let fs = FilterTreeState::default(); // include_pattern = "*"
+        let (inc, exc) = fs.get_include_exclude();
+        assert!(inc.is_none());
+        assert!(exc.is_none());
+    }
 }

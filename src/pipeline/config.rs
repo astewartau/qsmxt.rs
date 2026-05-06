@@ -1369,6 +1369,1024 @@ mod tests {
         assert_eq!(parsed, op);
     }
 
+    // ─── MaskOp Display for all variants ───
 
+    #[test]
+    fn test_mask_op_display_threshold_otsu() {
+        let op = MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None };
+        assert_eq!(format!("{}", op), "threshold:otsu");
+    }
+
+    #[test]
+    fn test_mask_op_display_threshold_fixed_with_value() {
+        let op = MaskOp::Threshold { method: MaskThresholdMethod::Fixed, value: Some(0.3) };
+        assert_eq!(format!("{}", op), "threshold:fixed:0.3000");
+    }
+
+    #[test]
+    fn test_mask_op_display_threshold_fixed_no_value() {
+        let op = MaskOp::Threshold { method: MaskThresholdMethod::Fixed, value: None };
+        assert_eq!(format!("{}", op), "threshold:fixed:0.5000");
+    }
+
+    #[test]
+    fn test_mask_op_display_threshold_percentile_with_value() {
+        let op = MaskOp::Threshold { method: MaskThresholdMethod::Percentile, value: Some(90.0) };
+        assert_eq!(format!("{}", op), "threshold:percentile:90.0");
+    }
+
+    #[test]
+    fn test_mask_op_display_threshold_percentile_no_value() {
+        let op = MaskOp::Threshold { method: MaskThresholdMethod::Percentile, value: None };
+        assert_eq!(format!("{}", op), "threshold:percentile:75.0");
+    }
+
+    #[test]
+    fn test_mask_op_display_bet() {
+        let op = MaskOp::Bet { fractional_intensity: 0.45 };
+        assert_eq!(format!("{}", op), "bet:0.45");
+    }
+
+    #[test]
+    fn test_mask_op_display_erode() {
+        let op = MaskOp::Erode { iterations: 2 };
+        assert_eq!(format!("{}", op), "erode:2");
+    }
+
+    #[test]
+    fn test_mask_op_display_dilate() {
+        let op = MaskOp::Dilate { iterations: 5 };
+        assert_eq!(format!("{}", op), "dilate:5");
+    }
+
+    #[test]
+    fn test_mask_op_display_close() {
+        let op = MaskOp::Close { radius: 3 };
+        assert_eq!(format!("{}", op), "close:3");
+    }
+
+    #[test]
+    fn test_mask_op_display_fill_holes() {
+        let op = MaskOp::FillHoles { max_size: 500 };
+        assert_eq!(format!("{}", op), "fill-holes:500");
+    }
+
+    #[test]
+    fn test_mask_op_display_gaussian_smooth() {
+        let op = MaskOp::GaussianSmooth { sigma_mm: 2.5 };
+        assert_eq!(format!("{}", op), "gaussian:2.5");
+    }
+
+    // ─── MaskSection Display, has_generator, all_ops ───
+
+    #[test]
+    fn test_mask_section_display() {
+        let section = MaskSection {
+            input: MaskingInput::PhaseQuality,
+            generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+            refinements: vec![
+                MaskOp::Dilate { iterations: 1 },
+                MaskOp::Erode { iterations: 2 },
+            ],
+        };
+        let s = format!("{}", section);
+        assert_eq!(s, "phase-quality,threshold:otsu,dilate:1,erode:2");
+    }
+
+    #[test]
+    fn test_mask_section_display_no_refinements() {
+        let section = MaskSection {
+            input: MaskingInput::Magnitude,
+            generator: MaskOp::Bet { fractional_intensity: 0.5 },
+            refinements: vec![],
+        };
+        let s = format!("{}", section);
+        assert_eq!(s, "magnitude,bet:0.50");
+    }
+
+    #[test]
+    fn test_mask_section_has_generator_threshold() {
+        let section = MaskSection {
+            input: MaskingInput::Magnitude,
+            generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+            refinements: vec![],
+        };
+        assert!(section.has_generator());
+    }
+
+    #[test]
+    fn test_mask_section_has_generator_bet() {
+        let section = MaskSection {
+            input: MaskingInput::Magnitude,
+            generator: MaskOp::Bet { fractional_intensity: 0.5 },
+            refinements: vec![],
+        };
+        assert!(section.has_generator());
+    }
+
+    #[test]
+    fn test_mask_section_all_ops() {
+        let section = MaskSection {
+            input: MaskingInput::Magnitude,
+            generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+            refinements: vec![
+                MaskOp::Erode { iterations: 1 },
+                MaskOp::Dilate { iterations: 2 },
+            ],
+        };
+        let ops = section.all_ops();
+        assert_eq!(ops.len(), 3);
+        assert_eq!(ops[0], MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None });
+        assert_eq!(ops[1], MaskOp::Erode { iterations: 1 });
+        assert_eq!(ops[2], MaskOp::Dilate { iterations: 2 });
+    }
+
+    // ─── MaskingInput Display ───
+
+    #[test]
+    fn test_masking_input_display_all_variants() {
+        assert_eq!(format!("{}", MaskingInput::MagnitudeFirst), "magnitude-first");
+        assert_eq!(format!("{}", MaskingInput::Magnitude), "magnitude");
+        assert_eq!(format!("{}", MaskingInput::MagnitudeLast), "magnitude-last");
+        assert_eq!(format!("{}", MaskingInput::PhaseQuality), "phase-quality");
+    }
+
+    // ─── parse_masking_input ───
+
+    #[test]
+    fn test_parse_masking_input_all_variants() {
+        assert_eq!(parse_masking_input("magnitude"), Some(MaskingInput::Magnitude));
+        assert_eq!(parse_masking_input("magnitude-first"), Some(MaskingInput::MagnitudeFirst));
+        assert_eq!(parse_masking_input("magnitude-last"), Some(MaskingInput::MagnitudeLast));
+        assert_eq!(parse_masking_input("phase-quality"), Some(MaskingInput::PhaseQuality));
+    }
+
+    #[test]
+    fn test_parse_masking_input_invalid() {
+        assert_eq!(parse_masking_input("invalid"), None);
+    }
+
+    #[test]
+    fn test_parse_masking_input_trims_whitespace() {
+        assert_eq!(parse_masking_input("  magnitude  "), Some(MaskingInput::Magnitude));
+    }
+
+    // ─── QsmAlgorithm Display ───
+
+    #[test]
+    fn test_qsm_algorithm_display_all_variants() {
+        assert_eq!(format!("{}", QsmAlgorithm::Rts), "rts");
+        assert_eq!(format!("{}", QsmAlgorithm::Tv), "tv");
+        assert_eq!(format!("{}", QsmAlgorithm::Tkd), "tkd");
+        assert_eq!(format!("{}", QsmAlgorithm::Tsvd), "tsvd");
+        assert_eq!(format!("{}", QsmAlgorithm::Tgv), "tgv");
+        assert_eq!(format!("{}", QsmAlgorithm::Tikhonov), "tikhonov");
+        assert_eq!(format!("{}", QsmAlgorithm::Nltv), "nltv");
+        assert_eq!(format!("{}", QsmAlgorithm::Medi), "medi");
+        assert_eq!(format!("{}", QsmAlgorithm::Ilsqr), "ilsqr");
+        assert_eq!(format!("{}", QsmAlgorithm::Qsmart), "qsmart");
+    }
+
+    // ─── UnwrappingAlgorithm Display ───
+
+    #[test]
+    fn test_unwrapping_algorithm_display_all_variants() {
+        assert_eq!(format!("{}", UnwrappingAlgorithm::Romeo), "romeo");
+        assert_eq!(format!("{}", UnwrappingAlgorithm::Laplacian), "laplacian");
+    }
+
+    // ─── BfAlgorithm Display ───
+
+    #[test]
+    fn test_bf_algorithm_display_all_variants() {
+        assert_eq!(format!("{}", BfAlgorithm::Vsharp), "vsharp");
+        assert_eq!(format!("{}", BfAlgorithm::Pdf), "pdf");
+        assert_eq!(format!("{}", BfAlgorithm::Lbv), "lbv");
+        assert_eq!(format!("{}", BfAlgorithm::Ismv), "ismv");
+        assert_eq!(format!("{}", BfAlgorithm::Sharp), "sharp");
+    }
+
+    // ─── QsmReference Display ───
+
+    #[test]
+    fn test_qsm_reference_display_all_variants() {
+        assert_eq!(format!("{}", QsmReference::Mean), "mean");
+        assert_eq!(format!("{}", QsmReference::None), "none");
+    }
+
+    // ─── apply_run_overrides: algorithm overrides ───
+
+    #[test]
+    fn test_apply_run_overrides_qsm_algorithm_all_variants() {
+        let variants = [
+            (cli::QsmAlgorithmArg::Rts, QsmAlgorithm::Rts),
+            (cli::QsmAlgorithmArg::Tv, QsmAlgorithm::Tv),
+            (cli::QsmAlgorithmArg::Tkd, QsmAlgorithm::Tkd),
+            (cli::QsmAlgorithmArg::Tsvd, QsmAlgorithm::Tsvd),
+            (cli::QsmAlgorithmArg::Tgv, QsmAlgorithm::Tgv),
+            (cli::QsmAlgorithmArg::Tikhonov, QsmAlgorithm::Tikhonov),
+            (cli::QsmAlgorithmArg::Nltv, QsmAlgorithm::Nltv),
+            (cli::QsmAlgorithmArg::Medi, QsmAlgorithm::Medi),
+            (cli::QsmAlgorithmArg::Ilsqr, QsmAlgorithm::Ilsqr),
+            (cli::QsmAlgorithmArg::Qsmart, QsmAlgorithm::Qsmart),
+        ];
+        for (arg, expected) in variants {
+            let mut config = PipelineConfig::default();
+            let mut args = default_run_args();
+            args.qsm_algorithm = Some(arg);
+            config.apply_run_overrides(&args);
+            assert_eq!(config.qsm_algorithm, expected);
+        }
+    }
+
+    #[test]
+    fn test_apply_run_overrides_unwrapping_algorithm() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.unwrapping_algorithm = Some(cli::UnwrapAlgorithmArg::Laplacian);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.unwrapping_algorithm, Some(UnwrappingAlgorithm::Laplacian));
+
+        args.unwrapping_algorithm = Some(cli::UnwrapAlgorithmArg::Romeo);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.unwrapping_algorithm, Some(UnwrappingAlgorithm::Romeo));
+    }
+
+    #[test]
+    fn test_apply_run_overrides_bf_algorithm_all_variants() {
+        let variants = [
+            (cli::BfAlgorithmArg::Vsharp, BfAlgorithm::Vsharp),
+            (cli::BfAlgorithmArg::Pdf, BfAlgorithm::Pdf),
+            (cli::BfAlgorithmArg::Lbv, BfAlgorithm::Lbv),
+            (cli::BfAlgorithmArg::Ismv, BfAlgorithm::Ismv),
+            (cli::BfAlgorithmArg::Sharp, BfAlgorithm::Sharp),
+        ];
+        for (arg, expected) in variants {
+            let mut config = PipelineConfig::default();
+            let mut args = default_run_args();
+            args.bf_algorithm = Some(arg);
+            config.apply_run_overrides(&args);
+            assert_eq!(config.bf_algorithm, Some(expected));
+        }
+    }
+
+    #[test]
+    fn test_apply_run_overrides_combine_phase() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.combine_phase = Some(false);
+        config.apply_run_overrides(&args);
+        assert!(!config.combine_phase);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_qsm_reference() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.qsm_reference = Some(cli::QsmReferenceArg::None);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.qsm_reference, QsmReference::None);
+
+        args.qsm_reference = Some(cli::QsmReferenceArg::Mean);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.qsm_reference, QsmReference::Mean);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_no_qsm() {
+        let mut config = PipelineConfig::default();
+        assert!(config.do_qsm);
+        let mut args = default_run_args();
+        args.no_qsm = true;
+        config.apply_run_overrides(&args);
+        assert!(!config.do_qsm);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_no_inhomogeneity_correction() {
+        let mut config = PipelineConfig {
+            inhomogeneity_correction: true,
+            ..Default::default()
+        };
+        let mut args = default_run_args();
+        args.no_inhomogeneity_correction = true;
+        config.apply_run_overrides(&args);
+        assert!(!config.inhomogeneity_correction);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_inhomogeneity_correction_enable() {
+        let mut config = PipelineConfig {
+            inhomogeneity_correction: false,
+            ..Default::default()
+        };
+        let mut args = default_run_args();
+        args.inhomogeneity_correction = true;
+        config.apply_run_overrides(&args);
+        assert!(config.inhomogeneity_correction);
+    }
+
+    // ─── apply_run_overrides: mask preset ───
+
+    #[test]
+    fn test_apply_run_overrides_mask_preset_bet() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.mask_preset = Some(cli::MaskPresetArg::Bet);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.mask_sections.len(), 1);
+        assert_eq!(config.mask_sections[0].input, MaskingInput::Magnitude);
+        assert!(matches!(config.mask_sections[0].generator, MaskOp::Bet { .. }));
+    }
+
+    #[test]
+    fn test_apply_run_overrides_mask_preset_robust_threshold() {
+        let mut config = PipelineConfig {
+            mask_sections: vec![],
+            ..Default::default()
+        };
+        let mut args = default_run_args();
+        args.mask_preset = Some(cli::MaskPresetArg::RobustThreshold);
+        config.apply_run_overrides(&args);
+        assert!(!config.mask_sections.is_empty());
+        assert_eq!(config.mask_sections[0].input, MaskingInput::PhaseQuality);
+    }
+
+    // ─── apply_run_overrides: mask_sections_cli ───
+
+    #[test]
+    fn test_apply_run_overrides_mask_sections_cli() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.mask_sections_cli = Some(vec![
+            "magnitude,bet:0.4,erode:2".to_string(),
+        ]);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.mask_sections.len(), 1);
+        assert_eq!(config.mask_sections[0].input, MaskingInput::Magnitude);
+        assert_eq!(config.mask_sections[0].generator, MaskOp::Bet { fractional_intensity: 0.4 });
+        assert_eq!(config.mask_sections[0].refinements.len(), 1);
+        assert_eq!(config.mask_sections[0].refinements[0], MaskOp::Erode { iterations: 2 });
+    }
+
+    #[test]
+    fn test_apply_run_overrides_mask_sections_cli_no_generator_defaults_to_otsu() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.mask_sections_cli = Some(vec![
+            "magnitude,erode:2,dilate:1".to_string(),
+        ]);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.mask_sections.len(), 1);
+        assert_eq!(
+            config.mask_sections[0].generator,
+            MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None }
+        );
+        assert_eq!(config.mask_sections[0].refinements.len(), 2);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_mask_sections_cli_multiple_sections() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.mask_sections_cli = Some(vec![
+            "magnitude,threshold:otsu,erode:1".to_string(),
+            "phase-quality,bet:0.5".to_string(),
+        ]);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.mask_sections.len(), 2);
+        assert_eq!(config.mask_sections[0].input, MaskingInput::Magnitude);
+        assert_eq!(config.mask_sections[1].input, MaskingInput::PhaseQuality);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_mask_sections_cli_invalid_input_skipped() {
+        let mut config = PipelineConfig::default();
+        let original_sections = config.mask_sections.clone();
+        let mut args = default_run_args();
+        args.mask_sections_cli = Some(vec![
+            "invalid-input,threshold:otsu".to_string(),
+        ]);
+        config.apply_run_overrides(&args);
+        // Invalid input means no valid sections parsed, so original is kept
+        assert_eq!(config.mask_sections, original_sections);
+    }
+
+    // ─── apply_run_overrides: romeo params ───
+
+    #[test]
+    fn test_apply_run_overrides_romeo_no_flags() {
+        let mut config = PipelineConfig::default();
+        assert!(config.romeo_phase_gradient_coherence);
+        assert!(config.romeo_mag_coherence);
+        assert!(config.romeo_mag_weight);
+        let mut args = default_run_args();
+        args.romeo_params.no_romeo_phase_gradient_coherence = true;
+        args.romeo_params.no_romeo_mag_coherence = true;
+        args.romeo_params.no_romeo_mag_weight = true;
+        config.apply_run_overrides(&args);
+        assert!(!config.romeo_phase_gradient_coherence);
+        assert!(!config.romeo_mag_coherence);
+        assert!(!config.romeo_mag_weight);
+    }
+
+    // ─── apply_run_overrides: mcpc3ds_sigma ───
+
+    #[test]
+    fn test_apply_run_overrides_mcpc3ds_sigma() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.mcpc3ds_sigma = Some(vec![1.0, 2.0, 3.0]);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.mcpc3ds_sigma, [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_mcpc3ds_sigma_wrong_length_ignored() {
+        let mut config = PipelineConfig::default();
+        let original = config.mcpc3ds_sigma;
+        let mut args = default_run_args();
+        args.mcpc3ds_sigma = Some(vec![1.0, 2.0]); // only 2 elements
+        config.apply_run_overrides(&args);
+        assert_eq!(config.mcpc3ds_sigma, original);
+    }
+
+    // ─── apply_run_overrides: tgv_alphas ───
+
+    #[test]
+    fn test_apply_run_overrides_tgv_alphas() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.tgv_params.tgv_alpha1 = Some(0.01);
+        args.tgv_params.tgv_alpha0 = Some(0.02);
+        config.apply_run_overrides(&args);
+        assert!((config.tgv_alphas[0] - 0.01).abs() < 1e-10);
+        assert!((config.tgv_alphas[1] - 0.02).abs() < 1e-10);
+    }
+
+    // ─── apply_run_overrides: SWI params ───
+
+    #[test]
+    fn test_apply_run_overrides_swi_hp_sigma() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.swi_params.swi_hp_sigma = Some(vec![4.0, 4.0, 4.0]);
+        config.apply_run_overrides(&args);
+        assert_eq!(config.swi_hp_sigma, [4.0, 4.0, 4.0]);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_swi_hp_sigma_wrong_length_ignored() {
+        let mut config = PipelineConfig::default();
+        let original = config.swi_hp_sigma;
+        let mut args = default_run_args();
+        args.swi_params.swi_hp_sigma = Some(vec![4.0]); // only 1 element
+        config.apply_run_overrides(&args);
+        assert_eq!(config.swi_hp_sigma, original);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_swi_scaling() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.swi_params.swi_scaling = Some("negative".to_string());
+        config.apply_run_overrides(&args);
+        assert_eq!(config.swi_scaling, "negative");
+    }
+
+    #[test]
+    fn test_apply_run_overrides_swi_strength_and_mip() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.swi_params.swi_strength = Some(8.0);
+        args.swi_params.swi_mip_window = Some(10);
+        config.apply_run_overrides(&args);
+        assert!((config.swi_strength - 8.0).abs() < 1e-10);
+        assert_eq!(config.swi_mip_window, 10);
+    }
+
+    // ─── apply_run_overrides: medi_smv flag ───
+
+    #[test]
+    fn test_apply_run_overrides_medi_smv() {
+        let mut config = PipelineConfig {
+            medi_smv: false,
+            ..Default::default()
+        };
+        let mut args = default_run_args();
+        args.medi_params.medi_smv = true;
+        config.apply_run_overrides(&args);
+        assert!(config.medi_smv);
+    }
+
+    // ─── apply_run_overrides: BET params ───
+
+    #[test]
+    fn test_apply_run_overrides_bet_params() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.bet_fractional_intensity = Some(0.3);
+        args.bet_smoothness = Some(0.5);
+        args.bet_gradient_threshold = Some(0.1);
+        args.bet_iterations = Some(200);
+        args.bet_subdivisions = Some(4);
+        config.apply_run_overrides(&args);
+        assert!((config.bet_fractional_intensity - 0.3).abs() < 1e-10);
+        assert!((config.bet_smoothness - 0.5).abs() < 1e-10);
+        assert!((config.bet_gradient_threshold - 0.1).abs() < 1e-10);
+        assert_eq!(config.bet_iterations, 200);
+        assert_eq!(config.bet_subdivisions, 4);
+    }
+
+    // ─── apply_run_overrides: homogeneity and linear fit ───
+
+    #[test]
+    fn test_apply_run_overrides_homogeneity_and_linear_fit() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.homogeneity_sigma_mm = Some(10.0);
+        args.homogeneity_nbox = Some(5);
+        args.linear_fit_reliability_threshold = Some(50.0);
+        config.apply_run_overrides(&args);
+        assert!((config.homogeneity_sigma_mm - 10.0).abs() < 1e-10);
+        assert_eq!(config.homogeneity_nbox, 5);
+        assert!((config.linear_fit_reliability_threshold - 50.0).abs() < 1e-10);
+    }
+
+    // ─── apply_run_overrides: more inversion params ───
+
+    #[test]
+    fn test_apply_run_overrides_rts_all_params() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.rts_params.rts_delta = Some(0.5);
+        args.rts_params.rts_rho = Some(100.0);
+        args.rts_params.rts_max_iter = Some(200);
+        args.rts_params.rts_lsmr_iter = Some(50);
+        config.apply_run_overrides(&args);
+        assert!((config.rts_delta - 0.5).abs() < 1e-10);
+        assert!((config.rts_rho - 100.0).abs() < 1e-10);
+        assert_eq!(config.rts_max_iter, 200);
+        assert_eq!(config.rts_lsmr_iter, 50);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_tv_all_params() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.tv_params.tv_rho = Some(5.0);
+        args.tv_params.tv_tol = Some(1e-5);
+        args.tv_params.tv_max_iter = Some(100);
+        config.apply_run_overrides(&args);
+        assert!((config.tv_rho - 5.0).abs() < 1e-10);
+        assert!((config.tv_tol - 1e-5).abs() < 1e-10);
+        assert_eq!(config.tv_max_iter, 100);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_tsvd_threshold() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.tsvd_params.tsvd_threshold = Some(0.15);
+        config.apply_run_overrides(&args);
+        assert!((config.tsvd_threshold - 0.15).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_ilsqr_params() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.ilsqr_params.ilsqr_tol = Some(1e-4);
+        args.ilsqr_params.ilsqr_max_iter = Some(50);
+        config.apply_run_overrides(&args);
+        assert!((config.ilsqr_tol - 1e-4).abs() < 1e-10);
+        assert_eq!(config.ilsqr_max_iter, 50);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_tikhonov_lambda() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.tikhonov_params.tikhonov_lambda = Some(0.01);
+        config.apply_run_overrides(&args);
+        assert!((config.tikhonov_lambda - 0.01).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_nltv_params() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.nltv_params.nltv_lambda = Some(0.001);
+        args.nltv_params.nltv_mu = Some(100.0);
+        args.nltv_params.nltv_tol = Some(1e-5);
+        args.nltv_params.nltv_max_iter = Some(300);
+        args.nltv_params.nltv_newton_iter = Some(10);
+        config.apply_run_overrides(&args);
+        assert!((config.nltv_lambda - 0.001).abs() < 1e-10);
+        assert!((config.nltv_mu - 100.0).abs() < 1e-10);
+        assert!((config.nltv_tol - 1e-5).abs() < 1e-10);
+        assert_eq!(config.nltv_max_iter, 300);
+        assert_eq!(config.nltv_newton_iter, 10);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_medi_params() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.medi_params.medi_lambda = Some(0.001);
+        args.medi_params.medi_max_iter = Some(200);
+        args.medi_params.medi_cg_max_iter = Some(50);
+        args.medi_params.medi_cg_tol = Some(1e-6);
+        args.medi_params.medi_tol = Some(1e-5);
+        args.medi_params.medi_percentage = Some(0.9);
+        args.medi_params.medi_smv_radius = Some(3.0);
+        config.apply_run_overrides(&args);
+        assert!((config.medi_lambda - 0.001).abs() < 1e-10);
+        assert_eq!(config.medi_max_iter, 200);
+        assert_eq!(config.medi_cg_max_iter, 50);
+        assert!((config.medi_cg_tol - 1e-6).abs() < 1e-10);
+        assert!((config.medi_tol - 1e-5).abs() < 1e-10);
+        assert!((config.medi_percentage - 0.9).abs() < 1e-10);
+        assert!((config.medi_smv_radius - 3.0).abs() < 1e-10);
+    }
+
+    // ─── apply_run_overrides: bg removal params ───
+
+    #[test]
+    fn test_apply_run_overrides_vsharp_params() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.vsharp_params.vsharp_threshold = Some(0.05);
+        args.vsharp_params.vsharp_max_radius_factor = Some(3.0);
+        args.vsharp_params.vsharp_min_radius_factor = Some(0.5);
+        config.apply_run_overrides(&args);
+        assert!((config.vsharp_threshold - 0.05).abs() < 1e-10);
+        assert!((config.vsharp_max_radius_factor - 3.0).abs() < 1e-10);
+        assert!((config.vsharp_min_radius_factor - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_pdf_tol() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.pdf_params.pdf_tol = Some(1e-4);
+        config.apply_run_overrides(&args);
+        assert!((config.pdf_tol - 1e-4).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_lbv_tol() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.lbv_params.lbv_tol = Some(1e-3);
+        config.apply_run_overrides(&args);
+        assert!((config.lbv_tol - 1e-3).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_ismv_params() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.ismv_params.ismv_tol = Some(1e-4);
+        args.ismv_params.ismv_max_iter = Some(100);
+        args.ismv_params.ismv_radius_factor = Some(2.0);
+        config.apply_run_overrides(&args);
+        assert!((config.ismv_tol - 1e-4).abs() < 1e-10);
+        assert_eq!(config.ismv_max_iter, 100);
+        assert!((config.ismv_radius_factor - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_apply_run_overrides_sharp_params() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.sharp_params.sharp_threshold = Some(0.03);
+        args.sharp_params.sharp_radius_factor = Some(1.5);
+        config.apply_run_overrides(&args);
+        assert!((config.sharp_threshold - 0.03).abs() < 1e-10);
+        assert!((config.sharp_radius_factor - 1.5).abs() < 1e-10);
+    }
+
+    // ─── apply_run_overrides: qsmart params ───
+
+    #[test]
+    fn test_apply_run_overrides_qsmart_params() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.qsmart_params.qsmart_ilsqr_tol = Some(1e-3);
+        args.qsmart_params.qsmart_ilsqr_max_iter = Some(25);
+        args.qsmart_params.qsmart_vasc_sphere_radius = Some(5);
+        args.qsmart_params.qsmart_sdf_spatial_radius = Some(10);
+        config.apply_run_overrides(&args);
+        assert!((config.qsmart_ilsqr_tol - 1e-3).abs() < 1e-10);
+        assert_eq!(config.qsmart_ilsqr_max_iter, 25);
+        assert_eq!(config.qsmart_vasc_sphere_radius, 5);
+        assert_eq!(config.qsmart_sdf_spatial_radius, 10);
+    }
+
+    // ─── apply_run_overrides: tgv step_size and tol ───
+
+    #[test]
+    fn test_apply_run_overrides_tgv_step_size_and_tol() {
+        let mut config = PipelineConfig::default();
+        let mut args = default_run_args();
+        args.tgv_params.tgv_step_size = Some(0.5);
+        args.tgv_params.tgv_tol = Some(1e-6);
+        config.apply_run_overrides(&args);
+        assert!((config.tgv_step_size - 0.5).abs() < 1e-10);
+        assert!((config.tgv_tol - 1e-6).abs() < 1e-10);
+    }
+
+    // ─── validate: additional branches ───
+
+    #[test]
+    fn test_validate_empty_mask_sections() {
+        let config = PipelineConfig {
+            mask_sections: vec![],
+            ..PipelineConfig::default()
+        };
+        let result = config.validate();
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("mask section"), "Error should mention mask sections: {}", err);
+    }
+
+    #[test]
+    fn test_validate_bet_fi_out_of_range() {
+        let config = PipelineConfig {
+            bet_fractional_intensity: 1.5,
+            ..PipelineConfig::default()
+        };
+        assert!(config.validate().is_err());
+
+        let config2 = PipelineConfig {
+            bet_fractional_intensity: -0.1,
+            ..PipelineConfig::default()
+        };
+        assert!(config2.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_tgv_iterations_zero() {
+        let config = PipelineConfig {
+            qsm_algorithm: QsmAlgorithm::Tgv,
+            bf_algorithm: None,
+            unwrapping_algorithm: None,
+            tgv_iterations: 0,
+            ..PipelineConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rts_max_iter_zero() {
+        let config = PipelineConfig {
+            rts_max_iter: 0,
+            ..PipelineConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_tv_max_iter_zero() {
+        let config = PipelineConfig {
+            tv_max_iter: 0,
+            ..PipelineConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_tkd_threshold_zero() {
+        let config = PipelineConfig {
+            tkd_threshold: 0.0,
+            ..PipelineConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_tkd_threshold_negative() {
+        let config = PipelineConfig {
+            tkd_threshold: -0.1,
+            ..PipelineConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_qsmart_no_bf_ok() {
+        let config = PipelineConfig {
+            qsm_algorithm: QsmAlgorithm::Qsmart,
+            bf_algorithm: Some(BfAlgorithm::Vsharp),
+            ..PipelineConfig::default()
+        };
+        // Should pass -- qsmart ignores bf but does not error
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_qsmart_no_bf_none_ok() {
+        let config = PipelineConfig {
+            qsm_algorithm: QsmAlgorithm::Qsmart,
+            bf_algorithm: None,
+            ..PipelineConfig::default()
+        };
+        // QSMART does its own BG removal, so None is fine
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_medi_smv_no_bf_ok() {
+        let config = PipelineConfig {
+            qsm_algorithm: QsmAlgorithm::Medi,
+            medi_smv: true,
+            bf_algorithm: Some(BfAlgorithm::Vsharp),
+            ..PipelineConfig::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_medi_smv_bf_none_ok() {
+        let config = PipelineConfig {
+            qsm_algorithm: QsmAlgorithm::Medi,
+            medi_smv: true,
+            bf_algorithm: None,
+            ..PipelineConfig::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_refinement_contains_generator() {
+        let config = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![
+                    MaskOp::Erode { iterations: 1 },
+                    MaskOp::Bet { fractional_intensity: 0.5 }, // generator in refinements
+                ],
+            }],
+            ..PipelineConfig::default()
+        };
+        let result = config.validate();
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("generator"), "Error should mention generator in refinements: {}", err);
+    }
+
+    #[test]
+    fn test_validate_refinement_contains_threshold() {
+        let config = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Bet { fractional_intensity: 0.5 },
+                refinements: vec![
+                    MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                ],
+            }],
+            ..PipelineConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_bet_fi_in_mask_section_out_of_range() {
+        let config = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Bet { fractional_intensity: 1.5 },
+                refinements: vec![],
+            }],
+            ..PipelineConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_fixed_threshold_negative() {
+        let config = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold {
+                    method: MaskThresholdMethod::Fixed,
+                    value: Some(-0.1),
+                },
+                refinements: vec![],
+            }],
+            ..PipelineConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_percentile_out_of_range() {
+        let config = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold {
+                    method: MaskThresholdMethod::Percentile,
+                    value: Some(101.0),
+                },
+                refinements: vec![],
+            }],
+            ..PipelineConfig::default()
+        };
+        assert!(config.validate().is_err());
+
+        let config2 = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold {
+                    method: MaskThresholdMethod::Percentile,
+                    value: Some(-5.0),
+                },
+                refinements: vec![],
+            }],
+            ..PipelineConfig::default()
+        };
+        assert!(config2.validate().is_err());
+    }
+
+    // ─── to_annotated_toml: with description ───
+
+    #[test]
+    fn test_to_annotated_toml_with_description() {
+        let config = PipelineConfig {
+            description: "My custom pipeline".to_string(),
+            ..PipelineConfig::default()
+        };
+        let toml = config.to_annotated_toml();
+        assert!(toml.contains("# Description: My custom pipeline"));
+    }
+
+    #[test]
+    fn test_to_annotated_toml_with_unwrapping_and_bf_set() {
+        let config = PipelineConfig::default();
+        let toml = config.to_annotated_toml();
+        // Default has unwrapping and bf set
+        assert!(toml.contains("unwrapping_algorithm = \"romeo\""));
+        assert!(toml.contains("bf_algorithm = \"vsharp\""));
+        assert!(toml.contains("qsm_reference = \"mean\""));
+    }
+
+    #[test]
+    fn test_to_annotated_toml_contains_all_sections() {
+        let config = PipelineConfig::default();
+        let toml = config.to_annotated_toml();
+        assert!(toml.contains("[pipeline]"));
+        assert!(toml.contains("[masking]"));
+        assert!(toml.contains("[rts]"));
+        assert!(toml.contains("[tv]"));
+        assert!(toml.contains("[tkd]"));
+        assert!(toml.contains("[tgv]"));
+    }
+
+    // ─── parse_mask_op: threshold fixed/percentile defaults ───
+
+    #[test]
+    fn test_parse_mask_op_threshold_fixed_default_value() {
+        let op = parse_mask_op("threshold:fixed").unwrap();
+        assert_eq!(op, MaskOp::Threshold { method: MaskThresholdMethod::Fixed, value: Some(0.5) });
+    }
+
+    #[test]
+    fn test_parse_mask_op_threshold_percentile_default_value() {
+        let op = parse_mask_op("threshold:percentile").unwrap();
+        assert_eq!(op, MaskOp::Threshold { method: MaskThresholdMethod::Percentile, value: Some(75.0) });
+    }
+
+    // ─── Display roundtrip tests for more complex ops ───
+
+    #[test]
+    fn test_mask_op_display_roundtrip_all_variants() {
+        let ops = vec![
+            MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+            MaskOp::Bet { fractional_intensity: 0.5 },
+            MaskOp::Erode { iterations: 1 },
+            MaskOp::Dilate { iterations: 2 },
+            MaskOp::Close { radius: 3 },
+            MaskOp::FillHoles { max_size: 500 },
+            MaskOp::GaussianSmooth { sigma_mm: 4.0 },
+        ];
+        for op in ops {
+            let s = format!("{}", op);
+            let parsed = parse_mask_op(&s).unwrap();
+            assert_eq!(parsed, op, "Roundtrip failed for: {}", s);
+        }
+    }
+
+    // ─── default_mask_sections ───
+
+    #[test]
+    fn test_default_mask_sections_structure() {
+        let sections = default_mask_sections();
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].input, MaskingInput::PhaseQuality);
+        assert!(matches!(sections[0].generator, MaskOp::Threshold { method: MaskThresholdMethod::Otsu, .. }));
+        assert_eq!(sections[0].refinements.len(), 3);
+    }
 
 }
