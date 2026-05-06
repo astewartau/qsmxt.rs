@@ -277,19 +277,25 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         super::app::InputMode::NIfTI => "NIfTI -> BIDS",
         super::app::InputMode::DicomToBids => "DICOM -> BIDS",
     };
+    let is_experimental = !matches!(app.input_mode, super::app::InputMode::Bids);
     let mode_style = Style::default().fg(Color::Cyan);
+    let experimental_span = Span::styled(" (experimental)", Style::default().fg(Color::Yellow));
     if mode_focused {
-        lines.push(Line::from(vec![
+        let mut spans = vec![
             Span::styled(format!("  {:22}", "Input Mode:"), mode_label_style),
             Span::styled("< ", Style::default().fg(Color::DarkGray)),
             Span::styled(mode_text, mode_style.add_modifier(Modifier::BOLD)),
             Span::styled(" >", Style::default().fg(Color::DarkGray)),
-        ]));
+        ];
+        if is_experimental { spans.push(experimental_span); }
+        lines.push(Line::from(spans));
     } else {
-        lines.push(Line::from(vec![
+        let mut spans = vec![
             Span::styled(format!("  {:22}", "Input Mode:"), mode_label_style),
             Span::styled(mode_text, mode_style),
-        ]));
+        ];
+        if is_experimental { spans.push(experimental_span); }
+        lines.push(Line::from(spans));
     }
 
     // Fields 1-3: directory/config fields (labels change based on mode)
