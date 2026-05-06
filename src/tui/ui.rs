@@ -502,17 +502,18 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         }
     } else if is_nifti {
         // NIfTI section: compute line position from focus
-        let offset = io_field_count + 2; // blank + header
+        // Layout: blank, (optional scan_info), mag_header, AddMag, mag files...,
+        // blank, phase_header, AddPhase, phase files..., blank, params_header, EchoTimes, FieldStrength, B0Direction
+        let has_scan_info = !app.nifti_state.magnitude_files.is_empty()
+            || !app.nifti_state.phase_files.is_empty()
+            || !app.nifti_state.scan_log.is_empty();
+        let offset = io_field_count + 1 + (has_scan_info as usize) + 1; // blank + (scan_info?) + header
         let items = app.nifti_state.focusable_items();
         if let Some(pos) = items.iter().position(|f| f == &app.nifti_state.focus) {
-            // Each focusable item is roughly one line, but we need to account for headers/blanks
-            // InputDir: offset+0, blank, AddMag header: offset+1, AddMag: offset+2, mag files...,
-            // blank, AddPhase header, AddPhase, phase files..., blank, params header, EchoTimes, FieldStrength, B0Direction
             let mut line = offset;
             for (idx, item) in items.iter().enumerate() {
                 if idx == pos { break; }
                 match item {
-                    super::app::NiftiFocus::InputDir => line += 2,      // line + blank + header
                     super::app::NiftiFocus::AddMagnitude => line += 1,
                     super::app::NiftiFocus::MagFile(_) => line += 1,
                     super::app::NiftiFocus::AddPhase => line += 3,      // line + blank + header + add line
@@ -583,7 +584,6 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         }
     } else if is_nifti {
         match &app.nifti_state.focus {
-            super::app::NiftiFocus::InputDir => "Enter: scan directory for NIfTI files and auto-classify",
             super::app::NiftiFocus::AddMagnitude | super::app::NiftiFocus::AddPhase => "Enter: type glob/path to add files",
             super::app::NiftiFocus::MagFile(_) | super::app::NiftiFocus::PhaseFile(_) => "Shift+J/K: reorder, d: remove",
             super::app::NiftiFocus::EchoTimes => "Enter: edit echo times (comma-separated, in ms)",
@@ -652,6 +652,26 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
             let y = content_area.y + (line - scroll) as u16;
             let x = content_area.x + 14 + app.filter_state.num_echoes_cursor as u16;
             f.set_cursor_position((x, y));
+        }
+    }
+
+    // Set cursor if editing NIfTI parameter fields (EchoTimes, FieldStrength, B0Direction)
+    if is_nifti && app.nifti_state.editing && !in_io {
+        let param_focused = matches!(
+            app.nifti_state.focus,
+            super::app::NiftiFocus::EchoTimes
+            | super::app::NiftiFocus::FieldStrength
+            | super::app::NiftiFocus::B0Direction
+        );
+        if param_focused {
+            if let Some(line) = focused_line {
+                let scroll = app.nifti_state.scroll_offset;
+                if line >= scroll && line < scroll + content_area.height as usize {
+                    let y = content_area.y + (line - scroll) as u16;
+                    let x = content_area.x + 24 + app.nifti_state.cursor as u16;
+                    f.set_cursor_position((x, y));
+                }
+            }
         }
     }
 }

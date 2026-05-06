@@ -231,7 +231,6 @@ impl DicomConvertState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NiftiFocus {
-    InputDir,
     AddMagnitude,
     MagFile(usize),
     AddPhase,
@@ -271,7 +270,7 @@ impl Default for NiftiState {
             echo_times: String::new(),
             field_strength: String::new(),
             b0_direction: "0, 0, 1".to_string(),
-            focus: NiftiFocus::InputDir,
+            focus: NiftiFocus::AddMagnitude,
             editing: false,
             cursor: 0,
             scroll_offset: 0,
@@ -431,7 +430,7 @@ impl NiftiState {
 
     /// Total number of focusable items in the NIfTI section.
     pub fn focusable_items(&self) -> Vec<NiftiFocus> {
-        let mut items = vec![NiftiFocus::InputDir, NiftiFocus::AddMagnitude];
+        let mut items = vec![NiftiFocus::AddMagnitude];
         for i in 0..self.magnitude_files.len() {
             items.push(NiftiFocus::MagFile(i));
         }
@@ -2812,10 +2811,6 @@ impl App {
             // Enter: start editing text fields or add files
             KeyCode::Enter | KeyCode::Char(' ') => {
                 match &self.nifti_state.focus {
-                    NiftiFocus::InputDir => {
-                        // Trigger directory scan
-                        self.nifti_state.scan_input_directory();
-                    }
                     NiftiFocus::AddMagnitude => {
                         self.nifti_state.editing = true;
                         self.nifti_state.add_pattern.clear();
