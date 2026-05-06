@@ -35,6 +35,9 @@ pub enum QsmxtError {
 
     #[error("SLURM submission error: {0}")]
     Slurm(String),
+
+    #[error("Update error: {0}")]
+    Update(String),
 }
 
 pub type Result<T> = std::result::Result<T, QsmxtError>;

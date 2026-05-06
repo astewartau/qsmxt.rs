@@ -259,33 +259,92 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 
     let io_field_count = super::app::App::INPUT_IO_FIELDS;
     let in_io = app.active_field < io_field_count;
+    let is_bids = app.input_mode == super::app::InputMode::Bids;
+    let is_nifti = app.input_mode == super::app::InputMode::NIfTI;
 
     // Build lines for IO fields
     let mut lines: Vec<Line> = Vec::new();
-    let io_labels = ["BIDS Directory", "Output Directory", "Config File"];
 
-    for (i, io_label) in io_labels.iter().enumerate().take(io_field_count) {
-        let focused = in_io && i == app.active_field;
+    // Field 0: Mode selector
+    let mode_focused = in_io && app.active_field == 0;
+    let mode_label_style = if mode_focused {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let mode_text = match app.input_mode {
+        super::app::InputMode::Bids => "BIDS",
+        super::app::InputMode::NIfTI => "NIfTI -> BIDS",
+        super::app::InputMode::DicomToBids => "DICOM -> BIDS",
+    };
+    let is_experimental = !matches!(app.input_mode, super::app::InputMode::Bids);
+    let mode_style = Style::default().fg(Color::Cyan);
+    let experimental_span = Span::styled(" (experimental)", Style::default().fg(Color::Yellow));
+    if mode_focused {
+        let mut spans = vec![
+            Span::styled(format!("  {:22}", "Input Mode:"), mode_label_style),
+            Span::styled("< ", Style::default().fg(Color::DarkGray)),
+            Span::styled(mode_text, mode_style.add_modifier(Modifier::BOLD)),
+            Span::styled(" >", Style::default().fg(Color::DarkGray)),
+        ];
+        if is_experimental { spans.push(experimental_span); }
+        lines.push(Line::from(spans));
+    } else {
+        let mut spans = vec![
+            Span::styled(format!("  {:22}", "Input Mode:"), mode_label_style),
+            Span::styled(mode_text, mode_style),
+        ];
+        if is_experimental { spans.push(experimental_span); }
+        lines.push(Line::from(spans));
+    }
+
+    // Fields 1-3: directory/config fields (labels change based on mode)
+    let io_labels = match app.input_mode {
+        super::app::InputMode::Bids => ["BIDS Directory", "Output Directory", "Config File"],
+        super::app::InputMode::NIfTI => ["Input Directory", "Output BIDS Dir", "Config File"],
+        super::app::InputMode::DicomToBids => ["DICOM Directory", "Output BIDS Dir", "Config File"],
+    };
+
+    // Fields 1-3 are the text IO fields
+    for (label_idx, io_label) in io_labels.iter().enumerate() {
+        let field_idx = label_idx + 1; // field 0 is mode selector
+        let focused = in_io && field_idx == app.active_field;
         let label_style = if focused {
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
 
-        // Text field
-        let value = match i {
-            0 => &app.form.bids_dir,
-            1 => &app.form.output_dir,
-            2 => &app.form.config_file,
+        // Text field - pull value from the right source based on mode
+        let value: &str = match (label_idx, app.input_mode) {
+            (0, super::app::InputMode::Bids) => &app.form.bids_dir,
+            (0, super::app::InputMode::NIfTI) => &app.nifti_state.input_dir,
+            (0, super::app::InputMode::DicomToBids) => &app.dicom_state.dicom_dir,
+            (1, super::app::InputMode::Bids) => &app.form.output_dir,
+            (1, super::app::InputMode::NIfTI) => &app.nifti_state.output_dir,
+            (1, super::app::InputMode::DicomToBids) => &app.dicom_state.output_dir,
+            (2, _) => &app.form.config_file,
             _ => "",
         };
         let val_style = if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::Gray) };
-        // For output_dir, show bids_dir as placeholder when empty
-        let display_val = if i == 1 && value.is_empty() && !app.form.bids_dir.is_empty() && !(focused && app.editing) {
-            Span::styled(&app.form.bids_dir, Style::default().fg(Color::DarkGray))
-        } else if i == 0 && value.is_empty() && !(focused && app.editing) {
-            // BIDS Directory is required
-            Span::styled("(required)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
+        // Placeholder logic
+        let primary_dir = match app.input_mode {
+            super::app::InputMode::Bids => &app.form.bids_dir,
+            super::app::InputMode::NIfTI => &app.nifti_state.input_dir,
+            super::app::InputMode::DicomToBids => &app.dicom_state.dicom_dir,
+        };
+        let display_val = if label_idx == 1 && value.is_empty() && !primary_dir.is_empty() && !(focused && app.editing) {
+            if is_bids {
+                Span::styled(primary_dir.to_string(), Style::default().fg(Color::DarkGray))
+            } else {
+                Span::styled("(auto: bids_output/)", Style::default().fg(Color::DarkGray))
+            }
+        } else if label_idx == 0 && value.is_empty() && !(focused && app.editing) {
+            if is_nifti {
+                Span::styled("(optional, for auto-scan)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
+            } else {
+                Span::styled("(required)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
+            }
         } else if value.is_empty() && !(focused && app.editing) {
             Span::styled("(empty)", Style::default().fg(Color::DarkGray))
         } else {
@@ -298,163 +357,251 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         lines.push(line);
     }
 
-    // Separator
+    // Separator + mode-specific content below IO fields
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  ── Filters ──",
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-    )));
 
-    // Filter tree content
-    if app.form.bids_dir.trim().is_empty() {
+    if is_nifti {
+        // ─── NIfTI mode ───
+        draw_nifti_section(&app.nifti_state, in_io, &mut lines);
+    } else if is_bids {
+        // ─── BIDS mode: filters + tree ───
         lines.push(Line::from(Span::styled(
-            "  Set BIDS directory above first",
-            Style::default().fg(Color::DarkGray),
+            "  -- Filters --",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
         )));
-    } else {
-        let has_runs = app.filter_state.tree.as_ref().is_some_and(|t| !t.subjects.is_empty());
-        if !has_runs {
+
+        if app.form.bids_dir.trim().is_empty() {
             lines.push(Line::from(Span::styled(
-                "  No QSM-compatible runs found",
+                "  Set BIDS directory above first",
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
-            let tree = app.filter_state.tree.as_ref().unwrap();
-
-            // Include pattern
-            let include_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::Include;
-            let include_label = Span::styled(
-                "  Include:  ",
-                if include_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
-                else { Style::default().fg(Color::White) },
-            );
-            let include_val = Span::styled(&app.filter_state.include_pattern, Style::default().fg(Color::Cyan));
-            lines.push(Line::from(vec![include_label, include_val]));
-
-            // Exclude pattern
-            let exclude_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::Exclude;
-            let exclude_label = Span::styled(
-                "  Exclude:  ",
-                if exclude_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
-                else { Style::default().fg(Color::White) },
-            );
-            let exclude_val = if app.filter_state.exclude_pattern.is_empty() && !app.filter_state.exclude_editing {
-                Span::styled("(empty)", Style::default().fg(Color::DarkGray))
+            let has_runs = app.filter_state.tree.as_ref().is_some_and(|t| !t.subjects.is_empty());
+            if !has_runs {
+                lines.push(Line::from(Span::styled(
+                    "  No QSM-compatible runs found",
+                    Style::default().fg(Color::DarkGray),
+                )));
             } else {
-                Span::styled(&app.filter_state.exclude_pattern, Style::default().fg(Color::Cyan))
-            };
-            lines.push(Line::from(vec![exclude_label, exclude_val]));
-            lines.push(Line::from(""));
+                let tree = app.filter_state.tree.as_ref().unwrap();
 
-            // Tree rows
-            let visible = app.filter_state.visible_rows();
-            for (i, row) in visible.iter().enumerate() {
-                let focused = !in_io && app.filter_state.focus == super::app::FilterFocus::TreeNode(i);
-                let line = match row {
-                    super::app::TreeRow::Subject(si) => {
-                        let sub = &tree.subjects[*si];
-                        let collapsed = app.filter_state.collapsed.contains(&format!("sub-{}", sub.name));
-                        let arrow = if collapsed { "▶" } else { "▼" };
-                        let sel = sub.selected_runs();
-                        let total = sub.total_runs();
-                        let sel_info = if sel == total { "all selected".to_string() } else { format!("{}/{} selected", sel, total) };
-                        let style = if focused {
-                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
-                        };
-                        Line::from(Span::styled(
-                            format!("  {} sub-{} ({} run{}, {})", arrow, sub.name, total, if total == 1 { "" } else { "s" }, sel_info),
-                            style,
-                        ))
-                    }
-                    super::app::TreeRow::Session(si, sei) => {
-                        let sub = &tree.subjects[*si];
-                        let ses = &sub.sessions[*sei];
-                        let collapsed = app.filter_state.collapsed.contains(&format!("sub-{}/ses-{}", sub.name, ses.name));
-                        let arrow = if collapsed { "▶" } else { "▼" };
-                        let style = if focused {
-                            Style::default().fg(Color::Yellow)
-                        } else {
-                            Style::default().fg(Color::White)
-                        };
-                        Line::from(Span::styled(format!("    {} ses-{}", arrow, ses.name), style))
-                    }
-                    super::app::TreeRow::Run { sub, ses, run } => {
-                        let leaf = match ses {
-                            Some(sei) => &tree.subjects[*sub].sessions[*sei].runs[*run],
-                            None => &tree.subjects[*sub].runs[*run],
-                        };
-                        let indent = if ses.is_some() { "      " } else { "    " };
-                        let (marker, color) = if leaf.selected { ("[x]", Color::Green) } else { ("[ ]", Color::Gray) };
-                        let style = if focused {
-                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default().fg(color)
-                        };
-                        Line::from(Span::styled(format!("{}{} {}", indent, marker, leaf.display), style))
-                    }
+                let include_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::Include;
+                let include_label = Span::styled(
+                    "  Include:  ",
+                    if include_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
+                    else { Style::default().fg(Color::White) },
+                );
+                let include_val = Span::styled(&app.filter_state.include_pattern, Style::default().fg(Color::Cyan));
+                lines.push(Line::from(vec![include_label, include_val]));
+
+                let exclude_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::Exclude;
+                let exclude_label = Span::styled(
+                    "  Exclude:  ",
+                    if exclude_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
+                    else { Style::default().fg(Color::White) },
+                );
+                let exclude_val = if app.filter_state.exclude_pattern.is_empty() && !app.filter_state.exclude_editing {
+                    Span::styled("(empty)", Style::default().fg(Color::DarkGray))
+                } else {
+                    Span::styled(&app.filter_state.exclude_pattern, Style::default().fg(Color::Cyan))
                 };
-                lines.push(line);
+                lines.push(Line::from(vec![exclude_label, exclude_val]));
+                lines.push(Line::from(""));
+
+                let visible = app.filter_state.visible_rows();
+                for (i, row) in visible.iter().enumerate() {
+                    let focused = !in_io && app.filter_state.focus == super::app::FilterFocus::TreeNode(i);
+                    let line = match row {
+                        super::app::TreeRow::Subject(si) => {
+                            let sub = &tree.subjects[*si];
+                            let collapsed = app.filter_state.collapsed.contains(&format!("sub-{}", sub.name));
+                            let arrow = if collapsed { "▶" } else { "▼" };
+                            let sel = sub.selected_runs();
+                            let total = sub.total_runs();
+                            let sel_info = if sel == total { "all selected".to_string() } else { format!("{}/{} selected", sel, total) };
+                            let style = if focused {
+                                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                            };
+                            Line::from(Span::styled(
+                                format!("  {} sub-{} ({} run{}, {})", arrow, sub.name, total, if total == 1 { "" } else { "s" }, sel_info),
+                                style,
+                            ))
+                        }
+                        super::app::TreeRow::Session(si, sei) => {
+                            let sub = &tree.subjects[*si];
+                            let ses = &sub.sessions[*sei];
+                            let collapsed = app.filter_state.collapsed.contains(&format!("sub-{}/ses-{}", sub.name, ses.name));
+                            let arrow = if collapsed { "▶" } else { "▼" };
+                            let style = if focused {
+                                Style::default().fg(Color::Yellow)
+                            } else {
+                                Style::default().fg(Color::White)
+                            };
+                            Line::from(Span::styled(format!("    {} ses-{}", arrow, ses.name), style))
+                        }
+                        super::app::TreeRow::Run { sub, ses, run } => {
+                            let leaf = match ses {
+                                Some(sei) => &tree.subjects[*sub].sessions[*sei].runs[*run],
+                                None => &tree.subjects[*sub].runs[*run],
+                            };
+                            let indent = if ses.is_some() { "      " } else { "    " };
+                            let (marker, color) = if leaf.selected { ("[x]", Color::Green) } else { ("[ ]", Color::Gray) };
+                            let style = if focused {
+                                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default().fg(color)
+                            };
+                            Line::from(Span::styled(format!("{}{} {}", indent, marker, leaf.display), style))
+                        }
+                    };
+                    lines.push(line);
+                }
+
+                lines.push(Line::from(""));
+                let ne_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::NumEchoes;
+                let ne_label = Span::styled(
+                    "  Num Echoes: ",
+                    if ne_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
+                    else { Style::default().fg(Color::White) },
+                );
+                let ne_val = if app.filter_state.num_echoes.is_empty() && !app.filter_state.num_echoes_editing {
+                    Span::styled("(all)", Style::default().fg(Color::DarkGray))
+                } else {
+                    Span::styled(&app.filter_state.num_echoes, Style::default().fg(Color::Cyan))
+                };
+                lines.push(Line::from(vec![ne_label, ne_val]));
+
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!("  {} run(s), {} selected", tree.total_runs(), tree.selected_runs()),
+                    Style::default().fg(Color::DarkGray),
+                )));
             }
-
-            // Num Echoes
-            lines.push(Line::from(""));
-            let ne_focused = !in_io && app.filter_state.focus == super::app::FilterFocus::NumEchoes;
-            let ne_label = Span::styled(
-                "  Num Echoes: ",
-                if ne_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
-                else { Style::default().fg(Color::White) },
-            );
-            let ne_val = if app.filter_state.num_echoes.is_empty() && !app.filter_state.num_echoes_editing {
-                Span::styled("(all)", Style::default().fg(Color::DarkGray))
-            } else {
-                Span::styled(&app.filter_state.num_echoes, Style::default().fg(Color::Cyan))
-            };
-            lines.push(Line::from(vec![ne_label, ne_val]));
-
-            // Summary
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                format!("  {} run(s), {} selected", tree.total_runs(), tree.selected_runs()),
-                Style::default().fg(Color::DarkGray),
-            )));
         }
+    } else {
+        // ─── DICOM mode: series classification ───
+        draw_dicom_series_section(&app.dicom_state, &mut lines, in_io);
     }
 
-    // Determine focused line for scroll
+    // IO fields: mode(1) + dir fields(3) = 4 lines total (no blank between mode and dirs)
     let focused_line = if in_io {
-        Some(app.active_field)
-    } else {
+        Some(app.active_field) // field 0 = mode line, 1-3 = dirs
+    } else if is_bids {
         // Filter area starts after IO fields + separator + header
-        let offset = io_field_count + 2;
+        let offset = io_field_count + 2; // +2 for blank + header
         match app.filter_state.focus {
             super::app::FilterFocus::Include => Some(offset),
             super::app::FilterFocus::Exclude => Some(offset + 1),
-            super::app::FilterFocus::TreeNode(i) => Some(offset + i + 3), // +3 for include, exclude, blank line
+            super::app::FilterFocus::TreeNode(i) => Some(offset + i + 3),
             super::app::FilterFocus::NumEchoes => {
                 let vis_len = app.filter_state.visible_rows().len();
-                Some(offset + vis_len + 4) // +4 for include, exclude, blank, tree rows
+                Some(offset + vis_len + 4)
             }
+        }
+    } else if is_nifti {
+        // NIfTI section: compute line position from focus
+        // Layout: blank, (optional scan_info), mag_header, AddMag, mag files...,
+        // blank, phase_header, AddPhase, phase files..., blank, params_header, EchoTimes, FieldStrength, B0Direction
+        let has_scan_info = !app.nifti_state.magnitude_files.is_empty()
+            || !app.nifti_state.phase_files.is_empty()
+            || !app.nifti_state.scan_log.is_empty();
+        let offset = io_field_count + 1 + (has_scan_info as usize) + 1; // blank + (scan_info?) + header
+        let items = app.nifti_state.focusable_items();
+        if let Some(pos) = items.iter().position(|f| f == &app.nifti_state.focus) {
+            let mut line = offset;
+            for (idx, item) in items.iter().enumerate() {
+                if idx == pos { break; }
+                match item {
+                    super::app::NiftiFocus::AddMagnitude => line += 1,
+                    super::app::NiftiFocus::MagFile(_) => line += 1,
+                    super::app::NiftiFocus::AddPhase => line += 3,      // line + blank + header + add line
+                    super::app::NiftiFocus::PhaseFile(_) => line += 1,
+                    super::app::NiftiFocus::EchoTimes => line += 3,     // line + blank + header + param
+                    super::app::NiftiFocus::FieldStrength => line += 1,
+                    super::app::NiftiFocus::B0Direction => line += 1,
+                    super::app::NiftiFocus::ConvertButton => line += 2, // blank + button
+                }
+            }
+            Some(line)
+        } else {
+            None
+        }
+    } else {
+        // DICOM series area
+        let offset = io_field_count + 2; // blank + header
+        match app.dicom_state.focus {
+            super::app::DicomFocus::Series(i) => {
+                // Count acq headers before series i
+                if let Some(ref session) = app.dicom_state.session {
+                    let mut line_offset = offset;
+                    let mut current_flat = 0usize;
+                    let mut found = None;
+                    'outer: for subject in &session.subjects {
+                        for study in &subject.studies {
+                            for acq in &study.acquisitions {
+                                line_offset += 1; // acq header
+                                for _series in &acq.series {
+                                    if current_flat == i {
+                                        found = Some(line_offset);
+                                        break 'outer;
+                                    }
+                                    line_offset += 1;
+                                    current_flat += 1;
+                                }
+                            }
+                        }
+                    }
+                    found
+                } else {
+                    None
+                }
+            }
+            super::app::DicomFocus::ConvertButton => Some(lines.len().saturating_sub(1)),
         }
     };
 
-    render_scrollable(f, content_area, lines, &mut app.form_scroll_offset, focused_line);
+    let scroll_offset = match app.input_mode {
+        super::app::InputMode::Bids => &mut app.form_scroll_offset,
+        super::app::InputMode::NIfTI => &mut app.nifti_state.scroll_offset,
+        super::app::InputMode::DicomToBids => &mut app.dicom_state.scroll_offset,
+    };
+    render_scrollable(f, content_area, lines, scroll_offset, focused_line);
 
-    // Help text for focused field
+    // Help text
     let help_text = if in_io {
         match app.active_field {
-            0 => "Path to BIDS-formatted dataset directory",
-            1 => "Output directory (defaults to BIDS directory)",
-            2 => "Optional pipeline configuration file (TOML)",
+            0 => "Left/Right to switch input mode (BIDS / NIfTI / DICOM)",
+            1 => match app.input_mode {
+                super::app::InputMode::Bids => "Path to BIDS-formatted dataset directory",
+                super::app::InputMode::NIfTI => "Directory with NIfTI files + JSON sidecars (optional, for auto-scan)",
+                super::app::InputMode::DicomToBids => "Path to directory containing DICOM files",
+            },
+            2 => if is_bids { "Output directory (defaults to BIDS directory)" } else { "Output BIDS directory (empty = auto-generate)" },
+            3 => "Optional pipeline configuration file (TOML)",
             _ => "",
         }
-    } else {
+    } else if is_nifti {
+        match &app.nifti_state.focus {
+            super::app::NiftiFocus::AddMagnitude | super::app::NiftiFocus::AddPhase => "Enter: type glob/path to add files",
+            super::app::NiftiFocus::MagFile(_) | super::app::NiftiFocus::PhaseFile(_) => "Shift+J/K: reorder, d: remove",
+            super::app::NiftiFocus::EchoTimes => "Enter: edit echo times (comma-separated, in ms)",
+            super::app::NiftiFocus::FieldStrength => "Enter: edit field strength (in Tesla)",
+            super::app::NiftiFocus::B0Direction => "Enter: edit B0 direction (comma-separated x,y,z)",
+            super::app::NiftiFocus::ConvertButton => "Enter: convert NIfTI files to BIDS directory",
+        }
+    } else if is_bids {
         match app.filter_state.focus {
             super::app::FilterFocus::Include => "Glob patterns to include (space-separated, e.g. sub-1* *ses-pre*)",
             super::app::FilterFocus::Exclude => "Glob patterns to exclude (space-separated, e.g. *mygrea*)",
             super::app::FilterFocus::TreeNode(_) => "Space: toggle, Enter: expand/collapse",
             super::app::FilterFocus::NumEchoes => "Limit number of echoes to process",
+        }
+    } else {
+        match app.dicom_state.focus {
+            super::app::DicomFocus::Series(_) => "Left/Right: change type, Enter: cycle type",
+            super::app::DicomFocus::ConvertButton => "Enter: run dcm2niix conversion",
         }
     };
     if !help_text.is_empty() {
@@ -465,38 +612,41 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         f.render_widget(help_para, help_area);
     }
 
-    // Set cursor if editing IO field
-    if app.editing && in_io {
-        let scroll = app.form_scroll_offset;
-        if app.active_field >= scroll && app.active_field < scroll + content_area.height as usize {
-            let y = content_area.y + (app.active_field - scroll) as u16;
+    // Set cursor if editing IO text field
+    if app.editing && in_io && app.active_field > 0 {
+        let scroll = match app.input_mode {
+            super::app::InputMode::Bids => app.form_scroll_offset,
+            super::app::InputMode::NIfTI => app.nifti_state.scroll_offset,
+            super::app::InputMode::DicomToBids => app.dicom_state.scroll_offset,
+        };
+        let line = app.active_field;
+        if line >= scroll && line < scroll + content_area.height as usize {
+            let y = content_area.y + (line - scroll) as u16;
             let x = content_area.x + 24 + app.cursor_pos as u16;
             f.set_cursor_position((x, y));
         }
     }
-    // Set cursor if editing filter include/exclude/num_echoes
-    if app.filter_state.include_editing {
-        let offset = io_field_count + 2; // after IO fields + separator + header
+    // Set cursor if editing filter include/exclude/num_echoes (BIDS mode only)
+    if is_bids && app.filter_state.include_editing {
+        let offset = io_field_count + 2;
         let scroll = app.form_scroll_offset;
-        let line = offset;
-        if line >= scroll && line < scroll + content_area.height as usize {
-            let y = content_area.y + (line - scroll) as u16;
+        if offset >= scroll && offset < scroll + content_area.height as usize {
+            let y = content_area.y + (offset - scroll) as u16;
             let x = content_area.x + 12 + app.filter_state.include_cursor as u16;
             f.set_cursor_position((x, y));
         }
-    } else if app.filter_state.exclude_editing {
-        let offset = io_field_count + 2 + 1; // include line + exclude line
+    } else if is_bids && app.filter_state.exclude_editing {
+        let offset = io_field_count + 2 + 1;
         let scroll = app.form_scroll_offset;
-        let line = offset;
-        if line >= scroll && line < scroll + content_area.height as usize {
-            let y = content_area.y + (line - scroll) as u16;
+        if offset >= scroll && offset < scroll + content_area.height as usize {
+            let y = content_area.y + (offset - scroll) as u16;
             let x = content_area.x + 12 + app.filter_state.exclude_cursor as u16;
             f.set_cursor_position((x, y));
         }
-    } else if app.filter_state.num_echoes_editing {
-        let offset = io_field_count + 2 + 1; // include + exclude
+    } else if is_bids && app.filter_state.num_echoes_editing {
+        let offset = io_field_count + 2 + 1;
         let vis_len = app.filter_state.visible_rows().len();
-        let line = offset + vis_len + 2; // +2 for blank line + tree rows
+        let line = offset + vis_len + 2;
         let scroll = app.form_scroll_offset;
         if line >= scroll && line < scroll + content_area.height as usize {
             let y = content_area.y + (line - scroll) as u16;
@@ -504,8 +654,360 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
             f.set_cursor_position((x, y));
         }
     }
+
+    // Set cursor if editing NIfTI parameter fields (EchoTimes, FieldStrength, B0Direction)
+    if is_nifti && app.nifti_state.editing && !in_io {
+        let param_focused = matches!(
+            app.nifti_state.focus,
+            super::app::NiftiFocus::EchoTimes
+            | super::app::NiftiFocus::FieldStrength
+            | super::app::NiftiFocus::B0Direction
+        );
+        if param_focused {
+            if let Some(line) = focused_line {
+                let scroll = app.nifti_state.scroll_offset;
+                if line >= scroll && line < scroll + content_area.height as usize {
+                    let y = content_area.y + (line - scroll) as u16;
+                    let x = content_area.x + 24 + app.nifti_state.cursor as u16;
+                    f.set_cursor_position((x, y));
+                }
+            }
+        }
+    }
 }
 
+/// Render the NIfTI configuration section (used within the unified input tab).
+fn draw_nifti_section(
+    ns: &super::app::NiftiState,
+    in_io: bool,
+    lines: &mut Vec<Line<'_>>,
+) {
+    let focused = |f: &super::app::NiftiFocus| -> bool { !in_io && ns.focus == *f };
+
+    let label_style = |f: &super::app::NiftiFocus| -> Style {
+        if focused(f) {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        }
+    };
+
+    // Input Dir scan status
+    let scan_info = if !ns.magnitude_files.is_empty() || !ns.phase_files.is_empty() {
+        format!("  (found {} mag, {} phase)", ns.magnitude_files.len(), ns.phase_files.len())
+    } else if !ns.scan_log.is_empty() {
+        format!("  ({} unclassified)", ns.scan_log.len())
+    } else {
+        String::new()
+    };
+    if !scan_info.is_empty() {
+        lines.push(Line::from(Span::styled(
+            scan_info,
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    // ── Magnitude section ──
+    lines.push(Line::from(Span::styled(
+        format!("  -- Magnitude Files ({}) --", ns.magnitude_files.len()),
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+    )));
+
+    // Add magnitude button
+    let add_mag_focus = super::app::NiftiFocus::AddMagnitude;
+    if ns.editing && ns.adding_to == Some(crate::nifti::convert::NiftiPartType::Magnitude) {
+        lines.push(Line::from(vec![
+            Span::styled("  [+] ", label_style(&add_mag_focus)),
+            Span::styled(ns.add_pattern.clone(), Style::default().fg(Color::Cyan)),
+        ]));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  [+] Add files...",
+            label_style(&add_mag_focus),
+        )));
+    }
+
+    // Magnitude file list
+    for (i, path) in ns.magnitude_files.iter().enumerate() {
+        let f = super::app::NiftiFocus::MagFile(i);
+        let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+        let style = if focused(&f) {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::Green)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("    {}. {}", i + 1, basename),
+            style,
+        )));
+    }
+
+    lines.push(Line::from(""));
+
+    // ── Phase section ──
+    lines.push(Line::from(Span::styled(
+        format!("  -- Phase Files ({}) --", ns.phase_files.len()),
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+    )));
+
+    // Add phase button
+    let add_phase_focus = super::app::NiftiFocus::AddPhase;
+    if ns.editing && ns.adding_to == Some(crate::nifti::convert::NiftiPartType::Phase) {
+        lines.push(Line::from(vec![
+            Span::styled("  [+] ", label_style(&add_phase_focus)),
+            Span::styled(ns.add_pattern.clone(), Style::default().fg(Color::Cyan)),
+        ]));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  [+] Add files...",
+            label_style(&add_phase_focus),
+        )));
+    }
+
+    // Phase file list
+    for (i, path) in ns.phase_files.iter().enumerate() {
+        let f = super::app::NiftiFocus::PhaseFile(i);
+        let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+        let style = if focused(&f) {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("    {}. {}", i + 1, basename),
+            style,
+        )));
+    }
+
+    lines.push(Line::from(""));
+
+    // ── Parameters section ──
+    lines.push(Line::from(Span::styled(
+        "  -- Parameters --",
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+    )));
+
+    // Echo Times
+    let et_focus = super::app::NiftiFocus::EchoTimes;
+    let et_val = if ns.echo_times.is_empty() && !(ns.editing && focused(&et_focus)) {
+        Span::styled("(required)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
+    } else {
+        Span::styled(ns.echo_times.clone(), Style::default().fg(Color::Cyan))
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {:22}", "Echo Times (ms):"), label_style(&et_focus)),
+        et_val,
+    ]));
+
+    // Field Strength
+    let fs_focus = super::app::NiftiFocus::FieldStrength;
+    let fs_val = if ns.field_strength.is_empty() && !(ns.editing && focused(&fs_focus)) {
+        Span::styled("(required)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
+    } else {
+        Span::styled(ns.field_strength.clone(), Style::default().fg(Color::Cyan))
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {:22}", "Field Strength (T):"), label_style(&fs_focus)),
+        fs_val,
+    ]));
+
+    // B0 Direction
+    let b0_focus = super::app::NiftiFocus::B0Direction;
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {:22}", "B0 Direction:"), label_style(&b0_focus)),
+        Span::styled(ns.b0_direction.clone(), Style::default().fg(Color::Cyan)),
+    ]));
+
+    // Validation warnings
+    if !ns.magnitude_files.is_empty() && !ns.phase_files.is_empty()
+        && ns.magnitude_files.len() != ns.phase_files.len()
+    {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  Warning: {} magnitude vs {} phase files", ns.magnitude_files.len(), ns.phase_files.len()),
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    lines.push(Line::from(""));
+
+    // Convert button + status
+    let convert_focus = super::app::NiftiFocus::ConvertButton;
+    let btn_style = if focused(&convert_focus) {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        match ns.convert_status {
+            super::app::ConvertStatus::Done => Style::default().fg(Color::Green),
+            super::app::ConvertStatus::Error => Style::default().fg(Color::Red),
+            _ => Style::default().fg(Color::White),
+        }
+    };
+    let btn_label = match ns.convert_status {
+        super::app::ConvertStatus::Idle => "  [ Convert to BIDS ]",
+        super::app::ConvertStatus::Converting => "  [ Converting... ]",
+        super::app::ConvertStatus::Done => "  [ Done! ]",
+        super::app::ConvertStatus::Error => "  [ Error ]",
+    };
+    lines.push(Line::from(Span::styled(btn_label, btn_style)));
+
+    // Show conversion log
+    for msg in &ns.convert_log {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", msg),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+}
+
+/// Render the DICOM series classification section (used within the unified input tab).
+fn draw_dicom_series_section(
+    ds: &super::app::DicomConvertState,
+    lines: &mut Vec<Line<'_>>,
+    in_io: bool,
+) {
+    if ds.dicom_dir.trim().is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  Set DICOM directory above first",
+            Style::default().fg(Color::DarkGray),
+        )));
+        return;
+    }
+
+    if ds.scan_status == super::app::ScanStatus::Scanning {
+        let n = ds.scan_files_examined();
+        lines.push(Line::from(Span::styled(
+            format!("  Scanning DICOM directory... ({} files examined)", n),
+            Style::default().fg(Color::Yellow),
+        )));
+        return;
+    }
+
+    if let Some(ref err) = ds.scan_error {
+        lines.push(Line::from(Span::styled(
+            format!("  Scan error: {}", err),
+            Style::default().fg(Color::Red),
+        )));
+        return;
+    }
+
+    let Some(ref session) = ds.session else {
+        lines.push(Line::from(Span::styled(
+            "  No DICOM files found in directory",
+            Style::default().fg(Color::DarkGray),
+        )));
+        return;
+    };
+
+    lines.push(Line::from(Span::styled(
+        "  -- Series Classification --",
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+    )));
+
+    let mut flat_idx = 0;
+    for subject in &session.subjects {
+        for study in &subject.studies {
+            for acq in &study.acquisitions {
+                let run_label = if acq.run_number > 1 {
+                    format!(" (run {})", acq.run_number)
+                } else {
+                    String::new()
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("  acq-{}{} ({} series)", acq.name, run_label, acq.series.len()),
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                )));
+
+                for series in &acq.series {
+                    let series_focused = !in_io && ds.focus == super::app::DicomFocus::Series(flat_idx);
+                    let type_label = series.series_type.label();
+                    let echo_info = series.echo_time
+                        .map(|et| format!(" TE={:.1}ms", et))
+                        .unwrap_or_default();
+
+                    let style = if series_focused {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    };
+
+                    let type_style = match series.series_type {
+                        crate::dicom::SeriesType::Skip => Style::default().fg(Color::DarkGray),
+                        crate::dicom::SeriesType::Phase => Style::default().fg(Color::Cyan),
+                        crate::dicom::SeriesType::Magnitude => Style::default().fg(Color::Green),
+                        crate::dicom::SeriesType::T1w => Style::default().fg(Color::Magenta),
+                        _ => Style::default().fg(Color::White),
+                    };
+
+                    let line = if series_focused {
+                        Line::from(vec![
+                            Span::styled(
+                                format!("    {:30}", format!("{}{}", series.description, echo_info)),
+                                style,
+                            ),
+                            Span::styled("< ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(type_label, type_style.add_modifier(Modifier::BOLD)),
+                            Span::styled(" >", Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                format!("  ({} files)", series.num_files),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                        ])
+                    } else {
+                        Line::from(vec![
+                            Span::styled(
+                                format!("    {:30}", format!("{}{}", series.description, echo_info)),
+                                style,
+                            ),
+                            Span::styled(format!("[{}]", type_label), type_style),
+                            Span::styled(
+                                format!("  ({} files)", series.num_files),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                        ])
+                    };
+                    lines.push(line);
+                    flat_idx += 1;
+                }
+            }
+        }
+    }
+
+    // Convert button
+    lines.push(Line::from(""));
+    let convert_focused = !in_io && ds.focus == super::app::DicomFocus::ConvertButton;
+    let convert_style = if convert_focused {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let status_span = match ds.convert_status {
+        super::app::ConvertStatus::Idle => Span::styled("  Ready", Style::default().fg(Color::DarkGray)),
+        super::app::ConvertStatus::Converting => Span::styled("  Converting...", Style::default().fg(Color::Yellow)),
+        super::app::ConvertStatus::Done => Span::styled("  Done!", Style::default().fg(Color::Green)),
+        super::app::ConvertStatus::Error => Span::styled("  Error (see log)", Style::default().fg(Color::Red)),
+    };
+    lines.push(Line::from(vec![
+        Span::styled("  [ Convert to BIDS ]", convert_style),
+        status_span,
+    ]));
+
+    // Conversion log
+    if !ds.convert_log.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  -- Conversion Log --",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        )));
+        for log_line in &ds.convert_log {
+            let style = if log_line.starts_with("ERROR:") {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            lines.push(Line::from(Span::styled(format!("  {}", log_line), style)));
+        }
+    }
+}
 
 fn draw_pipeline_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let block = Block::default()

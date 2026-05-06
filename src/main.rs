@@ -1,7 +1,9 @@
 mod bids;
 mod cli;
 mod commands;
+mod dicom;
 mod error;
+mod nifti;
 mod executor;
 mod pipeline;
 #[cfg(test)]
@@ -41,6 +43,7 @@ fn main() {
         Command::Resample(args) => commands::resample::execute(args),
         Command::QualityMap(args) => commands::quality_map::execute(args),
         Command::Tui => tui::run_tui(),
+        Command::Update(args) => commands::update::execute(args),
     };
 
     if let Err(e) = result {

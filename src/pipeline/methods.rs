@@ -132,13 +132,7 @@ pub fn generate_methods(config: &PipelineConfig) -> String {
     }
     add_citation(&mut citations, &CITE_QSMXT);
 
-    // Inhomogeneity correction
-    if config.inhomogeneity_correction {
-        sentences.push("Inhomogeneity correction was applied to the magnitude data prior to masking (Eckstein et al., 2019).".to_string());
-        add_citation(&mut citations, &CITE_BIAS);
-    }
-
-    // Masking
+    // Masking (inhomogeneity correction is described inline)
     describe_masking(config, &mut sentences, &mut citations);
 
     // QSM-specific pipeline
@@ -254,18 +248,67 @@ fn describe_masking(config: &PipelineConfig, sentences: &mut Vec<String>, citati
         return;
     }
 
+    // Describe inhomogeneity correction if enabled, with context about what it affects.
+    // The RSS-combined magnitude is used for both Magnitude and PhaseQuality masking inputs,
+    // while MagnitudeFirst/MagnitudeLast use their specific echo magnitudes.
+    if config.inhomogeneity_correction {
+        add_citation(citations, &CITE_BIAS);
+
+        let inputs: Vec<MaskingInput> = config.mask_sections.iter().map(|s| s.input).collect();
+        let uses_rss = inputs.iter().any(|i| matches!(i, MaskingInput::Magnitude | MaskingInput::PhaseQuality));
+        let uses_first = inputs.iter().any(|i| matches!(i, MaskingInput::MagnitudeFirst));
+        let uses_last = inputs.iter().any(|i| matches!(i, MaskingInput::MagnitudeLast));
+
+        if uses_rss && !uses_first && !uses_last {
+            sentences.push("Inhomogeneity correction (Eckstein et al., 2019) was applied to the RSS-combined magnitude image.".to_string());
+        } else if !uses_rss && (uses_first || uses_last) {
+            let echo = if uses_first { "first" } else { "last" };
+            sentences.push(format!(
+                "Inhomogeneity correction (Eckstein et al., 2019) was applied to the {}-echo magnitude image.",
+                echo
+            ));
+        } else {
+            sentences.push("Inhomogeneity correction (Eckstein et al., 2019) was applied to the magnitude data.".to_string());
+        }
+    }
+
     let section_count = config.mask_sections.len();
     let mut section_descs = Vec::new();
 
     for section in &config.mask_sections {
         let mut parts = Vec::new();
 
-        // Input
+        // Input description — clarify which magnitude goes into ROMEO
         let input_desc = match section.input {
-            MaskingInput::PhaseQuality => "the ROMEO phase quality map",
-            MaskingInput::Magnitude => "the root-sum-of-squares magnitude image",
-            MaskingInput::MagnitudeFirst => "the first-echo magnitude image",
-            MaskingInput::MagnitudeLast => "the last-echo magnitude image",
+            MaskingInput::PhaseQuality => {
+                add_citation(citations, &CITE_ROMEO);
+                if config.inhomogeneity_correction {
+                    "the ROMEO phase quality map (computed from phase data and the inhomogeneity-corrected RSS-combined magnitude)"
+                } else {
+                    "the ROMEO phase quality map (computed from phase data and the RSS-combined magnitude)"
+                }
+            }
+            MaskingInput::Magnitude => {
+                if config.inhomogeneity_correction {
+                    "the inhomogeneity-corrected RSS-combined magnitude image"
+                } else {
+                    "the RSS-combined magnitude image"
+                }
+            }
+            MaskingInput::MagnitudeFirst => {
+                if config.inhomogeneity_correction {
+                    "the inhomogeneity-corrected first-echo magnitude image"
+                } else {
+                    "the first-echo magnitude image"
+                }
+            }
+            MaskingInput::MagnitudeLast => {
+                if config.inhomogeneity_correction {
+                    "the inhomogeneity-corrected last-echo magnitude image"
+                } else {
+                    "the last-echo magnitude image"
+                }
+            }
         };
 
         // Generator

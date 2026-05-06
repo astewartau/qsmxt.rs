@@ -12,6 +12,7 @@ pub mod slurm;
 pub mod swi;
 pub mod t2star;
 pub mod unwrap;
+pub mod update;
 pub mod validate;
 
 #[cfg(test)]

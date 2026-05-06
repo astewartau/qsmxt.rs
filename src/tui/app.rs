@@ -1,9 +1,472 @@
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::bids::discovery::{self, BidsTree};
+use crate::dicom;
+use crate::nifti;
+
+// ─── Input mode ───
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputMode {
+    Bids,
+    NIfTI,
+    DicomToBids,
+}
+
+// ─── DICOM conversion state ───
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DicomFocus {
+    Series(usize), // index into flat series list
+    ConvertButton,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConvertStatus {
+    Idle,
+    Converting,
+    Done,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanStatus {
+    Idle,
+    Scanning,
+    Done,
+    Error,
+}
+
+pub struct DicomConvertState {
+    pub session: Option<dicom::DicomSession>,
+    pub convert_status: ConvertStatus,
+    pub convert_log: Vec<String>,
+    pub convert_errors: Vec<String>,
+    pub focus: DicomFocus,
+    pub scanned_dir: Option<String>,
+    pub scroll_offset: usize,
+    pub dicom_dir: String,
+    pub output_dir: String,
+    pub scan_status: ScanStatus,
+    pub scan_error: Option<String>,
+    scan_receiver: Option<mpsc::Receiver<Result<dicom::DicomSession, String>>>,
+    scan_progress: Arc<AtomicUsize>,
+    convert_receiver: Option<mpsc::Receiver<dicom::convert::ConvertMessage>>,
+}
+
+impl Default for DicomConvertState {
+    fn default() -> Self {
+        Self {
+            session: None,
+            convert_status: ConvertStatus::Idle,
+            convert_log: Vec::new(),
+            convert_errors: Vec::new(),
+            focus: DicomFocus::Series(0),
+            scanned_dir: None,
+            scroll_offset: 0,
+            dicom_dir: String::new(),
+            output_dir: String::new(),
+            scan_status: ScanStatus::Idle,
+            scan_error: None,
+            scan_receiver: None,
+            scan_progress: Arc::new(AtomicUsize::new(0)),
+            convert_receiver: None,
+        }
+    }
+}
+
+impl DicomConvertState {
+    /// Kick off a background scan if the directory changed. Non-blocking.
+    /// Also polls for completion of any in-progress scan.
+    pub fn maybe_rescan(&mut self) {
+        // Always poll for background scan completion first
+        self.poll_scan();
+
+        let trimmed = self.dicom_dir.trim();
+        let dir = if let Some(rest) = trimmed.strip_prefix("~/") {
+            if let Some(home) = std::env::var_os("HOME") {
+                format!("{}/{}", home.to_string_lossy(), rest)
+            } else {
+                trimmed.to_string()
+            }
+        } else {
+            trimmed.to_string()
+        };
+        if dir.is_empty() {
+            return;
+        }
+        // Don't start a new scan if one is already running
+        if self.scan_status == ScanStatus::Scanning {
+            return;
+        }
+        // Don't rescan the same directory
+        if self.scanned_dir.as_deref() == Some(&dir) {
+            return;
+        }
+        // Only scan if path is actually a directory
+        if !Path::new(&dir).is_dir() {
+            return;
+        }
+
+        // Launch background scan
+        let (tx, rx) = mpsc::channel();
+        let dir_clone = dir.clone();
+        self.scan_progress = Arc::new(AtomicUsize::new(0));
+        let progress = Arc::clone(&self.scan_progress);
+        std::thread::spawn(move || {
+            let result = dicom::scan_dicom_directory(Path::new(&dir_clone), progress);
+            let _ = tx.send(result);
+        });
+
+        self.scan_receiver = Some(rx);
+        self.scan_status = ScanStatus::Scanning;
+        self.scan_error = None;
+        self.session = None;
+        self.scanned_dir = Some(dir);
+    }
+
+    /// Number of files examined so far during a scan.
+    pub fn scan_files_examined(&self) -> usize {
+        self.scan_progress.load(Ordering::Relaxed)
+    }
+
+    /// Poll for background conversion messages. Called each frame.
+    pub fn poll_convert(&mut self) -> Option<std::path::PathBuf> {
+        let rx = self.convert_receiver.as_ref()?;
+        let mut completed_bids_dir = None;
+        // Drain all available messages
+        loop {
+            match rx.try_recv() {
+                Ok(dicom::convert::ConvertMessage::Log(line)) => {
+                    self.convert_log.push(line);
+                }
+                Ok(dicom::convert::ConvertMessage::Error(err)) => {
+                    self.convert_log.push(format!("ERROR: {}", err));
+                    self.convert_errors.push(err);
+                }
+                Ok(dicom::convert::ConvertMessage::Done { bids_dir }) => {
+                    if self.convert_errors.is_empty() {
+                        self.convert_status = ConvertStatus::Done;
+                    } else {
+                        self.convert_status = ConvertStatus::Error;
+                    }
+                    self.convert_receiver = None;
+                    completed_bids_dir = Some(bids_dir);
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.convert_status = ConvertStatus::Error;
+                    self.convert_log.push("ERROR: Conversion thread crashed".to_string());
+                    self.convert_receiver = None;
+                    break;
+                }
+            }
+        }
+        completed_bids_dir
+    }
+
+    /// Poll for background scan completion. Called each frame.
+    pub fn poll_scan(&mut self) {
+        let Some(ref rx) = self.scan_receiver else { return };
+        match rx.try_recv() {
+            Ok(Ok(session)) => {
+                self.session = Some(session);
+                self.focus = DicomFocus::Series(0);
+                self.scan_status = ScanStatus::Done;
+                self.scan_receiver = None;
+            }
+            Ok(Err(e)) => {
+                self.session = None;
+                self.scan_status = ScanStatus::Error;
+                self.scan_error = Some(e);
+                self.scan_receiver = None;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                // Still scanning
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.scan_status = ScanStatus::Error;
+                self.scan_error = Some("Scan thread crashed".to_string());
+                self.scan_receiver = None;
+            }
+        }
+    }
+
+    pub fn focus_next(&mut self) {
+        let series_count = self.session.as_ref().map(|s| s.total_series()).unwrap_or(0);
+        match self.focus {
+            DicomFocus::Series(i) => {
+                if i + 1 < series_count {
+                    self.focus = DicomFocus::Series(i + 1);
+                } else {
+                    self.focus = DicomFocus::ConvertButton;
+                }
+            }
+            DicomFocus::ConvertButton => {}
+        }
+    }
+
+    pub fn focus_prev(&mut self) {
+        match self.focus {
+            DicomFocus::Series(0) => {} // at top of series, handle_dicom_tab_key goes to IO
+            DicomFocus::Series(i) => self.focus = DicomFocus::Series(i - 1),
+            DicomFocus::ConvertButton => {
+                let series_count = self.session.as_ref().map(|s| s.total_series()).unwrap_or(0);
+                if series_count > 0 {
+                    self.focus = DicomFocus::Series(series_count - 1);
+                }
+            }
+        }
+    }
+}
+
+// ─── NIfTI input state ───
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NiftiFocus {
+    AddMagnitude,
+    MagFile(usize),
+    AddPhase,
+    PhaseFile(usize),
+    EchoTimes,
+    FieldStrength,
+    B0Direction,
+    ConvertButton,
+}
+
+pub struct NiftiState {
+    pub input_dir: String,
+    pub output_dir: String,
+    pub magnitude_files: Vec<std::path::PathBuf>,
+    pub phase_files: Vec<std::path::PathBuf>,
+    pub echo_times: String,
+    pub field_strength: String,
+    pub b0_direction: String,
+    pub focus: NiftiFocus,
+    pub editing: bool,
+    pub cursor: usize,
+    pub scroll_offset: usize,
+    pub add_pattern: String,
+    pub adding_to: Option<nifti::convert::NiftiPartType>,
+    pub scan_log: Vec<String>,
+    pub convert_status: ConvertStatus,
+    pub convert_log: Vec<String>,
+}
+
+impl Default for NiftiState {
+    fn default() -> Self {
+        Self {
+            input_dir: String::new(),
+            output_dir: String::new(),
+            magnitude_files: Vec::new(),
+            phase_files: Vec::new(),
+            echo_times: String::new(),
+            field_strength: String::new(),
+            b0_direction: "0, 0, 1".to_string(),
+            focus: NiftiFocus::AddMagnitude,
+            editing: false,
+            cursor: 0,
+            scroll_offset: 0,
+            add_pattern: String::new(),
+            adding_to: None,
+            scan_log: Vec::new(),
+            convert_status: ConvertStatus::Idle,
+            convert_log: Vec::new(),
+        }
+    }
+}
+
+impl NiftiState {
+    /// Scan input directory for NIfTI files, auto-classifying from JSON sidecars.
+    pub fn scan_input_directory(&mut self) {
+        let trimmed = self.input_dir.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let dir_str = if let Some(rest) = trimmed.strip_prefix("~/") {
+            if let Some(home) = std::env::var_os("HOME") {
+                format!("{}/{}", home.to_string_lossy(), rest)
+            } else {
+                trimmed.to_string()
+            }
+        } else {
+            trimmed.to_string()
+        };
+        let dir = std::path::Path::new(&dir_str);
+        if !dir.is_dir() {
+            return;
+        }
+
+        let result = nifti::convert::scan_nifti_directory(dir);
+        self.magnitude_files = result.magnitude_files;
+        self.phase_files = result.phase_files;
+
+        // Auto-fill echo times from scan (convert seconds to ms for display)
+        if !result.echo_times_s.is_empty() {
+            self.echo_times = result
+                .echo_times_s
+                .iter()
+                .map(|et| {
+                    let ms = et * 1000.0;
+                    if ms == ms.round() {
+                        format!("{:.0}", ms)
+                    } else {
+                        format!("{:.2}", ms)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+        }
+        if let Some(fs) = result.field_strength {
+            self.field_strength = format!("{}", fs);
+        }
+        if let Some(b0) = result.b0_dir {
+            self.b0_direction = b0.iter().map(|v| format!("{}", v)).collect::<Vec<_>>().join(", ");
+        }
+
+        self.scan_log.clear();
+        for path in &result.unclassified {
+            self.scan_log.push(format!(
+                "Unclassified: {}",
+                path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+            ));
+        }
+    }
+
+    /// Add files from a glob pattern or single path to the specified list.
+    pub fn add_files_from_pattern(&mut self, pattern: &str, part: nifti::convert::NiftiPartType) {
+        let expanded = if let Some(rest) = pattern.trim().strip_prefix("~/") {
+            if let Some(home) = std::env::var_os("HOME") {
+                format!("{}/{}", home.to_string_lossy(), rest)
+            } else {
+                pattern.trim().to_string()
+            }
+        } else {
+            pattern.trim().to_string()
+        };
+
+        let list = match part {
+            nifti::convert::NiftiPartType::Magnitude => &mut self.magnitude_files,
+            nifti::convert::NiftiPartType::Phase => &mut self.phase_files,
+        };
+
+        // Try glob expansion first
+        if let Ok(paths) = glob::glob(&expanded) {
+            let mut found = false;
+            for entry in paths.flatten() {
+                if entry.is_file() {
+                    list.push(entry);
+                    found = true;
+                }
+            }
+            if found {
+                // Try to auto-fill metadata from sidecars of newly added files
+                self.try_autofill_from_sidecars();
+                return;
+            }
+        }
+
+        // Fall back to treating as a single path
+        let path = std::path::PathBuf::from(&expanded);
+        if path.is_file() {
+            list.push(path);
+            self.try_autofill_from_sidecars();
+        }
+    }
+
+    /// Try to auto-fill echo times, field strength, and B0 direction from sidecars.
+    fn try_autofill_from_sidecars(&mut self) {
+        let mut echo_times: Vec<(usize, f64)> = Vec::new();
+
+        for (i, path) in self.magnitude_files.iter().enumerate() {
+            let json_path = crate::dicom::convert::nii_to_json_path(path);
+            if let Some(info) = nifti::convert::read_nifti_sidecar(&json_path) {
+                if let Some(et) = info.echo_time {
+                    echo_times.push((i, et));
+                }
+                if self.field_strength.is_empty() {
+                    if let Some(fs) = info.field_strength {
+                        self.field_strength = format!("{}", fs);
+                    }
+                }
+                if self.b0_direction == "0, 0, 1" {
+                    if let Some(ref b0) = info.b0_dir {
+                        if b0.len() == 3 {
+                            self.b0_direction = b0.iter().map(|v| format!("{}", v)).collect::<Vec<_>>().join(", ");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Auto-fill echo times if we got them for all magnitude files
+        if echo_times.len() == self.magnitude_files.len() && !echo_times.is_empty() {
+            // Sort magnitude files by echo time
+            echo_times.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            let sorted_files: Vec<_> = echo_times.iter().map(|(i, _)| self.magnitude_files[*i].clone()).collect();
+            self.magnitude_files = sorted_files;
+
+            self.echo_times = echo_times
+                .iter()
+                .map(|(_, et)| {
+                    let ms = et * 1000.0;
+                    if ms == ms.round() {
+                        format!("{:.0}", ms)
+                    } else {
+                        format!("{:.2}", ms)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+        }
+    }
+
+    /// Total number of focusable items in the NIfTI section.
+    pub fn focusable_items(&self) -> Vec<NiftiFocus> {
+        let mut items = vec![NiftiFocus::AddMagnitude];
+        for i in 0..self.magnitude_files.len() {
+            items.push(NiftiFocus::MagFile(i));
+        }
+        items.push(NiftiFocus::AddPhase);
+        for i in 0..self.phase_files.len() {
+            items.push(NiftiFocus::PhaseFile(i));
+        }
+        items.extend_from_slice(&[
+            NiftiFocus::EchoTimes,
+            NiftiFocus::FieldStrength,
+            NiftiFocus::B0Direction,
+            NiftiFocus::ConvertButton,
+        ]);
+        items
+    }
+
+    pub fn focus_next(&mut self) {
+        let items = self.focusable_items();
+        if let Some(pos) = items.iter().position(|f| f == &self.focus) {
+            if pos + 1 < items.len() {
+                self.focus = items[pos + 1].clone();
+            }
+        }
+    }
+
+    pub fn focus_prev(&mut self) -> bool {
+        let items = self.focusable_items();
+        if let Some(pos) = items.iter().position(|f| f == &self.focus) {
+            if pos > 0 {
+                self.focus = items[pos - 1].clone();
+                return true;
+            }
+        }
+        false // at the top, caller should go back to IO fields
+    }
+}
 
 pub const TAB_NAMES: [&str; 5] = [
     "Input",
@@ -1222,6 +1685,9 @@ pub struct App {
     pub form_scroll_offset: usize,
     pub methods_scroll_offset: usize,
     pub error_message: Option<String>,
+    pub input_mode: InputMode,
+    pub dicom_state: DicomConvertState,
+    pub nifti_state: NiftiState,
 }
 
 pub struct RunForm {
@@ -1412,6 +1878,9 @@ impl App {
             form_scroll_offset: 0,
             methods_scroll_offset: 0,
             error_message: None,
+            input_mode: InputMode::Bids,
+            dicom_state: DicomConvertState::default(),
+            nifti_state: NiftiState::default(),
         }
     }
 
@@ -1426,6 +1895,24 @@ impl App {
     /// Validate required fields and either set should_run or show error.
     pub fn try_run(&mut self) {
         self.error_message = None;
+
+        // If in DICOM mode, must convert first
+        if self.input_mode == InputMode::DicomToBids
+            && self.dicom_state.convert_status != ConvertStatus::Done
+        {
+            self.error_message = Some("Convert DICOM to BIDS first (Enter on Convert button)".to_string());
+            self.active_tab = 0;
+            return;
+        }
+
+        // NIfTI mode: must convert first
+        if self.input_mode == InputMode::NIfTI
+            && self.nifti_state.convert_status != ConvertStatus::Done
+        {
+            self.error_message = Some("Convert NIfTI to BIDS first (Enter on Convert button)".to_string());
+            self.active_tab = 0;
+            return;
+        }
 
         // BIDS directory is always required
         if self.form.bids_dir.trim().is_empty() {
@@ -1555,16 +2042,41 @@ impl App {
     // ─── Filter tab key handling ───
 
     /// Number of IO fields at the top of the Input tab
-    pub const INPUT_IO_FIELDS: usize = 3; // bids_dir, output_dir, config_file
+    /// Field 0: Input Mode selector, Fields 1-3: text fields
+    pub const INPUT_IO_FIELDS: usize = 4; // mode, bids_dir/dicom_dir, output_dir, config_file
 
     fn handle_input_tab_key(&mut self, key: KeyEvent) {
-        // IO fields are at active_field 0-3, filter tree starts at 4+
+        // If in DICOM mode and past the IO fields, delegate to DICOM handler
+        if self.input_mode == InputMode::DicomToBids && self.active_field >= Self::INPUT_IO_FIELDS {
+            self.handle_dicom_tab_key(key);
+            return;
+        }
+        // If in NIfTI mode and past the IO fields, delegate to NIfTI handler
+        if self.input_mode == InputMode::NIfTI && self.active_field >= Self::INPUT_IO_FIELDS {
+            self.handle_nifti_tab_key(key);
+            return;
+        }
+
         let in_io = self.active_field < Self::INPUT_IO_FIELDS;
 
         if in_io {
-            // Handle IO field editing
-            if self.editing {
+            // Handle IO field editing (not for field 0 which is a selector)
+            if self.editing && self.active_field > 0 {
+                let was_editing = self.editing;
                 self.handle_editing_key(key);
+                let stopped_editing = was_editing && !self.editing;
+
+                // BIDS mode: rescan on every keystroke (fast, just globs)
+                // DICOM/NIfTI mode: only rescan when editing finishes (slow, reads files)
+                if self.input_mode == InputMode::Bids {
+                    let bids_dir = self.form.bids_dir.clone();
+                    self.filter_state.maybe_rescan(&bids_dir);
+                } else if self.input_mode == InputMode::NIfTI && stopped_editing && self.active_field == 1 {
+                    self.nifti_state.scan_input_directory();
+                } else if stopped_editing && self.active_field == 1 {
+                    // Only scan when user finishes editing the DICOM directory field
+                    self.dicom_state.maybe_rescan();
+                }
                 return;
             }
             match key.code {
@@ -1586,57 +2098,93 @@ impl App {
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     if self.active_field + 1 < Self::INPUT_IO_FIELDS {
-                        // Move within IO fields
                         self.active_field += 1;
-                    } else if self.filter_state.tree.is_some() {
-                        // Enter filter tree (only if BIDS dir is loaded)
-                        self.active_field = Self::INPUT_IO_FIELDS;
+                    } else {
+                        let has_content = match self.input_mode {
+                            InputMode::Bids => self.filter_state.tree.is_some(),
+                            InputMode::NIfTI => true, // always has NIfTI fields below
+                            InputMode::DicomToBids => self.dicom_state.session.is_some(),
+                        };
+                        if has_content {
+                            self.active_field = Self::INPUT_IO_FIELDS;
+                        }
                     }
                 }
                 KeyCode::Enter | KeyCode::Char(' ') => self.interact_io_field(),
                 KeyCode::Left => self.adjust_io_select(-1),
                 KeyCode::Right => self.adjust_io_select(1),
-                // Reset focused IO field
                 KeyCode::Char('r') => self.reset_current_field(),
-                // Reset all IO fields
                 KeyCode::Char('R') => self.reset_current_tab(),
                 KeyCode::F(5) => self.try_run(),
                 _ => {}
             }
-            // Trigger BIDS rescan when bids_dir changes
-            let bids_dir = self.form.bids_dir.clone();
-            self.filter_state.maybe_rescan(&bids_dir);
-        } else {
-            // Delegate to filter tree handler, but intercept Up at the top to go back to IO
+            // Trigger rescan
+            if self.input_mode == InputMode::Bids {
+                let bids_dir = self.form.bids_dir.clone();
+                self.filter_state.maybe_rescan(&bids_dir);
+            } else if self.input_mode == InputMode::DicomToBids {
+                self.dicom_state.maybe_rescan();
+            }
+            // NIfTI mode: no auto-rescan on navigation, only on edit finish
+        } else if self.input_mode == InputMode::Bids {
+            // BIDS filter tree
             if self.filter_state.include_editing || self.filter_state.exclude_editing || self.filter_state.num_echoes_editing {
-                // Let filter handle its own editing
                 self.handle_filter_key(key);
                 return;
             }
             match key.code {
                 KeyCode::Up | KeyCode::Char('k') if self.filter_state.focus == FilterFocus::Include => {
-                    // At top of filter tree, go back to IO fields
                     self.active_field = Self::INPUT_IO_FIELDS - 1;
                 }
                 _ => self.handle_filter_key(key),
             }
+        } else {
+            // DICOM series tree (active_field >= INPUT_IO_FIELDS)
+            self.handle_dicom_tab_key(key);
         }
     }
 
     fn interact_io_field(&mut self) {
-        if let 0..=2 = self.active_field { // Text fields: bids_dir, output_dir, config_file
-            self.editing = true;
-            self.cursor_pos = match self.active_field {
-                0 => self.form.bids_dir.len(),
-                1 => self.form.output_dir.len(),
-                2 => self.form.config_file.len(),
-                _ => 0,
-            };
+        if self.active_field == 0 {
+            // Mode selector: toggle on Enter/Space
+            self.toggle_input_mode();
+            return;
+        }
+        // Text fields (1-3)
+        self.editing = true;
+        self.cursor_pos = match self.active_field {
+            1 => match self.input_mode {
+                InputMode::Bids => self.form.bids_dir.len(),
+                InputMode::NIfTI => self.nifti_state.input_dir.len(),
+                InputMode::DicomToBids => self.dicom_state.dicom_dir.len(),
+            },
+            2 => match self.input_mode {
+                InputMode::Bids => self.form.output_dir.len(),
+                InputMode::NIfTI => self.nifti_state.output_dir.len(),
+                InputMode::DicomToBids => self.dicom_state.output_dir.len(),
+            },
+            3 => self.form.config_file.len(),
+            _ => 0,
+        };
+    }
+
+    fn adjust_io_select(&mut self, delta: isize) {
+        if self.active_field == 0 {
+            // Mode selector: Left/Right cycles through modes
+            self.cycle_input_mode(delta);
         }
     }
 
-    fn adjust_io_select(&mut self, _delta: isize) {
-        // No select fields in IO section
+    fn toggle_input_mode(&mut self) {
+        self.cycle_input_mode(1);
+    }
+
+    fn cycle_input_mode(&mut self, delta: isize) {
+        const MODES: [InputMode; 3] = [InputMode::Bids, InputMode::NIfTI, InputMode::DicomToBids];
+        let cur = MODES.iter().position(|m| *m == self.input_mode).unwrap_or(0) as isize;
+        let next = (cur + delta).rem_euclid(MODES.len() as isize) as usize;
+        self.input_mode = MODES[next];
+        self.form_scroll_offset = 0;
     }
 
     /// Reset the focused field on a generic form tab to its default.
@@ -1644,9 +2192,28 @@ impl App {
         let defaults = RunForm::default();
         match (self.active_tab, self.active_field) {
             // Tab 0 (Input) IO fields
-            (0, 0) => self.form.bids_dir = defaults.bids_dir.clone(),
-            (0, 1) => self.form.output_dir = defaults.output_dir.clone(),
-            (0, 2) => self.form.config_file = defaults.config_file.clone(),
+            (0, 0) => self.input_mode = InputMode::Bids,
+            (0, 1) => match self.input_mode {
+                InputMode::Bids => self.form.bids_dir = defaults.bids_dir.clone(),
+                InputMode::NIfTI => {
+                    self.nifti_state.input_dir = String::new();
+                    self.nifti_state.magnitude_files.clear();
+                    self.nifti_state.phase_files.clear();
+                    self.nifti_state.echo_times.clear();
+                    self.nifti_state.scan_log.clear();
+                }
+                InputMode::DicomToBids => {
+                    self.dicom_state.dicom_dir = String::new();
+                    self.dicom_state.scanned_dir = None;
+                    self.dicom_state.session = None;
+                }
+            },
+            (0, 2) => match self.input_mode {
+                InputMode::Bids => self.form.output_dir = defaults.output_dir.clone(),
+                InputMode::NIfTI => self.nifti_state.output_dir = String::new(),
+                InputMode::DicomToBids => self.dicom_state.output_dir = String::new(),
+            },
+            (0, 3) => self.form.config_file = defaults.config_file.clone(),
             // Tab 2 (Supplementary)
             (2, 0) => self.form.do_swi = defaults.do_swi,
             (2, 1) => self.form.swi_scaling = defaults.swi_scaling,
@@ -1677,9 +2244,12 @@ impl App {
         let defaults = RunForm::default();
         match self.active_tab {
             0 => {
+                self.input_mode = InputMode::Bids;
                 self.form.bids_dir = defaults.bids_dir.clone();
                 self.form.output_dir = defaults.output_dir.clone();
                 self.form.config_file = defaults.config_file.clone();
+                self.dicom_state = DicomConvertState::default();
+                self.nifti_state = NiftiState::default();
             }
             2 => {
                 self.form.do_swi = defaults.do_swi;
@@ -1900,6 +2470,442 @@ impl App {
                 }
             KeyCode::Home => fs.num_echoes_cursor = 0,
             KeyCode::End => fs.num_echoes_cursor = fs.num_echoes.len(),
+            _ => {}
+        }
+    }
+
+    // ─── DICOM series tree key handling ───
+    // Handles navigation within the DICOM series tree area (active_field >= INPUT_IO_FIELDS).
+    // IO fields (mode selector, directories) are handled by handle_input_tab_key.
+
+    fn handle_dicom_tab_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+
+            KeyCode::Char(c @ '1'..='5') => {
+                self.active_tab = (c as usize) - ('1' as usize);
+                self.active_field = 0;
+            }
+            KeyCode::Tab => {
+                self.active_tab = (self.active_tab + 1) % TAB_NAMES.len();
+                self.active_field = 0;
+            }
+            KeyCode::BackTab => {
+                self.active_tab = (self.active_tab + TAB_NAMES.len() - 1) % TAB_NAMES.len();
+                self.active_field = 0;
+            }
+
+            // Navigation
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.dicom_state.focus == DicomFocus::Series(0) {
+                    // Go back to IO fields
+                    self.active_field = Self::INPUT_IO_FIELDS - 1;
+                } else {
+                    self.dicom_state.focus_prev();
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => self.dicom_state.focus_next(),
+
+            // Cycle series type
+            KeyCode::Left => {
+                if let DicomFocus::Series(i) = self.dicom_state.focus {
+                    if let Some(ref mut session) = self.dicom_state.session {
+                        let flat = session.flat_series();
+                        if let Some(r) = flat.get(i) {
+                            let s = session.series_mut(r);
+                            s.series_type = s.series_type.prev();
+                        }
+                    }
+                }
+            }
+            KeyCode::Right => {
+                if let DicomFocus::Series(i) = self.dicom_state.focus {
+                    if let Some(ref mut session) = self.dicom_state.session {
+                        let flat = session.flat_series();
+                        if let Some(r) = flat.get(i) {
+                            let s = session.series_mut(r);
+                            s.series_type = s.series_type.next();
+                        }
+                    }
+                }
+            }
+
+            // Interact
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                match self.dicom_state.focus {
+                    DicomFocus::Series(i) => {
+                        if let Some(ref mut session) = self.dicom_state.session {
+                            let flat = session.flat_series();
+                            if let Some(r) = flat.get(i) {
+                                let s = session.series_mut(r);
+                                s.series_type = s.series_type.next();
+                            }
+                        }
+                    }
+                    DicomFocus::ConvertButton => {
+                        self.run_dicom_conversion();
+                    }
+                }
+            }
+
+            KeyCode::F(5) => self.try_run(),
+
+            _ => {}
+        }
+    }
+
+    /// Launch the DICOM → BIDS conversion in a background thread.
+    fn run_dicom_conversion(&mut self) {
+        if self.dicom_state.session.is_none() {
+            self.error_message = Some("No DICOM session loaded".to_string());
+            return;
+        }
+
+        if dicom::convert::find_dcm2niix().is_none() {
+            self.error_message = Some("dcm2niix not found in PATH. Please install it.".to_string());
+            return;
+        }
+
+        if self.dicom_state.convert_status == ConvertStatus::Converting {
+            return; // already running
+        }
+
+        // Determine output directory
+        let output_dir = if self.dicom_state.output_dir.trim().is_empty() {
+            let dicom_dir = self.dicom_state.dicom_dir.trim().to_string();
+            let expanded = if let Some(rest) = dicom_dir.strip_prefix("~/") {
+                if let Some(home) = std::env::var_os("HOME") {
+                    format!("{}/{}", home.to_string_lossy(), rest)
+                } else {
+                    dicom_dir.clone()
+                }
+            } else {
+                dicom_dir.clone()
+            };
+            let p = std::path::Path::new(&expanded);
+            let parent = p.parent().unwrap_or(p);
+            parent.join("bids_output").to_string_lossy().to_string()
+        } else {
+            let d = self.dicom_state.output_dir.trim().to_string();
+            if let Some(rest) = d.strip_prefix("~/") {
+                if let Some(home) = std::env::var_os("HOME") {
+                    format!("{}/{}", home.to_string_lossy(), rest)
+                } else {
+                    d
+                }
+            } else {
+                d
+            }
+        };
+
+        self.dicom_state.convert_status = ConvertStatus::Converting;
+        self.dicom_state.convert_log.clear();
+        self.dicom_state.convert_errors.clear();
+        self.dicom_state.convert_log.push("Starting DICOM to BIDS conversion...".to_string());
+
+        let session = self.dicom_state.session.clone().unwrap();
+        let output_path = std::path::PathBuf::from(&output_dir);
+        let (tx, rx) = mpsc::channel();
+        self.dicom_state.convert_receiver = Some(rx);
+
+        std::thread::spawn(move || {
+            dicom::convert::convert_session_streaming(&session, &output_path, &tx);
+        });
+    }
+
+    /// Run the NIfTI → BIDS conversion synchronously (fast — just file copies + optional 4D split).
+    fn run_nifti_conversion(&mut self) {
+        if self.nifti_state.magnitude_files.is_empty() {
+            self.error_message = Some("Add at least one magnitude file".to_string());
+            return;
+        }
+        if self.nifti_state.phase_files.is_empty() {
+            self.error_message = Some("Add at least one phase file".to_string());
+            return;
+        }
+        if self.nifti_state.echo_times.trim().is_empty() {
+            self.error_message = Some("Echo times are required".to_string());
+            return;
+        }
+        if self.nifti_state.field_strength.trim().is_empty() {
+            self.error_message = Some("Field strength is required".to_string());
+            return;
+        }
+        let field_strength: f64 = match self.nifti_state.field_strength.trim().parse() {
+            Ok(v) => v,
+            Err(_) => {
+                self.error_message = Some("Field strength must be a number".to_string());
+                return;
+            }
+        };
+
+        if self.nifti_state.convert_status == ConvertStatus::Converting {
+            return;
+        }
+
+        let echo_times_s: Vec<f64> = self.nifti_state.echo_times
+            .split(',')
+            .filter_map(|s| s.trim().parse::<f64>().ok().map(|ms| ms / 1000.0))
+            .collect();
+
+        let b0_dir: Vec<f64> = self.nifti_state.b0_direction
+            .split(',')
+            .filter_map(|s| s.trim().parse::<f64>().ok())
+            .collect();
+        let b0_dir = if b0_dir.len() == 3 { b0_dir } else { vec![0.0, 0.0, 1.0] };
+
+        // Determine output directory
+        let output_dir_str = if self.nifti_state.output_dir.trim().is_empty() {
+            let input_dir = self.nifti_state.input_dir.trim();
+            if !input_dir.is_empty() {
+                let expanded = if let Some(rest) = input_dir.strip_prefix("~/") {
+                    if let Some(home) = std::env::var_os("HOME") {
+                        format!("{}/{}", home.to_string_lossy(), rest)
+                    } else {
+                        input_dir.to_string()
+                    }
+                } else {
+                    input_dir.to_string()
+                };
+                let p = std::path::Path::new(&expanded);
+                let parent = p.parent().unwrap_or(p);
+                parent.join("bids_output").to_string_lossy().to_string()
+            } else {
+                "bids_output".to_string()
+            }
+        } else {
+            let d = self.nifti_state.output_dir.trim().to_string();
+            if let Some(rest) = d.strip_prefix("~/") {
+                if let Some(home) = std::env::var_os("HOME") {
+                    format!("{}/{}", home.to_string_lossy(), rest)
+                } else {
+                    d
+                }
+            } else {
+                d
+            }
+        };
+
+        self.nifti_state.convert_status = ConvertStatus::Converting;
+        self.nifti_state.convert_log.clear();
+        self.nifti_state.convert_log.push("Converting NIfTI files to BIDS...".to_string());
+
+        let params = nifti::convert::NiftiToBidsParams {
+            magnitude_files: self.nifti_state.magnitude_files.clone(),
+            phase_files: self.nifti_state.phase_files.clone(),
+            echo_times_s,
+            field_strength,
+            b0_dir,
+            output_dir: std::path::PathBuf::from(&output_dir_str),
+        };
+
+        match nifti::convert::convert_to_bids(&params) {
+            Ok(bids_dir) => {
+                self.nifti_state.convert_log.push(format!("Done! BIDS directory: {}", bids_dir.display()));
+                self.nifti_state.convert_status = ConvertStatus::Done;
+                // Switch to BIDS mode with the generated directory
+                self.form.bids_dir = bids_dir.to_string_lossy().to_string();
+                self.input_mode = InputMode::Bids;
+                self.form_scroll_offset = 0;
+                self.filter_state.scanned_bids_dir = None; // force rescan
+            }
+            Err(e) => {
+                self.nifti_state.convert_log.push(format!("ERROR: {}", e));
+                self.nifti_state.convert_status = ConvertStatus::Error;
+                self.error_message = Some(format!("NIfTI conversion failed: {}", e));
+            }
+        }
+    }
+
+    // ─── NIfTI tab key handling ───
+
+    fn handle_nifti_tab_key(&mut self, key: KeyEvent) {
+        // Handle text editing mode
+        if self.nifti_state.editing {
+            self.handle_nifti_editing(key);
+            return;
+        }
+
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+
+            KeyCode::Char(c @ '1'..='5') => {
+                self.active_tab = (c as usize) - ('1' as usize);
+                self.active_field = 0;
+            }
+            KeyCode::Tab => {
+                self.active_tab = (self.active_tab + 1) % TAB_NAMES.len();
+                self.active_field = 0;
+            }
+            KeyCode::BackTab => {
+                self.active_tab = (self.active_tab + TAB_NAMES.len() - 1) % TAB_NAMES.len();
+                self.active_field = 0;
+            }
+
+            // Navigation
+            KeyCode::Up | KeyCode::Char('k')
+                if !self.nifti_state.focus_prev() =>
+            {
+                // At top of NIfTI section, go back to IO fields
+                self.active_field = Self::INPUT_IO_FIELDS - 1;
+            }
+            KeyCode::Down | KeyCode::Char('j') => self.nifti_state.focus_next(),
+
+            // Reorder files
+            KeyCode::Char('K') => {
+                match &self.nifti_state.focus {
+                    NiftiFocus::MagFile(i) if *i > 0 => {
+                        let i = *i;
+                        self.nifti_state.magnitude_files.swap(i, i - 1);
+                        self.nifti_state.focus = NiftiFocus::MagFile(i - 1);
+                    }
+                    NiftiFocus::PhaseFile(i) if *i > 0 => {
+                        let i = *i;
+                        self.nifti_state.phase_files.swap(i, i - 1);
+                        self.nifti_state.focus = NiftiFocus::PhaseFile(i - 1);
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::Char('J') => {
+                match &self.nifti_state.focus {
+                    NiftiFocus::MagFile(i) if *i + 1 < self.nifti_state.magnitude_files.len() => {
+                        let i = *i;
+                        self.nifti_state.magnitude_files.swap(i, i + 1);
+                        self.nifti_state.focus = NiftiFocus::MagFile(i + 1);
+                    }
+                    NiftiFocus::PhaseFile(i) if *i + 1 < self.nifti_state.phase_files.len() => {
+                        let i = *i;
+                        self.nifti_state.phase_files.swap(i, i + 1);
+                        self.nifti_state.focus = NiftiFocus::PhaseFile(i + 1);
+                    }
+                    _ => {}
+                }
+            }
+
+            // Delete file
+            KeyCode::Delete | KeyCode::Char('d') => {
+                match &self.nifti_state.focus {
+                    NiftiFocus::MagFile(i) => {
+                        let i = *i;
+                        self.nifti_state.magnitude_files.remove(i);
+                        if self.nifti_state.magnitude_files.is_empty() {
+                            self.nifti_state.focus = NiftiFocus::AddMagnitude;
+                        } else if i >= self.nifti_state.magnitude_files.len() {
+                            self.nifti_state.focus = NiftiFocus::MagFile(self.nifti_state.magnitude_files.len() - 1);
+                        }
+                    }
+                    NiftiFocus::PhaseFile(i) => {
+                        let i = *i;
+                        self.nifti_state.phase_files.remove(i);
+                        if self.nifti_state.phase_files.is_empty() {
+                            self.nifti_state.focus = NiftiFocus::AddPhase;
+                        } else if i >= self.nifti_state.phase_files.len() {
+                            self.nifti_state.focus = NiftiFocus::PhaseFile(self.nifti_state.phase_files.len() - 1);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Enter: start editing text fields or add files
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                match &self.nifti_state.focus {
+                    NiftiFocus::AddMagnitude => {
+                        self.nifti_state.editing = true;
+                        self.nifti_state.add_pattern.clear();
+                        self.nifti_state.cursor = 0;
+                        self.nifti_state.adding_to = Some(nifti::convert::NiftiPartType::Magnitude);
+                    }
+                    NiftiFocus::AddPhase => {
+                        self.nifti_state.editing = true;
+                        self.nifti_state.add_pattern.clear();
+                        self.nifti_state.cursor = 0;
+                        self.nifti_state.adding_to = Some(nifti::convert::NiftiPartType::Phase);
+                    }
+                    NiftiFocus::EchoTimes => {
+                        self.nifti_state.editing = true;
+                        self.nifti_state.cursor = self.nifti_state.echo_times.len();
+                        self.nifti_state.adding_to = None;
+                    }
+                    NiftiFocus::FieldStrength => {
+                        self.nifti_state.editing = true;
+                        self.nifti_state.cursor = self.nifti_state.field_strength.len();
+                        self.nifti_state.adding_to = None;
+                    }
+                    NiftiFocus::B0Direction => {
+                        self.nifti_state.editing = true;
+                        self.nifti_state.cursor = self.nifti_state.b0_direction.len();
+                        self.nifti_state.adding_to = None;
+                    }
+                    NiftiFocus::MagFile(_) | NiftiFocus::PhaseFile(_) => {}
+                    NiftiFocus::ConvertButton => {
+                        self.run_nifti_conversion();
+                    }
+                }
+            }
+
+            KeyCode::F(5) => self.try_run(),
+
+            _ => {}
+        }
+    }
+
+    fn handle_nifti_editing(&mut self, key: KeyEvent) {
+        let is_adding_file = self.nifti_state.adding_to.is_some();
+
+        // Get a mutable reference to the string being edited
+        let (text, cursor) = if is_adding_file {
+            (&mut self.nifti_state.add_pattern, &mut self.nifti_state.cursor)
+        } else {
+            match &self.nifti_state.focus {
+                NiftiFocus::EchoTimes => (&mut self.nifti_state.echo_times, &mut self.nifti_state.cursor),
+                NiftiFocus::FieldStrength => (&mut self.nifti_state.field_strength, &mut self.nifti_state.cursor),
+                NiftiFocus::B0Direction => (&mut self.nifti_state.b0_direction, &mut self.nifti_state.cursor),
+                _ => {
+                    self.nifti_state.editing = false;
+                    return;
+                }
+            }
+        };
+
+        match key.code {
+            KeyCode::Esc => {
+                self.nifti_state.editing = false;
+                self.nifti_state.adding_to = None;
+            }
+            KeyCode::Enter => {
+                if is_adding_file {
+                    let pattern = self.nifti_state.add_pattern.clone();
+                    let part = self.nifti_state.adding_to.unwrap();
+                    self.nifti_state.add_files_from_pattern(&pattern, part);
+                    self.nifti_state.add_pattern.clear();
+                    self.nifti_state.adding_to = None;
+                }
+                self.nifti_state.editing = false;
+            }
+            KeyCode::Char(c) => {
+                text.insert(*cursor, c);
+                *cursor += 1;
+            }
+            KeyCode::Backspace if key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) && *cursor > 0 => {
+                let new_pos = word_boundary_left(text, *cursor);
+                text.drain(new_pos..*cursor);
+                *cursor = new_pos;
+            }
+            KeyCode::Backspace if *cursor > 0 => {
+                *cursor -= 1;
+                text.remove(*cursor);
+            }
+            KeyCode::Left => *cursor = cursor.saturating_sub(1),
+            KeyCode::Right => {
+                let len = text.len();
+                if *cursor < len {
+                    *cursor += 1;
+                }
+            }
+            KeyCode::Home => *cursor = 0,
+            KeyCode::End => *cursor = text.len(),
             _ => {}
         }
     }
@@ -2288,9 +3294,17 @@ impl App {
 
     pub fn text_value(&self) -> &str {
         match (self.active_tab, self.active_field) {
-            (0, 0) => &self.form.bids_dir,
-            (0, 1) => &self.form.output_dir,
-            (0, 2) => &self.form.config_file,
+            (0, 1) => match self.input_mode {
+                InputMode::Bids => &self.form.bids_dir,
+                InputMode::NIfTI => &self.nifti_state.input_dir,
+                InputMode::DicomToBids => &self.dicom_state.dicom_dir,
+            },
+            (0, 2) => match self.input_mode {
+                InputMode::Bids => &self.form.output_dir,
+                InputMode::NIfTI => &self.nifti_state.output_dir,
+                InputMode::DicomToBids => &self.dicom_state.output_dir,
+            },
+            (0, 3) => &self.form.config_file,
             (2, 2) => &self.form.swi_strength,
             (2, 3) => &self.form.swi_hp_sigma_x,
             (2, 4) => &self.form.swi_hp_sigma_y,
@@ -2308,9 +3322,17 @@ impl App {
 
     fn text_value_mut(&mut self) -> &mut String {
         match (self.active_tab, self.active_field) {
-            (0, 0) => &mut self.form.bids_dir,
-            (0, 1) => &mut self.form.output_dir,
-            (0, 2) => &mut self.form.config_file,
+            (0, 1) => match self.input_mode {
+                InputMode::Bids => &mut self.form.bids_dir,
+                InputMode::NIfTI => &mut self.nifti_state.input_dir,
+                InputMode::DicomToBids => &mut self.dicom_state.dicom_dir,
+            },
+            (0, 2) => match self.input_mode {
+                InputMode::Bids => &mut self.form.output_dir,
+                InputMode::NIfTI => &mut self.nifti_state.output_dir,
+                InputMode::DicomToBids => &mut self.dicom_state.output_dir,
+            },
+            (0, 3) => &mut self.form.config_file,
             (2, 2) => &mut self.form.swi_strength,
             (2, 3) => &mut self.form.swi_hp_sigma_x,
             (2, 4) => &mut self.form.swi_hp_sigma_y,
@@ -2501,7 +3523,8 @@ mod tests {
     #[test]
     fn test_enter_editing_text_field() {
         let mut app = App::new();
-        // Tab 0, field 0 is BIDS Directory (Text)
+        // Tab 0, field 1 is BIDS Directory (Text) — field 0 is mode selector
+        app.active_field = 1;
         app.handle_key(key(KeyCode::Enter));
         assert!(app.editing);
     }
@@ -2509,6 +3532,7 @@ mod tests {
     #[test]
     fn test_type_characters() {
         let mut app = App::new();
+        app.active_field = 1; // BIDS Directory
         app.handle_key(key(KeyCode::Enter)); // enter editing
         app.handle_key(key(KeyCode::Char('/')));
         app.handle_key(key(KeyCode::Char('d')));
@@ -2522,6 +3546,7 @@ mod tests {
     #[test]
     fn test_backspace() {
         let mut app = App::new();
+        app.active_field = 1;
         app.form.bids_dir = "abc".to_string();
         app.handle_key(key(KeyCode::Enter)); // enter editing, cursor at end (3)
         app.handle_key(key(KeyCode::Backspace));
@@ -2542,6 +3567,7 @@ mod tests {
     #[test]
     fn test_delete_key() {
         let mut app = App::new();
+        app.active_field = 1;
         app.form.bids_dir = "abc".to_string();
         app.editing = true;
         app.cursor_pos = 0;
@@ -2552,6 +3578,7 @@ mod tests {
     #[test]
     fn test_cursor_left_right() {
         let mut app = App::new();
+        app.active_field = 1;
         app.form.bids_dir = "abc".to_string();
         app.editing = true;
         app.cursor_pos = 2;
@@ -2573,6 +3600,7 @@ mod tests {
     #[test]
     fn test_home_end_keys() {
         let mut app = App::new();
+        app.active_field = 1;
         app.form.bids_dir = "abcdef".to_string();
         app.editing = true;
         app.cursor_pos = 3;
@@ -2585,6 +3613,7 @@ mod tests {
     #[test]
     fn test_esc_exits_editing() {
         let mut app = App::new();
+        app.active_field = 1;
         app.editing = true;
         app.handle_key(key(KeyCode::Esc));
         assert!(!app.editing);
@@ -2595,6 +3624,7 @@ mod tests {
     #[test]
     fn test_enter_exits_editing() {
         let mut app = App::new();
+        app.active_field = 1;
         app.editing = true;
         app.handle_key(key(KeyCode::Enter));
         assert!(!app.editing);
@@ -2732,7 +3762,7 @@ mod tests {
     #[test]
     fn test_edit_output_dir() {
         let mut app = App::new();
-        app.active_field = 1; // output_dir
+        app.active_field = 2; // output_dir (field 0=mode, 1=bids_dir, 2=output_dir)
         app.handle_key(key(KeyCode::Enter));
         app.handle_key(key(KeyCode::Char('/')));
         app.handle_key(key(KeyCode::Char('o')));
@@ -2746,7 +3776,7 @@ mod tests {
     #[test]
     fn test_edit_config_file() {
         let mut app = App::new();
-        app.active_field = 2; // config_file
+        app.active_field = 3; // config_file (field 0=mode, 1=bids_dir, 2=output_dir, 3=config)
         app.handle_key(key(KeyCode::Enter));
         app.handle_key(key(KeyCode::Char('c')));
         assert_eq!(app.form.config_file, "c");
@@ -3080,10 +4110,10 @@ mod tests {
     fn test_input_tab_no_tree_cursor_stays() {
         let mut app = App::new();
         app.active_tab = 0;
-        app.active_field = 2; // Config File
+        app.active_field = 3; // Config File (field 0=mode, 1=bids_dir, 2=output_dir, 3=config)
         // No BIDS tree loaded
         assert!(app.filter_state.tree.is_none());
         app.handle_key(key(KeyCode::Down));
-        assert_eq!(app.active_field, 2); // Should stay on Config File
+        assert_eq!(app.active_field, 3); // Should stay on Config File
     }
 }
