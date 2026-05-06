@@ -497,4 +497,152 @@ mod tests {
         assert!(!is_ge_manufacturer("SIEMENS"));
         assert!(!is_ge_manufacturer("Philips"));
     }
+
+    // ─── bids_suffix tests ───
+
+    #[test]
+    fn test_bids_suffix_t1w() {
+        assert_eq!(bids_suffix(SeriesType::T1w), "T1w");
+    }
+
+    #[test]
+    fn test_bids_suffix_magnitude() {
+        assert_eq!(bids_suffix(SeriesType::Magnitude), "MEGRE");
+    }
+
+    #[test]
+    fn test_bids_suffix_phase() {
+        assert_eq!(bids_suffix(SeriesType::Phase), "MEGRE");
+    }
+
+    #[test]
+    fn test_bids_suffix_real() {
+        assert_eq!(bids_suffix(SeriesType::Real), "MEGRE");
+    }
+
+    #[test]
+    fn test_bids_suffix_imaginary() {
+        assert_eq!(bids_suffix(SeriesType::Imaginary), "MEGRE");
+    }
+
+    #[test]
+    fn test_bids_suffix_extra() {
+        assert_eq!(bids_suffix(SeriesType::Extra), "MEGRE");
+    }
+
+    #[test]
+    fn test_bids_suffix_skip() {
+        assert_eq!(bids_suffix(SeriesType::Skip), "MEGRE");
+    }
+
+    // ─── bids_part tests ───
+
+    #[test]
+    fn test_bids_part_magnitude() {
+        assert_eq!(bids_part(SeriesType::Magnitude), Some("mag"));
+    }
+
+    #[test]
+    fn test_bids_part_phase() {
+        assert_eq!(bids_part(SeriesType::Phase), Some("phase"));
+    }
+
+    #[test]
+    fn test_bids_part_real() {
+        assert_eq!(bids_part(SeriesType::Real), Some("real"));
+    }
+
+    #[test]
+    fn test_bids_part_imaginary() {
+        assert_eq!(bids_part(SeriesType::Imaginary), Some("imag"));
+    }
+
+    #[test]
+    fn test_bids_part_t1w() {
+        assert_eq!(bids_part(SeriesType::T1w), None);
+    }
+
+    #[test]
+    fn test_bids_part_extra() {
+        assert_eq!(bids_part(SeriesType::Extra), None);
+    }
+
+    #[test]
+    fn test_bids_part_skip() {
+        assert_eq!(bids_part(SeriesType::Skip), None);
+    }
+
+    // ─── nii_to_json_path tests ───
+
+    #[test]
+    fn test_nii_to_json_path_nii_gz() {
+        let p = nii_to_json_path(Path::new("/data/sub-01_T1w.nii.gz"));
+        assert_eq!(p, PathBuf::from("/data/sub-01_T1w.json"));
+    }
+
+    #[test]
+    fn test_nii_to_json_path_nii() {
+        let p = nii_to_json_path(Path::new("/data/sub-01_T1w.nii"));
+        assert_eq!(p, PathBuf::from("/data/sub-01_T1w.json"));
+    }
+
+    #[test]
+    fn test_nii_to_json_path_other_extension() {
+        let p = nii_to_json_path(Path::new("/data/sub-01_T1w.bval"));
+        assert_eq!(p, PathBuf::from("/data/sub-01_T1w.bval.json"));
+    }
+
+    // ─── nifti_4d_size tests ───
+
+    #[test]
+    fn test_nifti_4d_size_3d_returns_none() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let nii_path = dir.path().join("mag.nii");
+        crate::testutils::write_magnitude(&nii_path);
+        assert_eq!(nifti_4d_size(&nii_path), None);
+    }
+
+    // ─── is_ge_manufacturer tests ───
+
+    #[test]
+    fn test_is_ge_manufacturer_lowercase() {
+        assert!(is_ge_manufacturer("ge medical systems"));
+    }
+
+    #[test]
+    fn test_is_ge_manufacturer_mixed_case() {
+        assert!(is_ge_manufacturer("General Electric"));
+    }
+
+    #[test]
+    fn test_is_ge_manufacturer_empty() {
+        assert!(!is_ge_manufacturer(""));
+    }
+
+    #[test]
+    fn test_is_ge_manufacturer_other_vendors() {
+        assert!(!is_ge_manufacturer("SIEMENS HEALTHINEERS"));
+        assert!(!is_ge_manufacturer("Philips Medical"));
+        assert!(!is_ge_manufacturer("Canon"));
+    }
+
+    // ─── build_bids_filename with T1w suffix and no part ───
+
+    #[test]
+    fn test_build_bids_filename_t1w_no_part() {
+        let name = build_bids_filename(&BidsNameParts {
+            sub: "01", ses: None, acq: "mprage", run: 1, rec: None,
+            echo: None, part: None, suffix: "T1w", extension: ".nii.gz",
+        });
+        assert_eq!(name, "sub-01_acq-mprage_T1w.nii.gz");
+    }
+
+    #[test]
+    fn test_build_bids_filename_t1w_no_part_with_session() {
+        let name = build_bids_filename(&BidsNameParts {
+            sub: "02", ses: Some("20240101"), acq: "mprage", run: 1, rec: None,
+            echo: None, part: None, suffix: "T1w", extension: ".nii.gz",
+        });
+        assert_eq!(name, "sub-02_ses-20240101_acq-mprage_T1w.nii.gz");
+    }
 }

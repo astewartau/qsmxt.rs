@@ -390,4 +390,172 @@ mod tests {
         assert!((value["EchoTime"].as_f64().unwrap() - 0.02).abs() < 1e-10);
         assert!((value["MagneticFieldStrength"].as_f64().unwrap() - 3.0).abs() < 1e-10);
     }
+
+    #[test]
+    fn test_write_sidecar_no_echo_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let nii_path = dir.path().join("no_echo.nii.gz");
+        fs::write(&nii_path, b"dummy").unwrap();
+
+        write_sidecar(&nii_path, None, 7.0, &[0.0, 0.0, 1.0]).unwrap();
+
+        let json_path = dir.path().join("no_echo.json");
+        let text = fs::read_to_string(&json_path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(value.get("EchoTime").is_none());
+        assert!((value["MagneticFieldStrength"].as_f64().unwrap() - 7.0).abs() < 1e-10);
+        assert_eq!(
+            value["B0_dir"].as_array().unwrap().len(),
+            3
+        );
+    }
+
+    #[test]
+    fn test_write_sidecar_empty_b0_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let nii_path = dir.path().join("no_b0.nii.gz");
+        fs::write(&nii_path, b"dummy").unwrap();
+
+        write_sidecar(&nii_path, Some(0.01), 3.0, &[]).unwrap();
+
+        let json_path = dir.path().join("no_b0.json");
+        let text = fs::read_to_string(&json_path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(value.get("B0_dir").is_none());
+        assert!((value["EchoTime"].as_f64().unwrap() - 0.01).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_read_nifti_sidecar_phase_image_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let json_path = dir.path().join("phase_test.json");
+        fs::write(
+            &json_path,
+            r#"{
+                "EchoTime": 0.005,
+                "MagneticFieldStrength": 7.0,
+                "ImageType": ["ORIGINAL", "PRIMARY", "PHASE"]
+            }"#,
+        )
+        .unwrap();
+
+        let info = read_nifti_sidecar(&json_path).unwrap();
+        assert_eq!(info.image_type, Some(NiftiPartType::Phase));
+        assert!((info.echo_time.unwrap() - 0.005).abs() < 1e-10);
+        assert!((info.field_strength.unwrap() - 7.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_scan_nifti_directory_classifies_mag_and_phase() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create two magnitude NIfTI files with JSON sidecars
+        let mag1 = dir.path().join("mag_echo1.nii.gz");
+        let mag2 = dir.path().join("mag_echo2.nii.gz");
+        crate::testutils::write_magnitude(&mag1);
+        crate::testutils::write_magnitude(&mag2);
+        fs::write(
+            dir.path().join("mag_echo1.json"),
+            r#"{"EchoTime": 0.008, "MagneticFieldStrength": 3.0, "B0_dir": [0.0, 0.0, 1.0], "ImageType": ["ORIGINAL", "PRIMARY", "M"]}"#,
+        ).unwrap();
+        fs::write(
+            dir.path().join("mag_echo2.json"),
+            r#"{"EchoTime": 0.004, "MagneticFieldStrength": 3.0, "ImageType": ["ORIGINAL", "PRIMARY", "MAGNITUDE"]}"#,
+        ).unwrap();
+
+        // Create one phase NIfTI file with JSON sidecar
+        let phase1 = dir.path().join("phase_echo1.nii.gz");
+        crate::testutils::write_phase(&phase1);
+        fs::write(
+            dir.path().join("phase_echo1.json"),
+            r#"{"EchoTime": 0.004, "ImageType": ["ORIGINAL", "PRIMARY", "P"]}"#,
+        ).unwrap();
+
+        let result = scan_nifti_directory(dir.path());
+        assert_eq!(result.magnitude_files.len(), 2);
+        assert_eq!(result.phase_files.len(), 1);
+        assert_eq!(result.unclassified.len(), 0);
+        // Magnitude files should be sorted by echo time: 0.004 first, then 0.008
+        assert_eq!(result.echo_times_s, vec![0.004, 0.008]);
+        assert!((result.field_strength.unwrap() - 3.0).abs() < 1e-10);
+        assert_eq!(result.b0_dir.unwrap(), vec![0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn test_scan_nifti_directory_nonexistent() {
+        let result = scan_nifti_directory(Path::new("/nonexistent/path/to/nifti"));
+        assert!(result.magnitude_files.is_empty());
+        assert!(result.phase_files.is_empty());
+        assert!(result.echo_times_s.is_empty());
+        assert!(result.field_strength.is_none());
+        assert!(result.b0_dir.is_none());
+        assert!(result.unclassified.is_empty());
+    }
+
+    #[test]
+    fn test_scan_nifti_directory_no_json_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create NIfTI files without JSON sidecars
+        let nii1 = dir.path().join("orphan1.nii.gz");
+        let nii2 = dir.path().join("orphan2.nii.gz");
+        crate::testutils::write_magnitude(&nii1);
+        crate::testutils::write_phase(&nii2);
+
+        let result = scan_nifti_directory(dir.path());
+        assert!(result.magnitude_files.is_empty());
+        assert!(result.phase_files.is_empty());
+        assert_eq!(result.unclassified.len(), 2);
+    }
+
+    #[test]
+    fn test_convert_to_bids() {
+        let dir = tempfile::tempdir().unwrap();
+        let input_dir = dir.path().join("input");
+        let output_dir = dir.path().join("output");
+        fs::create_dir_all(&input_dir).unwrap();
+
+        // Create magnitude and phase input files
+        let mag_path = input_dir.join("mag.nii.gz");
+        let phase_path = input_dir.join("phase.nii.gz");
+        crate::testutils::write_magnitude(&mag_path);
+        crate::testutils::write_phase(&phase_path);
+
+        let params = NiftiToBidsParams {
+            magnitude_files: vec![mag_path],
+            phase_files: vec![phase_path],
+            echo_times_s: vec![0.02],
+            field_strength: 3.0,
+            b0_dir: vec![0.0, 0.0, 1.0],
+            output_dir: output_dir.clone(),
+        };
+
+        let result = convert_to_bids(&params).unwrap();
+        assert_eq!(result, output_dir);
+
+        let anat_dir = output_dir.join("sub-01").join("anat");
+        assert!(anat_dir.exists());
+
+        // Check magnitude file and sidecar
+        let mag_bids = anat_dir.join("sub-01_acq-nifti_echo-1_part-mag_MEGRE.nii.gz");
+        assert!(mag_bids.exists(), "Magnitude BIDS file should exist");
+        let mag_json = anat_dir.join("sub-01_acq-nifti_echo-1_part-mag_MEGRE.json");
+        assert!(mag_json.exists(), "Magnitude JSON sidecar should exist");
+
+        // Check phase file and sidecar
+        let phase_bids = anat_dir.join("sub-01_acq-nifti_echo-1_part-phase_MEGRE.nii.gz");
+        assert!(phase_bids.exists(), "Phase BIDS file should exist");
+        let phase_json = anat_dir.join("sub-01_acq-nifti_echo-1_part-phase_MEGRE.json");
+        assert!(phase_json.exists(), "Phase JSON sidecar should exist");
+
+        // Verify sidecar content
+        let text = fs::read_to_string(&mag_json).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!((value["EchoTime"].as_f64().unwrap() - 0.02).abs() < 1e-10);
+        assert!((value["MagneticFieldStrength"].as_f64().unwrap() - 3.0).abs() < 1e-10);
+        assert_eq!(
+            value["B0_dir"].as_array().unwrap().len(),
+            3
+        );
+    }
 }

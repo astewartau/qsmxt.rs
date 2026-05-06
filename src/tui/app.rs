@@ -4116,4 +4116,184 @@ mod tests {
         app.handle_key(key(KeyCode::Down));
         assert_eq!(app.active_field, 3); // Should stay on Config File
     }
+
+    // --- NIfTI mode tests ---
+
+    #[test]
+    fn test_nifti_mode_switching() {
+        let mut app = App::new();
+        assert_eq!(app.input_mode, InputMode::Bids);
+        // Field 0 is the mode selector; Right arrow cycles Bids -> NIfTI
+        app.active_field = 0;
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.input_mode, InputMode::NIfTI);
+    }
+
+    #[test]
+    fn test_nifti_focus_navigation_into_nifti_section() {
+        let mut app = App::new();
+        app.active_field = 0;
+        app.handle_key(key(KeyCode::Right)); // switch to NIfTI mode
+        assert_eq!(app.input_mode, InputMode::NIfTI);
+        // Navigate down past IO fields (0..3) into NIfTI section
+        app.active_field = 3;
+        app.handle_key(key(KeyCode::Down));
+        // NIfTI mode always has content below, so active_field should be INPUT_IO_FIELDS (4)
+        assert_eq!(app.active_field, App::INPUT_IO_FIELDS);
+        // Default NIfTI focus is AddMagnitude
+        assert_eq!(app.nifti_state.focus, NiftiFocus::AddMagnitude);
+    }
+
+    #[test]
+    fn test_nifti_state_focus_next_and_prev() {
+        let mut ns = NiftiState::default();
+        assert_eq!(ns.focus, NiftiFocus::AddMagnitude);
+        // focus_next cycles through items (no mag/phase files, so: AddMagnitude -> AddPhase -> EchoTimes -> ...)
+        ns.focus_next();
+        assert_eq!(ns.focus, NiftiFocus::AddPhase);
+        ns.focus_next();
+        assert_eq!(ns.focus, NiftiFocus::EchoTimes);
+        ns.focus_next();
+        assert_eq!(ns.focus, NiftiFocus::FieldStrength);
+        ns.focus_next();
+        assert_eq!(ns.focus, NiftiFocus::B0Direction);
+        ns.focus_next();
+        assert_eq!(ns.focus, NiftiFocus::ConvertButton);
+
+        // focus_prev returns true when it moves
+        assert!(ns.focus_prev());
+        assert_eq!(ns.focus, NiftiFocus::B0Direction);
+
+        // Go back to the top
+        ns.focus = NiftiFocus::AddMagnitude;
+        // focus_prev at the top returns false
+        assert!(!ns.focus_prev());
+    }
+
+    #[test]
+    fn test_nifti_editing_echo_times() {
+        let mut app = App::new();
+        app.active_field = 0;
+        app.handle_key(key(KeyCode::Right)); // switch to NIfTI
+        // Navigate into NIfTI section
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.focus = NiftiFocus::EchoTimes;
+        // Press Enter to start editing
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.nifti_state.editing);
+        // Type characters
+        app.handle_key(key(KeyCode::Char('4')));
+        app.handle_key(key(KeyCode::Char(',')));
+        app.handle_key(key(KeyCode::Char(' ')));
+        app.handle_key(key(KeyCode::Char('8')));
+        assert_eq!(app.nifti_state.echo_times, "4, 8");
+    }
+
+    #[test]
+    fn test_nifti_editing_field_strength() {
+        let mut app = App::new();
+        app.active_field = 0;
+        app.handle_key(key(KeyCode::Right)); // switch to NIfTI
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.focus = NiftiFocus::FieldStrength;
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.nifti_state.editing);
+        app.handle_key(key(KeyCode::Char('3')));
+        app.handle_key(key(KeyCode::Char('.')));
+        app.handle_key(key(KeyCode::Char('0')));
+        // Escape exits editing
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.nifti_state.editing);
+        assert_eq!(app.nifti_state.field_strength, "3.0");
+    }
+
+    #[test]
+    fn test_nifti_editing_b0_direction() {
+        let mut app = App::new();
+        app.active_field = 0;
+        app.handle_key(key(KeyCode::Right)); // switch to NIfTI
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.focus = NiftiFocus::B0Direction;
+        // Clear default value first
+        app.nifti_state.b0_direction.clear();
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.nifti_state.editing);
+        app.handle_key(key(KeyCode::Char('1')));
+        app.handle_key(key(KeyCode::Char(',')));
+        app.handle_key(key(KeyCode::Char('0')));
+        app.handle_key(key(KeyCode::Char(',')));
+        app.handle_key(key(KeyCode::Char('0')));
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.nifti_state.b0_direction, "1,0,0");
+    }
+
+    #[test]
+    fn test_dicom_mode_switching() {
+        let mut app = App::new();
+        assert_eq!(app.input_mode, InputMode::Bids);
+        app.active_field = 0;
+        // Right twice: Bids -> NIfTI -> DicomToBids
+        app.handle_key(key(KeyCode::Right));
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.input_mode, InputMode::DicomToBids);
+    }
+
+    #[test]
+    fn test_dicom_state_default_focus() {
+        let ds = DicomConvertState::default();
+        assert_eq!(ds.focus, DicomFocus::Series(0));
+    }
+
+    #[test]
+    fn test_nifti_scan_input_directory_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ns = NiftiState {
+            input_dir: dir.path().to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        ns.scan_input_directory();
+        assert!(ns.magnitude_files.is_empty());
+        assert!(ns.phase_files.is_empty());
+    }
+
+    #[test]
+    fn test_nifti_add_magnitude_editing() {
+        let mut app = App::new();
+        app.active_field = 0;
+        app.handle_key(key(KeyCode::Right)); // switch to NIfTI
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.focus = NiftiFocus::AddMagnitude;
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.nifti_state.editing);
+        assert_eq!(
+            app.nifti_state.adding_to,
+            Some(crate::nifti::convert::NiftiPartType::Magnitude)
+        );
+    }
+
+    #[test]
+    fn test_nifti_add_phase_editing() {
+        let mut app = App::new();
+        app.active_field = 0;
+        app.handle_key(key(KeyCode::Right)); // switch to NIfTI
+        app.active_field = App::INPUT_IO_FIELDS;
+        app.nifti_state.focus = NiftiFocus::AddPhase;
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.nifti_state.editing);
+        assert_eq!(
+            app.nifti_state.adding_to,
+            Some(crate::nifti::convert::NiftiPartType::Phase)
+        );
+    }
+
+    #[test]
+    fn test_nifti_focus_wrapping_at_convert_button() {
+        let mut ns = NiftiState {
+            focus: NiftiFocus::ConvertButton,
+            ..Default::default()
+        };
+        // focus_next at ConvertButton should stay at ConvertButton
+        ns.focus_next();
+        assert_eq!(ns.focus, NiftiFocus::ConvertButton);
+    }
 }

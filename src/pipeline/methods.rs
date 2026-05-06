@@ -394,3 +394,719 @@ fn join_list(items: &[String]) -> String {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── Helper ───
+
+    fn default_cfg() -> PipelineConfig {
+        PipelineConfig::default()
+    }
+
+    // ─── 17. join_list ───
+
+    #[test]
+    fn test_join_list_empty() {
+        assert_eq!(join_list(&[]), "");
+    }
+
+    #[test]
+    fn test_join_list_one() {
+        assert_eq!(join_list(&["alpha".into()]), "alpha");
+    }
+
+    #[test]
+    fn test_join_list_two() {
+        assert_eq!(join_list(&["alpha".into(), "beta".into()]), "alpha and beta");
+    }
+
+    #[test]
+    fn test_join_list_three_plus() {
+        let items: Vec<String> = vec!["a".into(), "b".into(), "c".into()];
+        assert_eq!(join_list(&items), "a, b, and c");
+
+        let four: Vec<String> = vec!["w".into(), "x".into(), "y".into(), "z".into()];
+        assert_eq!(join_list(&four), "w, x, y, and z");
+    }
+
+    // ─── 18. cite_inline ───
+
+    #[test]
+    fn test_cite_inline_known_keys() {
+        assert_eq!(cite_inline(&CITE_VSHARP), "Wu et al., 2012");
+        assert_eq!(cite_inline(&CITE_SHARP), "Schweser et al., 2011");
+        assert_eq!(cite_inline(&CITE_PDF), "Liu et al., 2011");
+        assert_eq!(cite_inline(&CITE_ISMV), "Wen et al., 2014");
+        assert_eq!(cite_inline(&CITE_LBV), "Zhou et al., 2014");
+        assert_eq!(cite_inline(&CITE_RTS), "Kames et al., 2018");
+        assert_eq!(cite_inline(&CITE_TV), "Bilgic et al., 2014");
+        assert_eq!(cite_inline(&CITE_TKD), "Shmueli et al., 2009");
+        assert_eq!(cite_inline(&CITE_TIKHONOV), "Bilgic et al., 2014");
+        assert_eq!(cite_inline(&CITE_MEDI), "Liu et al., 2011");
+        assert_eq!(cite_inline(&CITE_ILSQR), "Li et al., 2015");
+    }
+
+    #[test]
+    fn test_cite_inline_unknown_key_returns_key() {
+        let unknown = Citation { key: "unknown2099", text: "Some text" };
+        assert_eq!(cite_inline(&unknown), "unknown2099");
+    }
+
+    // ─── 1. Default config ───
+
+    #[test]
+    fn test_default_config_methods() {
+        let cfg = default_cfg();
+        let out = generate_methods(&cfg);
+        assert!(out.contains("QSM processing was performed using qsmxt.rs"));
+        assert!(out.contains("Stewart, 2026"));
+        assert!(out.contains("MCPC-3D-S"));
+        assert!(out.contains("ROMEO"));
+        assert!(out.contains("V-SHARP"));
+        assert!(out.contains("RTS"));
+        assert!(out.contains("mean-referenced"));
+        assert!(out.contains("# Methods"));
+        assert!(out.contains("## References"));
+    }
+
+    // ─── 2. TGV single-step ───
+
+    #[test]
+    fn test_tgv_algorithm() {
+        let cfg = PipelineConfig {
+            qsm_algorithm: QsmAlgorithm::Tgv,
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("Total Generalized Variation (TGV)"));
+        assert!(out.contains("Langkammer et al., 2015"));
+        assert!(out.contains("single step"));
+        // Should NOT have separate unwrapping/BF removal sentences
+        assert!(!out.contains("Phase unwrapping was performed"));
+        assert!(!out.contains("Background field removal was performed"));
+    }
+
+    // ─── 3. QSMART ───
+
+    #[test]
+    fn test_qsmart_algorithm() {
+        let cfg = PipelineConfig {
+            qsm_algorithm: QsmAlgorithm::Qsmart,
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("QSMART"));
+        assert!(out.contains("Yaghmaie et al., 2021"));
+        assert!(!out.contains("Phase unwrapping was performed"));
+        assert!(!out.contains("Background field removal was performed"));
+    }
+
+    // ─── 4. Non-TGV with combine_phase ───
+
+    #[test]
+    fn test_combine_phase_mcpc3ds() {
+        let cfg = PipelineConfig {
+            qsm_algorithm: QsmAlgorithm::Rts,
+            combine_phase: true,
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("MCPC-3D-S"));
+        assert!(out.contains("Eckstein et al., 2018"));
+    }
+
+    #[test]
+    fn test_no_combine_phase() {
+        let cfg = PipelineConfig {
+            combine_phase: false,
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(!out.contains("MCPC-3D-S"));
+    }
+
+    // ─── 5. Unwrapping algorithms ───
+
+    #[test]
+    fn test_unwrapping_romeo() {
+        let cfg = PipelineConfig {
+            unwrapping_algorithm: Some(UnwrappingAlgorithm::Romeo),
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("ROMEO"));
+        assert!(out.contains("Dymerska et al., 2021"));
+    }
+
+    #[test]
+    fn test_unwrapping_laplacian() {
+        let cfg = PipelineConfig {
+            unwrapping_algorithm: Some(UnwrappingAlgorithm::Laplacian),
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("Laplacian method"));
+        assert!(out.contains("Schofield"));
+    }
+
+    // ─── 6. BF algorithms ───
+
+    #[test]
+    fn test_bf_vsharp() {
+        let cfg = PipelineConfig {
+            bf_algorithm: Some(BfAlgorithm::Vsharp),
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("V-SHARP"));
+        assert!(out.contains("Wu et al., 2012"));
+    }
+
+    #[test]
+    fn test_bf_pdf() {
+        let cfg = PipelineConfig {
+            bf_algorithm: Some(BfAlgorithm::Pdf),
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("PDF"));
+        assert!(out.contains("Liu et al., 2011"));
+    }
+
+    #[test]
+    fn test_bf_lbv() {
+        let cfg = PipelineConfig {
+            bf_algorithm: Some(BfAlgorithm::Lbv),
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("LBV"));
+        assert!(out.contains("Zhou et al., 2014"));
+    }
+
+    #[test]
+    fn test_bf_ismv() {
+        let cfg = PipelineConfig {
+            bf_algorithm: Some(BfAlgorithm::Ismv),
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("iSMV"));
+        assert!(out.contains("Wen et al., 2014"));
+    }
+
+    #[test]
+    fn test_bf_sharp() {
+        let cfg = PipelineConfig {
+            bf_algorithm: Some(BfAlgorithm::Sharp),
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("SHARP"));
+        assert!(out.contains("Schweser et al., 2011"));
+    }
+
+    // ─── 7. QSM algorithms (dipole inversion) ───
+
+    fn test_qsm_alg(alg: QsmAlgorithm, expected_name: &str, expected_cite: &str) {
+        let cfg = PipelineConfig {
+            qsm_algorithm: alg,
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("Dipole inversion was performed using"), "Missing dipole inversion sentence for {:?}", alg);
+        assert!(out.contains(expected_name), "Missing algorithm name '{}' for {:?}", expected_name, alg);
+        assert!(out.contains(expected_cite), "Missing citation '{}' for {:?}", expected_cite, alg);
+    }
+
+    #[test]
+    fn test_qsm_rts() {
+        test_qsm_alg(QsmAlgorithm::Rts, "RTS", "Kames et al., 2018");
+    }
+
+    #[test]
+    fn test_qsm_tv() {
+        test_qsm_alg(QsmAlgorithm::Tv, "Total Variation", "Bilgic et al., 2014");
+    }
+
+    #[test]
+    fn test_qsm_tkd() {
+        test_qsm_alg(QsmAlgorithm::Tkd, "TKD", "Shmueli et al., 2009");
+    }
+
+    #[test]
+    fn test_qsm_tsvd() {
+        test_qsm_alg(QsmAlgorithm::Tsvd, "TSVD", "Shmueli et al., 2009");
+    }
+
+    #[test]
+    fn test_qsm_tikhonov() {
+        test_qsm_alg(QsmAlgorithm::Tikhonov, "Tikhonov", "Bilgic et al., 2014");
+    }
+
+    #[test]
+    fn test_qsm_nltv() {
+        test_qsm_alg(QsmAlgorithm::Nltv, "NLTV", "Kames et al., 2018");
+    }
+
+    #[test]
+    fn test_qsm_medi() {
+        test_qsm_alg(QsmAlgorithm::Medi, "MEDI", "Liu et al., 2011");
+    }
+
+    #[test]
+    fn test_qsm_ilsqr() {
+        test_qsm_alg(QsmAlgorithm::Ilsqr, "iLSQR", "Li et al., 2015");
+    }
+
+    // ─── 8. do_qsm = false ───
+
+    #[test]
+    fn test_do_qsm_false() {
+        let cfg = PipelineConfig {
+            do_qsm: false,
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("MRI processing was performed using qsmxt.rs"));
+        assert!(!out.contains("QSM processing"));
+        assert!(!out.contains("Dipole inversion"));
+        assert!(!out.contains("Phase unwrapping was performed"));
+        assert!(!out.contains("Background field removal"));
+        assert!(!out.contains("susceptibility map was mean-referenced"));
+    }
+
+    // ─── 9. do_swi ───
+
+    #[test]
+    fn test_do_swi() {
+        let cfg = PipelineConfig {
+            do_swi: true,
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("CLEAR-SWI"));
+        assert!(out.contains("Eckstein et al., 2024"));
+    }
+
+    #[test]
+    fn test_no_swi() {
+        let cfg = default_cfg();
+        let out = generate_methods(&cfg);
+        assert!(!out.contains("CLEAR-SWI"));
+    }
+
+    // ─── 10. T2* and R2* both ───
+
+    #[test]
+    fn test_t2star_and_r2star_both() {
+        let cfg = PipelineConfig {
+            do_t2starmap: true,
+            do_r2starmap: true,
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("T2* and R2* maps"));
+        assert!(out.contains("ARLO"));
+        assert!(out.contains("Pei et al., 2015"));
+    }
+
+    // ─── 11. T2* only, R2* only ───
+
+    #[test]
+    fn test_t2star_only() {
+        let cfg = PipelineConfig {
+            do_t2starmap: true,
+            do_r2starmap: false,
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("T2* maps were computed"));
+        assert!(!out.contains("R2* maps"));
+        assert!(!out.contains("T2* and R2*"));
+    }
+
+    #[test]
+    fn test_r2star_only() {
+        let cfg = PipelineConfig {
+            do_t2starmap: false,
+            do_r2starmap: true,
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("R2* maps were computed"));
+        assert!(!out.contains("T2* maps"));
+        assert!(!out.contains("T2* and R2*"));
+    }
+
+    // ─── 12. QsmReference ───
+
+    #[test]
+    fn test_qsm_reference_mean() {
+        let cfg = PipelineConfig {
+            qsm_reference: QsmReference::Mean,
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("mean-referenced within the brain mask"));
+    }
+
+    #[test]
+    fn test_qsm_reference_none() {
+        let cfg = PipelineConfig {
+            qsm_reference: QsmReference::None,
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("No susceptibility referencing was applied"));
+    }
+
+    // ─── 13. Masking generators ───
+
+    #[test]
+    fn test_masking_otsu_threshold() {
+        let cfg = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("Otsu thresholding"));
+        assert!(out.contains("Otsu, 1979"));
+    }
+
+    #[test]
+    fn test_masking_bet() {
+        let cfg = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Bet { fractional_intensity: 0.35 },
+                refinements: vec![],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("BET brain extraction"));
+        assert!(out.contains("Smith, 2002"));
+        assert!(out.contains("f=0.35"));
+    }
+
+    #[test]
+    fn test_masking_fixed_threshold() {
+        let cfg = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Fixed, value: Some(0.3) },
+                refinements: vec![],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("fixed thresholding"));
+        assert!(out.contains("value=0.3"));
+    }
+
+    #[test]
+    fn test_masking_percentile_threshold() {
+        let cfg = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Percentile, value: Some(80.0) },
+                refinements: vec![],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("percentile thresholding"));
+        assert!(out.contains("80th percentile"));
+    }
+
+    // ─── 14. Inhomogeneity correction + different masking inputs ───
+
+    #[test]
+    fn test_inhomogeneity_correction_magnitude() {
+        let cfg = PipelineConfig {
+            inhomogeneity_correction: true,
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("Inhomogeneity correction"));
+        assert!(out.contains("Eckstein et al., 2019"));
+        assert!(out.contains("RSS-combined magnitude image"));
+    }
+
+    #[test]
+    fn test_inhomogeneity_correction_phase_quality() {
+        let cfg = PipelineConfig {
+            inhomogeneity_correction: true,
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::PhaseQuality,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("Inhomogeneity correction"));
+        assert!(out.contains("RSS-combined magnitude image"));
+        assert!(out.contains("ROMEO phase quality map"));
+        assert!(out.contains("inhomogeneity-corrected RSS-combined magnitude"));
+    }
+
+    #[test]
+    fn test_inhomogeneity_correction_magnitude_first() {
+        let cfg = PipelineConfig {
+            inhomogeneity_correction: true,
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::MagnitudeFirst,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("first-echo magnitude image"));
+    }
+
+    #[test]
+    fn test_inhomogeneity_correction_magnitude_last() {
+        let cfg = PipelineConfig {
+            inhomogeneity_correction: true,
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::MagnitudeLast,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("last-echo magnitude image"));
+    }
+
+    #[test]
+    fn test_no_inhomogeneity_correction() {
+        let cfg = PipelineConfig {
+            inhomogeneity_correction: false,
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(!out.contains("Inhomogeneity correction"));
+        assert!(out.contains("the RSS-combined magnitude image"));
+        assert!(!out.contains("inhomogeneity-corrected"));
+    }
+
+    #[test]
+    fn test_inhomogeneity_correction_mixed_rss_and_first() {
+        // When both RSS-type and first/last inputs are used, should say "magnitude data"
+        let cfg = PipelineConfig {
+            inhomogeneity_correction: true,
+            mask_sections: vec![
+                MaskSection {
+                    input: MaskingInput::Magnitude,
+                    generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                    refinements: vec![],
+                },
+                MaskSection {
+                    input: MaskingInput::MagnitudeFirst,
+                    generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                    refinements: vec![],
+                },
+            ],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("applied to the magnitude data"));
+    }
+
+    // ─── 15. Multiple mask sections (OR combination) ───
+
+    #[test]
+    fn test_multiple_mask_sections_or() {
+        let cfg = PipelineConfig {
+            mask_sections: vec![
+                MaskSection {
+                    input: MaskingInput::Magnitude,
+                    generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                    refinements: vec![],
+                },
+                MaskSection {
+                    input: MaskingInput::PhaseQuality,
+                    generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                    refinements: vec![],
+                },
+            ],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("combining"));
+        assert!(out.contains("2 mask sections"));
+        assert!(out.contains("OR operation"));
+    }
+
+    // ─── 16. Refinements ───
+
+    #[test]
+    fn test_refinement_erode() {
+        let cfg = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![MaskOp::Erode { iterations: 3 }],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("erosion (3 iterations)"));
+    }
+
+    #[test]
+    fn test_refinement_erode_singular() {
+        let cfg = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![MaskOp::Erode { iterations: 1 }],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("erosion (1 iteration)"));
+        assert!(!out.contains("iterations)"));
+    }
+
+    #[test]
+    fn test_refinement_dilate() {
+        let cfg = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![MaskOp::Dilate { iterations: 2 }],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("dilation (2 iterations)"));
+    }
+
+    #[test]
+    fn test_refinement_close() {
+        let cfg = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![MaskOp::Close { radius: 5 }],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("morphological closing (radius=5)"));
+    }
+
+    #[test]
+    fn test_refinement_fill_holes_zero() {
+        let cfg = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![MaskOp::FillHoles { max_size: 0 }],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("hole-filling"));
+        assert!(!out.contains("voxels"));
+    }
+
+    #[test]
+    fn test_refinement_fill_holes_nonzero() {
+        let cfg = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![MaskOp::FillHoles { max_size: 500 }],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("hole-filling (max 500 voxels)"));
+    }
+
+    #[test]
+    fn test_refinement_gaussian() {
+        let cfg = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![MaskOp::GaussianSmooth { sigma_mm: 2.5 }],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("Gaussian smoothing (sigma=2.5 mm)"));
+    }
+
+    #[test]
+    fn test_multiple_refinements_joined() {
+        let cfg = PipelineConfig {
+            mask_sections: vec![MaskSection {
+                input: MaskingInput::Magnitude,
+                generator: MaskOp::Threshold { method: MaskThresholdMethod::Otsu, value: None },
+                refinements: vec![
+                    MaskOp::Dilate { iterations: 1 },
+                    MaskOp::FillHoles { max_size: 0 },
+                    MaskOp::Erode { iterations: 1 },
+                ],
+            }],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("followed by"));
+        // With 3 items, join_list uses ", and" format
+        assert!(out.contains(", and "));
+    }
+
+    // ─── Empty mask sections ───
+
+    #[test]
+    fn test_empty_mask_sections() {
+        let cfg = PipelineConfig {
+            mask_sections: vec![],
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(!out.contains("A brain mask was generated"));
+    }
+
+    // ─── Comprehensive: all features on ───
+
+    #[test]
+    fn test_all_features_enabled() {
+        let cfg = PipelineConfig {
+            do_qsm: true,
+            do_swi: true,
+            do_t2starmap: true,
+            do_r2starmap: true,
+            ..default_cfg()
+        };
+        let out = generate_methods(&cfg);
+        assert!(out.contains("QSM processing"));
+        assert!(out.contains("CLEAR-SWI"));
+        assert!(out.contains("T2* and R2* maps"));
+        assert!(out.contains("## References"));
+    }
+}

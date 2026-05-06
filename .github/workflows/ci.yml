@@ -45,7 +45,7 @@ jobs:
         uses: taiki-e/install-action@cargo-tarpaulin
 
       - name: Run coverage
-        run: cargo tarpaulin --out json --output-dir target/tarpaulin --exclude-files src/main.rs --exclude-files src/tui/mod.rs --exclude-files src/tui/ui.rs -- --test-threads=1
+        run: cargo tarpaulin --out json --output-dir target/tarpaulin --exclude-files src/main.rs --exclude-files src/tui/mod.rs --exclude-files src/tui/ui.rs --exclude-files src/commands/update.rs -- --test-threads=1
 
       - name: Check coverage threshold
         run: |

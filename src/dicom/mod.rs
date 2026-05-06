@@ -824,4 +824,353 @@ mod tests {
         }
         assert!(session.total_series() > 0);
     }
+
+    // ─── Helper to build a DicomSeries for testing ───
+
+    fn make_series(uid: &str, desc: &str, series_number: i32, series_type: SeriesType) -> DicomSeries {
+        DicomSeries {
+            series_uid: uid.to_string(),
+            description: desc.to_string(),
+            protocol_name: desc.to_string(),
+            series_number,
+            image_type: Vec::new(),
+            echo_time: None,
+            magnetic_field_strength: None,
+            num_files: 1,
+            series_type,
+            files: Vec::new(),
+            manufacturer: String::new(),
+            coil_type: CoilType::Unknown,
+        }
+    }
+
+    // ─── SeriesType::label() ───
+
+    #[test]
+    fn test_series_type_label_all_variants() {
+        assert_eq!(SeriesType::Magnitude.label(), "Magnitude");
+        assert_eq!(SeriesType::Phase.label(), "Phase");
+        assert_eq!(SeriesType::Real.label(), "Real");
+        assert_eq!(SeriesType::Imaginary.label(), "Imaginary");
+        assert_eq!(SeriesType::T1w.label(), "T1w");
+        assert_eq!(SeriesType::Extra.label(), "Extra");
+        assert_eq!(SeriesType::Skip.label(), "Skip");
+    }
+
+    // ─── SeriesType::next() and prev() ───
+
+    #[test]
+    fn test_series_type_next_cycles_through_all() {
+        let mut current = SeriesType::ALL[0];
+        let mut visited = vec![current];
+        for _ in 1..SeriesType::ALL.len() {
+            current = current.next();
+            visited.push(current);
+        }
+        assert_eq!(visited.len(), SeriesType::ALL.len());
+        for (i, &expected) in SeriesType::ALL.iter().enumerate() {
+            assert_eq!(visited[i], expected);
+        }
+        // Wraps around
+        assert_eq!(current.next(), SeriesType::ALL[0]);
+    }
+
+    #[test]
+    fn test_series_type_prev_cycles_through_all() {
+        let mut current = SeriesType::ALL[0];
+        let mut visited = vec![current];
+        for _ in 1..SeriesType::ALL.len() {
+            current = current.prev();
+            visited.push(current);
+        }
+        // prev from first should go to last, then second-to-last, etc.
+        assert_eq!(visited[1], *SeriesType::ALL.last().unwrap());
+        // Wraps around
+        assert_eq!(current.prev(), SeriesType::ALL[0]);
+    }
+
+    #[test]
+    fn test_series_type_next_prev_inverse() {
+        for &t in SeriesType::ALL {
+            assert_eq!(t.next().prev(), t);
+            assert_eq!(t.prev().next(), t);
+        }
+    }
+
+    // ─── auto_label_series() ───
+
+    #[test]
+    fn test_auto_label_phase_from_image_type_p() {
+        assert_eq!(auto_label_series(&["P".into()], ""), SeriesType::Phase);
+    }
+
+    #[test]
+    fn test_auto_label_phase_from_image_type_phase() {
+        assert_eq!(auto_label_series(&["PHASE".into()], ""), SeriesType::Phase);
+    }
+
+    #[test]
+    fn test_auto_label_magnitude_from_image_type_m() {
+        assert_eq!(auto_label_series(&["M".into()], ""), SeriesType::Magnitude);
+    }
+
+    #[test]
+    fn test_auto_label_magnitude_from_image_type_mag() {
+        assert_eq!(auto_label_series(&["MAG".into()], ""), SeriesType::Magnitude);
+    }
+
+    #[test]
+    fn test_auto_label_magnitude_from_image_type_magnitude() {
+        assert_eq!(auto_label_series(&["MAGNITUDE".into()], ""), SeriesType::Magnitude);
+    }
+
+    #[test]
+    fn test_auto_label_real_from_image_type() {
+        assert_eq!(auto_label_series(&["REAL".into()], ""), SeriesType::Real);
+    }
+
+    #[test]
+    fn test_auto_label_imaginary_from_image_type() {
+        assert_eq!(auto_label_series(&["IMAGINARY".into()], ""), SeriesType::Imaginary);
+    }
+
+    #[test]
+    fn test_auto_label_t1w_from_description() {
+        assert_eq!(auto_label_series(&[], "T1_MPRAGE"), SeriesType::T1w);
+        assert_eq!(auto_label_series(&[], "t1_mp2rage_sag"), SeriesType::T1w);
+        assert_eq!(auto_label_series(&[], "my_t1w_scan"), SeriesType::T1w);
+    }
+
+    #[test]
+    fn test_auto_label_phase_from_description_ph_suffix() {
+        assert_eq!(auto_label_series(&[], "t2star_qsm_tra_p3_ph"), SeriesType::Phase);
+    }
+
+    #[test]
+    fn test_auto_label_phase_from_description_phase() {
+        assert_eq!(auto_label_series(&[], "some_phase_image"), SeriesType::Phase);
+    }
+
+    #[test]
+    fn test_auto_label_magnitude_from_description_mag() {
+        assert_eq!(auto_label_series(&[], "some_mag_image"), SeriesType::Magnitude);
+    }
+
+    #[test]
+    fn test_auto_label_magnitude_from_description_gre() {
+        assert_eq!(auto_label_series(&[], "gre_field_mapping"), SeriesType::Magnitude);
+    }
+
+    #[test]
+    fn test_auto_label_magnitude_from_description_swi() {
+        assert_eq!(auto_label_series(&[], "SWI_combined"), SeriesType::Magnitude);
+    }
+
+    #[test]
+    fn test_auto_label_magnitude_from_description_qsm() {
+        assert_eq!(auto_label_series(&[], "QSM_sequence"), SeriesType::Magnitude);
+    }
+
+    #[test]
+    fn test_auto_label_extra_fallback() {
+        assert_eq!(auto_label_series(&[], "localizer"), SeriesType::Extra);
+        assert_eq!(auto_label_series(&[], ""), SeriesType::Extra);
+        assert_eq!(auto_label_series(&["ORIGINAL".into(), "PRIMARY".into()], "flair_sag"), SeriesType::Extra);
+    }
+
+    #[test]
+    fn test_auto_label_image_type_takes_priority_over_description() {
+        // ImageType says Phase, description says mag — ImageType wins
+        assert_eq!(auto_label_series(&["P".into()], "mag_image"), SeriesType::Phase);
+    }
+
+    // ─── assign_runs_temporal() ───
+
+    #[test]
+    fn test_assign_runs_no_time_data() {
+        let series = vec![
+            make_series("uid1", "s1", 1, SeriesType::Magnitude),
+            make_series("uid2", "s2", 2, SeriesType::Phase),
+        ];
+        let file_times: HashMap<String, f64> = HashMap::new();
+        let runs = assign_runs_temporal(&series, &file_times);
+        assert_eq!(runs, vec![1, 1]);
+    }
+
+    #[test]
+    fn test_assign_runs_single_run() {
+        let series = vec![
+            make_series("uid1", "s1", 1, SeriesType::Magnitude),
+            make_series("uid2", "s2", 2, SeriesType::Phase),
+        ];
+        let mut file_times = HashMap::new();
+        file_times.insert("uid1".to_string(), 100.0);
+        file_times.insert("uid2".to_string(), 130.0); // within 60s
+        let runs = assign_runs_temporal(&series, &file_times);
+        assert_eq!(runs, vec![1, 1]);
+    }
+
+    #[test]
+    fn test_assign_runs_multiple_runs_gap_over_60s() {
+        let series = vec![
+            make_series("uid1", "s1", 1, SeriesType::Magnitude),
+            make_series("uid2", "s2", 2, SeriesType::Phase),
+            make_series("uid3", "s3", 3, SeriesType::Magnitude),
+            make_series("uid4", "s4", 4, SeriesType::Phase),
+        ];
+        let mut file_times = HashMap::new();
+        file_times.insert("uid1".to_string(), 100.0);
+        file_times.insert("uid2".to_string(), 120.0);
+        file_times.insert("uid3".to_string(), 300.0); // gap > 60s from cluster start (100)
+        file_times.insert("uid4".to_string(), 320.0);
+        let runs = assign_runs_temporal(&series, &file_times);
+        assert_eq!(runs[0], 1);
+        assert_eq!(runs[1], 1);
+        assert_eq!(runs[2], 2);
+        assert_eq!(runs[3], 2);
+    }
+
+    #[test]
+    fn test_assign_runs_untimed_orphan_series() {
+        let series = vec![
+            make_series("uid1", "s1", 1, SeriesType::Magnitude),
+            make_series("uid2", "s2", 5, SeriesType::Phase), // untimed, closer to uid3 by series_number
+            make_series("uid3", "s3", 6, SeriesType::Magnitude),
+        ];
+        let mut file_times = HashMap::new();
+        file_times.insert("uid1".to_string(), 100.0);
+        // uid2 has no time data
+        file_times.insert("uid3".to_string(), 300.0); // separate run
+        let runs = assign_runs_temporal(&series, &file_times);
+        assert_eq!(runs[0], 1);
+        // uid2 (series_number=5) is closer to uid3 (series_number=6) than uid1 (series_number=1)
+        assert_eq!(runs[1], 2);
+        assert_eq!(runs[2], 2);
+    }
+
+    // ─── pair_series_by_signature() ───
+
+    #[test]
+    fn test_pair_series_by_signature_basic() {
+        let mut series = vec![
+            {
+                let mut s = make_series("uid1", "gre", 1, SeriesType::Magnitude);
+                s.image_type = vec!["ORIGINAL".into(), "PRIMARY".into(), "M".into(), "NORM".into()];
+                s
+            },
+            {
+                let mut s = make_series("uid2", "gre", 2, SeriesType::Phase);
+                s.image_type = vec!["ORIGINAL".into(), "PRIMARY".into(), "P".into(), "NORM".into()];
+                s
+            },
+        ];
+        // Should not panic
+        pair_series_by_signature(&mut series);
+        // Types should remain unchanged (function is currently validation-only)
+        assert_eq!(series[0].series_type, SeriesType::Magnitude);
+        assert_eq!(series[1].series_type, SeriesType::Phase);
+    }
+
+    // ─── DicomSession methods ───
+
+    fn make_test_session() -> DicomSession {
+        DicomSession {
+            subjects: vec![
+                DicomSubject {
+                    patient_id: "sub01".to_string(),
+                    studies: vec![
+                        DicomStudy {
+                            study_date: "20240101".to_string(),
+                            acquisitions: vec![
+                                DicomAcquisition {
+                                    name: "gre".to_string(),
+                                    run_number: 1,
+                                    series: vec![
+                                        make_series("uid1", "gre_mag", 1, SeriesType::Magnitude),
+                                        make_series("uid2", "gre_phase", 2, SeriesType::Phase),
+                                    ],
+                                },
+                                DicomAcquisition {
+                                    name: "t1w".to_string(),
+                                    run_number: 1,
+                                    series: vec![
+                                        make_series("uid3", "t1_mprage", 3, SeriesType::T1w),
+                                    ],
+                                },
+                            ],
+                        },
+                    ],
+                },
+                DicomSubject {
+                    patient_id: "sub02".to_string(),
+                    studies: vec![
+                        DicomStudy {
+                            study_date: "20240102".to_string(),
+                            acquisitions: vec![
+                                DicomAcquisition {
+                                    name: "swi".to_string(),
+                                    run_number: 1,
+                                    series: vec![
+                                        make_series("uid4", "swi", 1, SeriesType::Magnitude),
+                                    ],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn test_total_series() {
+        let session = make_test_session();
+        assert_eq!(session.total_series(), 4);
+    }
+
+    #[test]
+    fn test_total_series_empty() {
+        let session = DicomSession { subjects: Vec::new() };
+        assert_eq!(session.total_series(), 0);
+    }
+
+    #[test]
+    fn test_flat_series_count() {
+        let session = make_test_session();
+        let flat = session.flat_series();
+        assert_eq!(flat.len(), 4);
+    }
+
+    #[test]
+    fn test_flat_series_indices_are_valid() {
+        let session = make_test_session();
+        let flat = session.flat_series();
+        for r in &flat {
+            let _series = session.series_ref(r);
+        }
+    }
+
+    #[test]
+    fn test_series_ref_returns_correct_series() {
+        let session = make_test_session();
+        let flat = session.flat_series();
+        assert_eq!(session.series_ref(&flat[0]).series_uid, "uid1");
+        assert_eq!(session.series_ref(&flat[1]).series_uid, "uid2");
+        assert_eq!(session.series_ref(&flat[2]).series_uid, "uid3");
+        assert_eq!(session.series_ref(&flat[3]).series_uid, "uid4");
+    }
+
+    #[test]
+    fn test_series_mut_can_modify() {
+        let mut session = make_test_session();
+        let flat = session.flat_series();
+        session.series_mut(&flat[0]).series_type = SeriesType::Skip;
+        assert_eq!(session.series_ref(&flat[0]).series_type, SeriesType::Skip);
+    }
+
+    #[test]
+    fn test_flat_series_empty_session() {
+        let session = DicomSession { subjects: Vec::new() };
+        assert!(session.flat_series().is_empty());
+    }
 }
