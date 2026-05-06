@@ -58,6 +58,15 @@ pub enum Command {
     QualityMap(QualityMapArgs),
     /// Launch interactive TUI for pipeline configuration
     Tui,
+    /// Check for updates and optionally install the latest version
+    Update(UpdateArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct UpdateArgs {
+    /// Update without prompting for confirmation
+    #[arg(short, long)]
+    pub yes: bool,
 }
 
 // ─── Shared algorithm parameter groups (prefixed, used by RunArgs) ───
