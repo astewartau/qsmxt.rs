@@ -2743,11 +2743,11 @@ impl App {
             }
 
             // Navigation
-            KeyCode::Up | KeyCode::Char('k') => {
-                if !self.nifti_state.focus_prev() {
-                    // At top of NIfTI section, go back to IO fields
-                    self.active_field = Self::INPUT_IO_FIELDS - 1;
-                }
+            KeyCode::Up | KeyCode::Char('k')
+                if !self.nifti_state.focus_prev() =>
+            {
+                // At top of NIfTI section, go back to IO fields
+                self.active_field = Self::INPUT_IO_FIELDS - 1;
             }
             KeyCode::Down | KeyCode::Char('j') => self.nifti_state.focus_next(),
 
