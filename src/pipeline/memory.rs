@@ -110,6 +110,12 @@ fn estimate_standard_pipeline(n: usize, n_echoes: usize, config: &PipelineConfig
         Some(BfAlgorithm::Ismv) => 96 * n,
         // SHARP: similar to V-SHARP but single radius
         Some(BfAlgorithm::Sharp) => 60 * n,
+        // RESHARP: SMV kernel + CG solver state
+        Some(BfAlgorithm::Resharp) => 80 * n,
+        // HARPERELLA: iterative Laplacian solver + SMV kernel
+        Some(BfAlgorithm::Harperella) => 60 * n,
+        // iHARPERELLA: similar to HARPERELLA
+        Some(BfAlgorithm::Iharperella) => 60 * n,
         None => 0,
     };
 

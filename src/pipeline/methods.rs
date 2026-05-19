@@ -90,6 +90,21 @@ const CITE_QSMART: Citation = Citation {
     text: "Yaghmaie, N., Syeda, W., et al. (2021). \"QSMART: Quantitative Susceptibility Mapping Artifact Reduction Technique.\" *NeuroImage*, 231:117701. https://doi.org/10.1016/j.neuroimage.2020.117701",
 };
 
+const CITE_RESHARP: Citation = Citation {
+    key: "sun2014",
+    text: "Sun, H., Wilman, A.H. (2014). \"Background field removal using spherical mean value filtering and Tikhonov regularization.\" *Magnetic Resonance in Medicine*, 71(3):1151-1157. https://doi.org/10.1002/mrm.25032",
+};
+
+const CITE_HARPERELLA: Citation = Citation {
+    key: "li2014",
+    text: "Li, W., Avram, A.V., Wu, B., Xiao, X., Liu, C. (2014). \"Integrated Laplacian-based phase unwrapping and background phase removal for quantitative susceptibility mapping.\" *NMR in Biomedicine*, 27(2):219-227. https://doi.org/10.1002/nbm.3056",
+};
+
+const CITE_IHARPERELLA: Citation = Citation {
+    key: "li2015iharp",
+    text: "Li, W., Wu, B., Liu, C. (2015). \"iHARPERELLA: an improved method for integrated 3D phase unwrapping and background phase removal.\" *Proc. ISMRM* 23, p.3313.",
+};
+
 const CITE_CLEARSWI: Citation = Citation {
     key: "eckstein2024",
     text: "Eckstein, K., et al. (2024). \"CLEAR-SWI: Computational Efficient T2* Weighted Imaging.\" *Proc. ISMRM*.",
@@ -175,6 +190,9 @@ pub fn generate_methods(config: &PipelineConfig) -> String {
                         BfAlgorithm::Lbv => ("LBV", &CITE_LBV),
                         BfAlgorithm::Ismv => ("iSMV", &CITE_ISMV),
                         BfAlgorithm::Sharp => ("SHARP", &CITE_SHARP),
+                        BfAlgorithm::Resharp => ("RESHARP", &CITE_RESHARP),
+                        BfAlgorithm::Harperella => ("HARPERELLA", &CITE_HARPERELLA),
+                        BfAlgorithm::Iharperella => ("iHARPERELLA", &CITE_IHARPERELLA),
                     };
                     sentences.push(format!("Background field removal was performed using {} ({}).", name, cite_inline(cite)));
                     add_citation(&mut citations, cite);
@@ -373,6 +391,9 @@ fn cite_inline(cite: &Citation) -> &'static str {
         "bilgic2014l2" => "Bilgic et al., 2014",
         "liu2011medi" => "Liu et al., 2011",
         "li2015" => "Li et al., 2015",
+        "sun2014" => "Sun & Wilman, 2014",
+        "li2014" => "Li et al., 2014",
+        "li2015iharp" => "Li et al., 2015",
         _ => cite.key,
     }
 }

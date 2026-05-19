@@ -127,6 +127,22 @@ pub fn build_command_string(app: &App) -> String {
     push_if_changed(&mut parts, "--ismv-max-iter", &ps.ismv_max_iter, &defaults.ismv_max_iter);
     push_if_changed(&mut parts, "--sharp-threshold", &ps.sharp_threshold, &defaults.sharp_threshold);
 
+    // RESHARP params
+    push_if_changed(&mut parts, "--resharp-radius", &ps.resharp_radius, &defaults.resharp_radius);
+    push_if_changed(&mut parts, "--resharp-tik-reg", &ps.resharp_tik_reg, &defaults.resharp_tik_reg);
+    push_if_changed(&mut parts, "--resharp-tol", &ps.resharp_tol, &defaults.resharp_tol);
+    push_if_changed(&mut parts, "--resharp-max-iter", &ps.resharp_max_iter, &defaults.resharp_max_iter);
+
+    // HARPERELLA params
+    push_if_changed(&mut parts, "--harperella-radius", &ps.harperella_radius, &defaults.harperella_radius);
+    push_if_changed(&mut parts, "--harperella-max-iter", &ps.harperella_max_iter, &defaults.harperella_max_iter);
+    push_if_changed(&mut parts, "--harperella-tol", &ps.harperella_tol, &defaults.harperella_tol);
+
+    // iHARPERELLA params
+    push_if_changed(&mut parts, "--iharperella-radius", &ps.iharperella_radius, &defaults.iharperella_radius);
+    push_if_changed(&mut parts, "--iharperella-max-iter", &ps.iharperella_max_iter, &defaults.iharperella_max_iter);
+    push_if_changed(&mut parts, "--iharperella-tol", &ps.iharperella_tol, &defaults.iharperella_tol);
+
     // TGV params
     push_if_changed(&mut parts, "--tgv-iterations", &ps.tgv_iterations, &defaults.tgv_iterations);
     push_if_changed(&mut parts, "--tgv-erosions", &ps.tgv_erosions, &defaults.tgv_erosions);
@@ -263,6 +279,9 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         BfAlgorithmArg::Lbv,
         BfAlgorithmArg::Ismv,
         BfAlgorithmArg::Sharp,
+        BfAlgorithmArg::Resharp,
+        BfAlgorithmArg::Harperella,
+        BfAlgorithmArg::Iharperella,
     ];
     Ok(RunArgs {
         bids_dir: expand_tilde(&form.bids_dir),
@@ -367,6 +386,22 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         sharp_params: crate::cli::SharpParamArgs {
             sharp_threshold: parse_optional_f64(&ps.sharp_threshold),
             sharp_radius_factor: None,
+        },
+        resharp_params: crate::cli::ResharpParamArgs {
+            resharp_radius: parse_optional_f64(&ps.resharp_radius),
+            resharp_tik_reg: parse_optional_f64(&ps.resharp_tik_reg),
+            resharp_tol: parse_optional_f64(&ps.resharp_tol),
+            resharp_max_iter: parse_optional_usize(&ps.resharp_max_iter),
+        },
+        harperella_params: crate::cli::HarperellaParamArgs {
+            harperella_radius: parse_optional_f64(&ps.harperella_radius),
+            harperella_max_iter: parse_optional_usize(&ps.harperella_max_iter),
+            harperella_tol: parse_optional_f64(&ps.harperella_tol),
+        },
+        iharperella_params: crate::cli::IharperellaParamArgs {
+            iharperella_radius: parse_optional_f64(&ps.iharperella_radius),
+            iharperella_max_iter: parse_optional_usize(&ps.iharperella_max_iter),
+            iharperella_tol: parse_optional_f64(&ps.iharperella_tol),
         },
         romeo_params: crate::cli::RomeoParamArgs {
             no_romeo_phase_gradient_coherence: !ps.romeo_phase_gradient_coherence,
@@ -517,7 +552,8 @@ pub fn config_from_app(app: &App) -> PipelineConfig {
     let unwrap_algorithms = [UnwrappingAlgorithm::Romeo, UnwrappingAlgorithm::Laplacian];
     let bf_algorithms = [
         BfAlgorithm::Vsharp, BfAlgorithm::Pdf, BfAlgorithm::Lbv,
-        BfAlgorithm::Ismv, BfAlgorithm::Sharp,
+        BfAlgorithm::Ismv, BfAlgorithm::Sharp, BfAlgorithm::Resharp,
+        BfAlgorithm::Harperella, BfAlgorithm::Iharperella,
     ];
 
     let qsm_algorithm = qsm_algorithms[ps.qsm_algorithm];

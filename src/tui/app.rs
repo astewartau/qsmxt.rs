@@ -878,6 +878,9 @@ const BF_HELP: &[&str] = &[
     "Laplacian Boundary Value (LBV) — https://doi.org/10.1002/nbm.3064",
     "Iterative Spherical Mean Value (iSMV) — https://doi.org/10.1002/mrm.24998",
     "SHARP (Sophisticated Harmonic Artifact Reduction) — https://doi.org/10.1016/j.neuroimage.2010.10.070",
+    "Regularized SHARP (RESHARP) with Tikhonov — https://doi.org/10.1002/mrm.25032",
+    "HARPERELLA integrated unwrap+BFR — https://doi.org/10.1002/nbm.3056",
+    "Improved HARPERELLA (iHARPERELLA) — Li et al., Proc. ISMRM 2015, p.3313",
 ];
 const PHASE_COMBO_HELP: &[&str] = &[
     "MCPC-3D-S: combine wrapped phase directly via phase offset estimation",
@@ -967,6 +970,22 @@ pub struct PipelineFormState {
 
     // SHARP
     pub sharp_threshold: String,
+
+    // RESHARP
+    pub resharp_radius: String,
+    pub resharp_tik_reg: String,
+    pub resharp_tol: String,
+    pub resharp_max_iter: String,
+
+    // HARPERELLA
+    pub harperella_radius: String,
+    pub harperella_max_iter: String,
+    pub harperella_tol: String,
+
+    // iHARPERELLA
+    pub iharperella_radius: String,
+    pub iharperella_max_iter: String,
+    pub iharperella_tol: String,
 
     // QSMART
     pub qsmart_ilsqr_tol: String,
@@ -1063,6 +1082,16 @@ impl Default for PipelineFormState {
             ismv_tol: format!("{}", qsm_core::bgremove::IsmvParams::default().tol),
             ismv_max_iter: format!("{}", qsm_core::bgremove::IsmvParams::default().max_iter),
             sharp_threshold: format!("{}", qsm_core::bgremove::SharpParams::default().threshold),
+            resharp_radius: format!("{}", qsm_core::bgremove::ResharpParams::default().radius),
+            resharp_tik_reg: format!("{}", qsm_core::bgremove::ResharpParams::default().tik_reg),
+            resharp_tol: format!("{}", qsm_core::bgremove::ResharpParams::default().tol),
+            resharp_max_iter: format!("{}", qsm_core::bgremove::ResharpParams::default().max_iter),
+            harperella_radius: format!("{}", qsm_core::pipeline::HarperellaParams::default().radius),
+            harperella_max_iter: format!("{}", qsm_core::pipeline::HarperellaParams::default().max_iter),
+            harperella_tol: format!("{}", qsm_core::pipeline::HarperellaParams::default().tol),
+            iharperella_radius: format!("{}", qsm_core::pipeline::HarperellaParams::default().radius),
+            iharperella_max_iter: format!("{}", qsm_core::pipeline::HarperellaParams::default().max_iter),
+            iharperella_tol: format!("{}", qsm_core::pipeline::HarperellaParams::default().tol),
             do_qsm: true,
             romeo_phase_gradient_coherence: qsm_core::unwrap::RomeoParams::default().phase_gradient_coherence,
             romeo_mag_coherence: qsm_core::unwrap::RomeoParams::default().mag_coherence,
@@ -1097,7 +1126,7 @@ impl Default for PipelineFormState {
 
 pub const QSM_ALGO_OPTIONS: &[&str] = &["rts", "tv", "tkd", "tsvd", "tgv", "tikhonov", "nltv", "medi", "ilsqr", "qsmart"];
 pub const UNWRAP_OPTIONS: &[&str] = &["romeo", "laplacian"];
-pub const BF_OPTIONS: &[&str] = &["vsharp", "pdf", "lbv", "ismv", "sharp"];
+pub const BF_OPTIONS: &[&str] = &["vsharp", "pdf", "lbv", "ismv", "sharp", "resharp", "harperella", "iharperella"];
 pub const PHASE_COMBO_OPTIONS: &[&str] = &["mcpc3ds", "linear-fit"];
 pub const QSM_REF_OPTIONS: &[&str] = &["mean", "none"];
 
@@ -1201,6 +1230,22 @@ impl PipelineFormState {
                 4 => { // SHARP
                     rows.push(PipelineRow::Param { label: "  Threshold", field: "sharp_threshold", help: "Deconvolution threshold" });
                 }
+                5 => { // RESHARP
+                    rows.push(PipelineRow::Param { label: "  Radius", field: "resharp_radius", help: "SMV kernel radius in mm" });
+                    rows.push(PipelineRow::Param { label: "  Tik Reg", field: "resharp_tik_reg", help: "Tikhonov regularization parameter" });
+                    rows.push(PipelineRow::Param { label: "  Tolerance", field: "resharp_tol", help: "CG convergence tolerance" });
+                    rows.push(PipelineRow::Param { label: "  Max Iter", field: "resharp_max_iter", help: "Maximum CG iterations" });
+                }
+                6 => { // HARPERELLA
+                    rows.push(PipelineRow::Param { label: "  Radius", field: "harperella_radius", help: "SMV kernel radius in mm" });
+                    rows.push(PipelineRow::Param { label: "  Max Iter", field: "harperella_max_iter", help: "Maximum iterations" });
+                    rows.push(PipelineRow::Param { label: "  Tolerance", field: "harperella_tol", help: "Convergence tolerance" });
+                }
+                7 => { // iHARPERELLA
+                    rows.push(PipelineRow::Param { label: "  Radius", field: "iharperella_radius", help: "SMV kernel radius in mm" });
+                    rows.push(PipelineRow::Param { label: "  Max Iter", field: "iharperella_max_iter", help: "Maximum iterations" });
+                    rows.push(PipelineRow::Param { label: "  Tolerance", field: "iharperella_tol", help: "Convergence tolerance" });
+                }
                 _ => {}
             }
             rows.push(PipelineRow::Separator);
@@ -1299,6 +1344,9 @@ impl PipelineFormState {
         "nltv_lambda", "nltv_mu", "nltv_tol", "nltv_max_iter", "nltv_newton_iter",
         "medi_lambda", "medi_max_iter", "medi_cg_max_iter", "medi_cg_tol", "medi_tol", "medi_percentage", "medi_smv_radius",
         "vsharp_threshold", "pdf_tol", "lbv_tol", "ismv_tol", "ismv_max_iter", "sharp_threshold",
+        "resharp_radius", "resharp_tik_reg", "resharp_tol", "resharp_max_iter",
+        "harperella_radius", "harperella_max_iter", "harperella_tol",
+        "iharperella_radius", "iharperella_max_iter", "iharperella_tol",
         "qsmart_ilsqr_tol", "qsmart_ilsqr_max_iter", "qsmart_vasc_sphere_radius", "qsmart_sdf_spatial_radius",
         "bet_fractional_intensity", "bet_smoothness", "bet_gradient_threshold", "bet_iterations", "bet_subdivisions",
     ];
@@ -1344,6 +1392,16 @@ impl PipelineFormState {
             "ismv_tol" => &self.ismv_tol,
             "ismv_max_iter" => &self.ismv_max_iter,
             "sharp_threshold" => &self.sharp_threshold,
+            "resharp_radius" => &self.resharp_radius,
+            "resharp_tik_reg" => &self.resharp_tik_reg,
+            "resharp_tol" => &self.resharp_tol,
+            "resharp_max_iter" => &self.resharp_max_iter,
+            "harperella_radius" => &self.harperella_radius,
+            "harperella_max_iter" => &self.harperella_max_iter,
+            "harperella_tol" => &self.harperella_tol,
+            "iharperella_radius" => &self.iharperella_radius,
+            "iharperella_max_iter" => &self.iharperella_max_iter,
+            "iharperella_tol" => &self.iharperella_tol,
             "qsmart_ilsqr_tol" => &self.qsmart_ilsqr_tol,
             "qsmart_ilsqr_max_iter" => &self.qsmart_ilsqr_max_iter,
             "qsmart_vasc_sphere_radius" => &self.qsmart_vasc_sphere_radius,
@@ -1398,6 +1456,16 @@ impl PipelineFormState {
             "ismv_tol" => Some(&mut self.ismv_tol),
             "ismv_max_iter" => Some(&mut self.ismv_max_iter),
             "sharp_threshold" => Some(&mut self.sharp_threshold),
+            "resharp_radius" => Some(&mut self.resharp_radius),
+            "resharp_tik_reg" => Some(&mut self.resharp_tik_reg),
+            "resharp_tol" => Some(&mut self.resharp_tol),
+            "resharp_max_iter" => Some(&mut self.resharp_max_iter),
+            "harperella_radius" => Some(&mut self.harperella_radius),
+            "harperella_max_iter" => Some(&mut self.harperella_max_iter),
+            "harperella_tol" => Some(&mut self.harperella_tol),
+            "iharperella_radius" => Some(&mut self.iharperella_radius),
+            "iharperella_max_iter" => Some(&mut self.iharperella_max_iter),
+            "iharperella_tol" => Some(&mut self.iharperella_tol),
             "qsmart_ilsqr_tol" => Some(&mut self.qsmart_ilsqr_tol),
             "qsmart_ilsqr_max_iter" => Some(&mut self.qsmart_ilsqr_max_iter),
             "qsmart_vasc_sphere_radius" => Some(&mut self.qsmart_vasc_sphere_radius),

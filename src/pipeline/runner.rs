@@ -930,6 +930,22 @@ fn stage_standard_qsm(
             "radius_factor": ctx.config.sharp_radius_factor,
             "threshold": ctx.config.sharp_threshold,
         }),
+        Some(BfAlgorithm::Resharp) => serde_json::json!({
+            "radius": ctx.config.resharp_radius,
+            "tik_reg": ctx.config.resharp_tik_reg,
+            "tol": ctx.config.resharp_tol,
+            "max_iter": ctx.config.resharp_max_iter,
+        }),
+        Some(BfAlgorithm::Harperella) => serde_json::json!({
+            "radius": ctx.config.harperella_radius,
+            "max_iter": ctx.config.harperella_max_iter,
+            "tol": ctx.config.harperella_tol,
+        }),
+        Some(BfAlgorithm::Iharperella) => serde_json::json!({
+            "radius": ctx.config.iharperella_radius,
+            "max_iter": ctx.config.iharperella_max_iter,
+            "tol": ctx.config.iharperella_tol,
+        }),
         None => serde_json::json!({}),
     };
     if skip_bgremove {
@@ -985,6 +1001,33 @@ fn stage_standard_qsm(
                 log::info!("Background removal (SHARP, radius={:.1}, threshold={})", radius, ctx.config.sharp_threshold);
                 qsm_core::bgremove::sharp(
                     &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz, radius, ctx.config.sharp_threshold,
+                )
+            }
+            Some(BfAlgorithm::Resharp) => {
+                log::info!("Background removal (RESHARP, radius={:.1}, tik_reg={:.0e}, tol={:.0e}, max_iter={})",
+                    ctx.config.resharp_radius, ctx.config.resharp_tik_reg, ctx.config.resharp_tol, ctx.config.resharp_max_iter);
+                let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "RESHARP");
+                qsm_core::bgremove::resharp_with_progress(
+                    &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
+                    ctx.config.resharp_radius, ctx.config.resharp_tik_reg, ctx.config.resharp_tol, ctx.config.resharp_max_iter, prog,
+                )
+            }
+            Some(BfAlgorithm::Harperella) => {
+                log::info!("Background removal (HARPERELLA, radius={:.1}, max_iter={}, tol={:.0e})",
+                    ctx.config.harperella_radius, ctx.config.harperella_max_iter, ctx.config.harperella_tol);
+                let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "HARPERELLA");
+                qsm_core::pipeline::harperella_with_progress(
+                    &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
+                    ctx.config.harperella_radius, ctx.config.harperella_max_iter, ctx.config.harperella_tol, prog,
+                )
+            }
+            Some(BfAlgorithm::Iharperella) => {
+                log::info!("Background removal (iHARPERELLA, radius={:.1}, max_iter={}, tol={:.0e})",
+                    ctx.config.iharperella_radius, ctx.config.iharperella_max_iter, ctx.config.iharperella_tol);
+                let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "iHARPERELLA");
+                qsm_core::pipeline::iharperella_with_progress(
+                    &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
+                    ctx.config.iharperella_radius, ctx.config.iharperella_max_iter, ctx.config.iharperella_tol, prog,
                 )
             }
             None => return Err(QsmxtError::Config("bf_algorithm must be set for standard pipeline".to_string())),

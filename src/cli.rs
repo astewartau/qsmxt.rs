@@ -5,6 +5,12 @@ use std::path::PathBuf;
 #[command(
     name = "qsmxt",
     version,
+    long_version = const_format::formatcp!(
+        "{}\nqsm-core: {} ({})",
+        env!("CARGO_PKG_VERSION"),
+        env!("QSM_CORE_VERSION"),
+        env!("QSM_CORE_GIT_HASH"),
+    ),
     about = "QSMxT: Quantitative Susceptibility Mapping tool (Rust)"
 )]
 pub struct Cli {
@@ -282,6 +288,48 @@ pub struct SharpParamArgs {
 }
 
 #[derive(Args, Debug, Default, Clone)]
+pub struct ResharpParamArgs {
+    /// RESHARP SMV kernel radius in mm
+    #[arg(long)]
+    pub resharp_radius: Option<f64>,
+    /// RESHARP Tikhonov regularization parameter
+    #[arg(long)]
+    pub resharp_tik_reg: Option<f64>,
+    /// RESHARP CG convergence tolerance
+    #[arg(long)]
+    pub resharp_tol: Option<f64>,
+    /// RESHARP maximum CG iterations
+    #[arg(long)]
+    pub resharp_max_iter: Option<usize>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct HarperellaParamArgs {
+    /// HARPERELLA SMV kernel radius in mm
+    #[arg(long)]
+    pub harperella_radius: Option<f64>,
+    /// HARPERELLA maximum iterations
+    #[arg(long)]
+    pub harperella_max_iter: Option<usize>,
+    /// HARPERELLA convergence tolerance
+    #[arg(long)]
+    pub harperella_tol: Option<f64>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+pub struct IharperellaParamArgs {
+    /// iHARPERELLA SMV kernel radius in mm
+    #[arg(long)]
+    pub iharperella_radius: Option<f64>,
+    /// iHARPERELLA maximum iterations
+    #[arg(long)]
+    pub iharperella_max_iter: Option<usize>,
+    /// iHARPERELLA convergence tolerance
+    #[arg(long)]
+    pub iharperella_tol: Option<f64>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
 pub struct RomeoParamArgs {
     /// ROMEO: disable phase gradient coherence weights
     #[arg(long)]
@@ -418,6 +466,12 @@ pub struct RunArgs {
     pub ismv_params: IsmvParamArgs,
     #[command(flatten)]
     pub sharp_params: SharpParamArgs,
+    #[command(flatten)]
+    pub resharp_params: ResharpParamArgs,
+    #[command(flatten)]
+    pub harperella_params: HarperellaParamArgs,
+    #[command(flatten)]
+    pub iharperella_params: IharperellaParamArgs,
     #[command(flatten)]
     pub romeo_params: RomeoParamArgs,
     #[command(flatten)]
@@ -738,6 +792,12 @@ pub enum BgremoveCommand {
     Ismv(BgremoveIsmvArgs),
     /// Spherical Harmonic Array Reconstruction Procedure
     Sharp(BgremoveSharpArgs),
+    /// Regularized SHARP (RESHARP) with Tikhonov regularization
+    Resharp(BgremoveResharpArgs),
+    /// HARPERELLA integrated phase unwrapping + background removal
+    Harperella(BgremoveHarperellaArgs),
+    /// Improved HARPERELLA (iHARPERELLA)
+    Iharperella(BgremoveIharperellaArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -798,6 +858,72 @@ pub struct BgremoveSharpArgs {
     /// Radius factor (multiplied by min voxel size)
     #[arg(long)]
     pub radius_factor: Option<f64>,
+}
+
+#[derive(Parser, Debug)]
+pub struct BgremoveResharpArgs {
+    #[command(flatten)]
+    pub common: BgremoveCommonArgs,
+    /// SMV kernel radius in mm
+    #[arg(long)]
+    pub radius: Option<f64>,
+    /// Tikhonov regularization parameter
+    #[arg(long)]
+    pub tik_reg: Option<f64>,
+    /// CG convergence tolerance
+    #[arg(long)]
+    pub tol: Option<f64>,
+    /// Maximum CG iterations
+    #[arg(long)]
+    pub max_iter: Option<usize>,
+}
+
+#[derive(Parser, Debug)]
+pub struct BgremoveHarperellaArgs {
+    /// Input wrapped phase NIfTI file
+    pub input: std::path::PathBuf,
+    /// Binary mask NIfTI file
+    #[arg(short, long)]
+    pub mask: std::path::PathBuf,
+    /// Output local field NIfTI file
+    #[arg(short, long)]
+    pub output: std::path::PathBuf,
+    /// Output eroded mask (for algorithms that erode)
+    #[arg(long)]
+    pub output_mask: Option<std::path::PathBuf>,
+    /// SMV kernel radius in mm
+    #[arg(long)]
+    pub radius: Option<f64>,
+    /// Maximum iterations
+    #[arg(long)]
+    pub max_iter: Option<usize>,
+    /// Convergence tolerance
+    #[arg(long)]
+    pub tol: Option<f64>,
+}
+
+#[derive(Parser, Debug)]
+pub struct BgremoveIharperellaArgs {
+    /// Input wrapped phase NIfTI file
+    pub input: std::path::PathBuf,
+    /// Binary mask NIfTI file
+    #[arg(short, long)]
+    pub mask: std::path::PathBuf,
+    /// Output local field NIfTI file
+    #[arg(short, long)]
+    pub output: std::path::PathBuf,
+    /// Output eroded mask (for algorithms that erode)
+    #[arg(long)]
+    pub output_mask: Option<std::path::PathBuf>,
+    /// SMV kernel radius in mm
+    #[arg(long)]
+    pub radius: Option<f64>,
+    /// Maximum iterations
+    #[arg(long)]
+    pub max_iter: Option<usize>,
+    /// Convergence tolerance
+    #[arg(long)]
+    pub tol: Option<f64>,
 }
 
 // ── Invert ──
@@ -1187,7 +1313,7 @@ pub enum UnwrapAlgorithmArg {
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum BfAlgorithmArg {
-    Vsharp, Pdf, Lbv, Ismv, Sharp,
+    Vsharp, Pdf, Lbv, Ismv, Sharp, Resharp, Harperella, Iharperella,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]

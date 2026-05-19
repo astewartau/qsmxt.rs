@@ -1,6 +1,6 @@
 use log::info;
 use super::common::{load_nifti, load_mask, save_nifti, save_mask};
-use crate::cli::BgremoveCommand;
+use crate::cli::{BgremoveCommand, BgremoveCommonArgs};
 
 pub fn execute(cmd: BgremoveCommand) -> crate::Result<()> {
     let (common, local_field, eroded_mask) = match cmd {
@@ -97,6 +97,75 @@ pub fn execute(cmd: BgremoveCommand) -> crate::Result<()> {
                 radius, threshold,
             );
             (c, (lf, field_nifti), em)
+        }
+        BgremoveCommand::Resharp(args) => {
+            let c = args.common;
+            let field_nifti = load_nifti(&c.input)?;
+            let (mask, _) = load_mask(&c.mask)?;
+            let (nx, ny, nz) = field_nifti.dims;
+            let (vsx, vsy, vsz) = field_nifti.voxel_size;
+            info!("Background removal (RESHARP, {}x{}x{})", nx, ny, nz);
+
+            let d = qsm_core::bgremove::ResharpParams::default();
+            let radius = args.radius.unwrap_or(d.radius);
+            let tik_reg = args.tik_reg.unwrap_or(d.tik_reg);
+            let tol = args.tol.unwrap_or(d.tol);
+            let max_iter = args.max_iter.unwrap_or(d.max_iter);
+            let (lf, em) = qsm_core::bgremove::resharp_with_progress(
+                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
+                radius, tik_reg, tol, max_iter, |_, _| {},
+            );
+            (c, (lf, field_nifti), em)
+        }
+        BgremoveCommand::Harperella(args) => {
+            let phase_nifti = load_nifti(&args.input)?;
+            let (mask, _) = load_mask(&args.mask)?;
+            let (nx, ny, nz) = phase_nifti.dims;
+            let (vsx, vsy, vsz) = phase_nifti.voxel_size;
+            info!("Background removal (HARPERELLA, {}x{}x{})", nx, ny, nz);
+
+            let d = qsm_core::pipeline::HarperellaParams::default();
+            let radius = args.radius.unwrap_or(d.radius);
+            let max_iter = args.max_iter.unwrap_or(d.max_iter);
+            let tol = args.tol.unwrap_or(d.tol);
+            let (lf, em) = qsm_core::pipeline::harperella_with_progress(
+                &phase_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
+                radius, max_iter, tol, |_, _| {},
+            );
+
+            let common = BgremoveCommonArgs {
+                input: args.input,
+                mask: args.mask,
+                output: args.output,
+                b0_direction: vec![0.0, 0.0, 1.0],
+                output_mask: args.output_mask,
+            };
+            (common, (lf, phase_nifti), em)
+        }
+        BgremoveCommand::Iharperella(args) => {
+            let phase_nifti = load_nifti(&args.input)?;
+            let (mask, _) = load_mask(&args.mask)?;
+            let (nx, ny, nz) = phase_nifti.dims;
+            let (vsx, vsy, vsz) = phase_nifti.voxel_size;
+            info!("Background removal (iHARPERELLA, {}x{}x{})", nx, ny, nz);
+
+            let d = qsm_core::pipeline::HarperellaParams::default();
+            let radius = args.radius.unwrap_or(d.radius);
+            let max_iter = args.max_iter.unwrap_or(d.max_iter);
+            let tol = args.tol.unwrap_or(d.tol);
+            let (lf, em) = qsm_core::pipeline::iharperella_with_progress(
+                &phase_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
+                radius, max_iter, tol, |_, _| {},
+            );
+
+            let common = BgremoveCommonArgs {
+                input: args.input,
+                mask: args.mask,
+                output: args.output,
+                b0_direction: vec![0.0, 0.0, 1.0],
+                output_mask: args.output_mask,
+            };
+            (common, (lf, phase_nifti), em)
         }
     };
 

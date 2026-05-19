@@ -200,6 +200,9 @@ pub enum BfAlgorithm {
     Lbv,
     Ismv,
     Sharp,
+    Resharp,
+    Harperella,
+    Iharperella,
 }
 
 impl fmt::Display for BfAlgorithm {
@@ -210,6 +213,9 @@ impl fmt::Display for BfAlgorithm {
             Self::Lbv => write!(f, "lbv"),
             Self::Ismv => write!(f, "ismv"),
             Self::Sharp => write!(f, "sharp"),
+            Self::Resharp => write!(f, "resharp"),
+            Self::Harperella => write!(f, "harperella"),
+            Self::Iharperella => write!(f, "iharperella"),
         }
     }
 }
@@ -411,6 +417,32 @@ pub struct PipelineConfig {
     #[serde(default = "default_sharp_radius_factor")]
     pub sharp_radius_factor: f64,
 
+    // RESHARP parameters
+    #[serde(default = "default_resharp_radius")]
+    pub resharp_radius: f64,
+    #[serde(default = "default_resharp_tik_reg")]
+    pub resharp_tik_reg: f64,
+    #[serde(default = "default_resharp_tol")]
+    pub resharp_tol: f64,
+    #[serde(default = "default_resharp_max_iter")]
+    pub resharp_max_iter: usize,
+
+    // HARPERELLA parameters
+    #[serde(default = "default_harperella_radius")]
+    pub harperella_radius: f64,
+    #[serde(default = "default_harperella_max_iter")]
+    pub harperella_max_iter: usize,
+    #[serde(default = "default_harperella_tol")]
+    pub harperella_tol: f64,
+
+    // iHARPERELLA parameters
+    #[serde(default = "default_iharperella_radius")]
+    pub iharperella_radius: f64,
+    #[serde(default = "default_iharperella_max_iter")]
+    pub iharperella_max_iter: usize,
+    #[serde(default = "default_iharperella_tol")]
+    pub iharperella_tol: f64,
+
     // ROMEO parameters
     #[serde(default = "default_romeo_phase_gradient_coherence")]
     pub romeo_phase_gradient_coherence: bool,
@@ -515,6 +547,16 @@ fn default_ismv_max_iter() -> usize { qsm_core::bgremove::IsmvParams::default().
 fn default_ismv_radius_factor() -> f64 { qsm_core::bgremove::IsmvParams::default().radius_factor }
 fn default_sharp_threshold() -> f64 { qsm_core::bgremove::SharpParams::default().threshold }
 fn default_sharp_radius_factor() -> f64 { qsm_core::bgremove::SharpParams::default().radius_factor }
+fn default_resharp_radius() -> f64 { qsm_core::bgremove::ResharpParams::default().radius }
+fn default_resharp_tik_reg() -> f64 { qsm_core::bgremove::ResharpParams::default().tik_reg }
+fn default_resharp_tol() -> f64 { qsm_core::bgremove::ResharpParams::default().tol }
+fn default_resharp_max_iter() -> usize { qsm_core::bgremove::ResharpParams::default().max_iter }
+fn default_harperella_radius() -> f64 { qsm_core::pipeline::HarperellaParams::default().radius }
+fn default_harperella_max_iter() -> usize { qsm_core::pipeline::HarperellaParams::default().max_iter }
+fn default_harperella_tol() -> f64 { qsm_core::pipeline::HarperellaParams::default().tol }
+fn default_iharperella_radius() -> f64 { qsm_core::pipeline::HarperellaParams::default().radius }
+fn default_iharperella_max_iter() -> usize { qsm_core::pipeline::HarperellaParams::default().max_iter }
+fn default_iharperella_tol() -> f64 { qsm_core::pipeline::HarperellaParams::default().tol }
 fn default_romeo_phase_gradient_coherence() -> bool { qsm_core::unwrap::RomeoParams::default().phase_gradient_coherence }
 fn default_romeo_mag_coherence() -> bool { qsm_core::unwrap::RomeoParams::default().mag_coherence }
 fn default_romeo_mag_weight() -> bool { qsm_core::unwrap::RomeoParams::default().mag_weight }
@@ -629,6 +671,16 @@ impl Default for PipelineConfig {
             ismv_radius_factor: default_ismv_radius_factor(),
             sharp_threshold: default_sharp_threshold(),
             sharp_radius_factor: default_sharp_radius_factor(),
+            resharp_radius: default_resharp_radius(),
+            resharp_tik_reg: default_resharp_tik_reg(),
+            resharp_tol: default_resharp_tol(),
+            resharp_max_iter: default_resharp_max_iter(),
+            harperella_radius: default_harperella_radius(),
+            harperella_max_iter: default_harperella_max_iter(),
+            harperella_tol: default_harperella_tol(),
+            iharperella_radius: default_iharperella_radius(),
+            iharperella_max_iter: default_iharperella_max_iter(),
+            iharperella_tol: default_iharperella_tol(),
             romeo_phase_gradient_coherence: default_romeo_phase_gradient_coherence(),
             romeo_mag_coherence: default_romeo_mag_coherence(),
             romeo_mag_weight: default_romeo_mag_weight(),
@@ -693,6 +745,9 @@ impl PipelineConfig {
                 cli::BfAlgorithmArg::Lbv => BfAlgorithm::Lbv,
                 cli::BfAlgorithmArg::Ismv => BfAlgorithm::Ismv,
                 cli::BfAlgorithmArg::Sharp => BfAlgorithm::Sharp,
+                cli::BfAlgorithmArg::Resharp => BfAlgorithm::Resharp,
+                cli::BfAlgorithmArg::Harperella => BfAlgorithm::Harperella,
+                cli::BfAlgorithmArg::Iharperella => BfAlgorithm::Iharperella,
             });
         }
         if let Some(v) = args.combine_phase {
@@ -752,6 +807,16 @@ impl PipelineConfig {
         override_field!(ismv_params.ismv_max_iter);
         override_field!(sharp_params.sharp_threshold);
         override_field!(sharp_params.sharp_radius_factor);
+        override_field!(resharp_params.resharp_radius);
+        override_field!(resharp_params.resharp_tik_reg);
+        override_field!(resharp_params.resharp_tol);
+        override_field!(resharp_params.resharp_max_iter);
+        override_field!(harperella_params.harperella_radius);
+        override_field!(harperella_params.harperella_max_iter);
+        override_field!(harperella_params.harperella_tol);
+        override_field!(iharperella_params.iharperella_radius);
+        override_field!(iharperella_params.iharperella_max_iter);
+        override_field!(iharperella_params.iharperella_tol);
         override_field!(vsharp_params.vsharp_max_radius_factor);
         override_field!(vsharp_params.vsharp_min_radius_factor);
         override_field!(ismv_params.ismv_radius_factor);
@@ -1055,6 +1120,9 @@ mod tests {
             lbv_params: Default::default(),
             ismv_params: Default::default(),
             sharp_params: Default::default(),
+            resharp_params: Default::default(),
+            harperella_params: Default::default(),
+            iharperella_params: Default::default(),
             romeo_params: Default::default(),
             swi_params: Default::default(),
             mcpc3ds_sigma: None,
