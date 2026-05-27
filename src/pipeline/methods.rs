@@ -162,23 +162,40 @@ pub fn generate_methods(config: &PipelineConfig) -> String {
                 add_citation(&mut citations, &CITE_QSMART);
             }
             _ => {
-                // Multi-echo combination
+                // Phase offset removal
                 if config.phase_offset_removal {
                     sentences.push("Phase offset removal was performed using the HIP method (Eckstein et al., 2018).".to_string());
                     add_citation(&mut citations, &CITE_MCPC3DS);
+                }
+
+                // Bipolar correction
+                if config.bipolar_correction {
+                    sentences.push("Bipolar gradient correction was applied to remove readout-induced phase artefacts.".to_string());
                 }
 
                 // Unwrapping
                 if let Some(ref alg) = config.unwrapping_algorithm {
                     match alg {
                         UnwrappingAlgorithm::Romeo => {
-                            sentences.push("Phase unwrapping was performed using ROMEO (Dymerska et al., 2021).".to_string());
+                            let mode = if config.romeo_individual { "individual per-echo" } else { "template-based temporal" };
+                            sentences.push(format!("Phase unwrapping was performed using ROMEO ({} mode) (Dymerska et al., 2021).", mode));
                             add_citation(&mut citations, &CITE_ROMEO);
                         }
                         UnwrappingAlgorithm::Laplacian => {
                             sentences.push("Phase unwrapping was performed using the Laplacian method (Schofield & Zhu, 2003).".to_string());
                             add_citation(&mut citations, &CITE_LAPLACIAN_UNWRAP);
                         }
+                    }
+                }
+
+                // B0 estimation
+                match config.b0_estimation {
+                    B0Estimation::WeightedAvg => {
+                        let wt = format!("{}", config.b0_weight_type);
+                        sentences.push(format!("The B0 field map was estimated using weighted averaging ({} weighting).", wt));
+                    }
+                    B0Estimation::LinearFit => {
+                        sentences.push("The B0 field map was estimated using magnitude-weighted linear fit of phase vs echo time.".to_string());
                     }
                 }
 
