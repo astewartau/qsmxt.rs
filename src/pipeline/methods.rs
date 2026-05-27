@@ -125,6 +125,11 @@ const CITE_BET: Citation = Citation {
     text: "Smith, S.M. (2002). \"Fast robust automated brain extraction.\" *Human Brain Mapping*, 17(3):143-155. https://doi.org/10.1002/hbm.10062",
 };
 
+const CITE_BIPOLAR: Citation = Citation {
+    key: "eckstein2021phd",
+    text: "Eckstein, K. (2021). \"Advanced Methods for Quantitative Susceptibility Mapping and Susceptibility Weighted Imaging.\" PhD thesis, Medical University of Vienna. https://doi.org/10.34726/hss.2021.43447",
+};
+
 const CITE_BIAS: Citation = Citation {
     key: "eckstein2019",
     text: "Eckstein, K., Trattnig, S., Robinson, S.D. (2019). \"A Simple Homogeneity Correction for Neuroimaging at 7T.\" *Proc. ISMRM 27th Annual Meeting*.",
@@ -162,15 +167,22 @@ pub fn generate_methods(config: &PipelineConfig) -> String {
                 add_citation(&mut citations, &CITE_QSMART);
             }
             _ => {
-                // Phase offset removal
-                if config.phase_offset_removal {
-                    sentences.push("Phase offset removal was performed using the HIP method (Eckstein et al., 2018).".to_string());
-                    add_citation(&mut citations, &CITE_MCPC3DS);
-                }
-
-                // Bipolar correction
-                if config.bipolar_correction {
-                    sentences.push("Bipolar gradient correction was applied to remove readout-induced phase artefacts.".to_string());
+                // Phase offset removal and/or bipolar correction
+                match (config.phase_offset_removal, config.bipolar_correction) {
+                    (true, true) => {
+                        sentences.push("Phase offset removal (Eckstein et al., 2018) and bipolar gradient correction (Eckstein, 2021) were applied.".to_string());
+                        add_citation(&mut citations, &CITE_MCPC3DS);
+                        add_citation(&mut citations, &CITE_BIPOLAR);
+                    }
+                    (true, false) => {
+                        sentences.push("Phase offset removal was performed using the HIP method (Eckstein et al., 2018).".to_string());
+                        add_citation(&mut citations, &CITE_MCPC3DS);
+                    }
+                    (false, true) => {
+                        sentences.push("Bipolar gradient correction (Eckstein, 2021) was applied to remove readout-induced phase artefacts.".to_string());
+                        add_citation(&mut citations, &CITE_BIPOLAR);
+                    }
+                    (false, false) => {}
                 }
 
                 // Unwrapping
@@ -411,6 +423,7 @@ fn cite_inline(cite: &Citation) -> &'static str {
         "sun2014" => "Sun & Wilman, 2014",
         "li2014" => "Li et al., 2014",
         "li2015iharp" => "Li et al., 2015",
+        "eckstein2021phd" => "Eckstein, 2021",
         _ => cite.key,
     }
 }
