@@ -900,8 +900,13 @@ pub struct PipelineFormState {
     pub bf_algorithm: usize,
     pub qsm_reference: usize,
 
+    // Field mapping
+    pub phase_offset_removal: bool,
+    pub bipolar_correction: bool,
+    pub romeo_individual: bool,
+    pub romeo_correct_global: bool,
+
     // Parameters (as Strings for text editing)
-    pub phase_combination: usize, // 0 = mcpc3ds, 1 = linear_fit
     pub inhomogeneity_correction: bool,
     pub obliquity_threshold: String,
 
@@ -1008,8 +1013,8 @@ pub struct PipelineFormState {
     pub romeo_mag_coherence: bool,
     pub romeo_mag_weight: bool,
 
-    // MCPC-3D-S
-    pub mcpc3ds_sigma: String,
+    // Phase offset sigma
+    pub phase_offset_sigma: String,
 
     // Mask sections (OR'd together at runtime)
     pub mask_sections: Vec<crate::pipeline::config::MaskSection>,
@@ -1041,7 +1046,10 @@ impl Default for PipelineFormState {
             unwrapping_algorithm: 0, // romeo
             bf_algorithm: 0, // vsharp
             qsm_reference: 0, // mean
-            phase_combination: 0, // mcpc3ds
+            phase_offset_removal: true,
+            bipolar_correction: false,
+            romeo_individual: true,
+            romeo_correct_global: true,
             inhomogeneity_correction: true,
             obliquity_threshold: "-1".to_string(),
             rts_delta: format!("{}", rts.delta),
@@ -1096,8 +1104,8 @@ impl Default for PipelineFormState {
             romeo_phase_gradient_coherence: qsm_core::unwrap::RomeoParams::default().phase_gradient_coherence,
             romeo_mag_coherence: qsm_core::unwrap::RomeoParams::default().mag_coherence,
             romeo_mag_weight: qsm_core::unwrap::RomeoParams::default().mag_weight,
-            mcpc3ds_sigma: {
-                let s = qsm_core::utils::Mcpc3dsParams::default().sigma;
+            phase_offset_sigma: {
+                let s = qsm_core::utils::PhaseOffsetParams::default().sigma;
                 format!("{} {} {}", s[0], s[1], s[2])
             },
             qsmart_ilsqr_tol: format!("{}", qsm_core::utils::QsmartParams::default().ilsqr_tol),
@@ -1127,7 +1135,6 @@ impl Default for PipelineFormState {
 pub const QSM_ALGO_OPTIONS: &[&str] = &["rts", "tv", "tkd", "tsvd", "tgv", "tikhonov", "nltv", "medi", "ilsqr", "qsmart"];
 pub const UNWRAP_OPTIONS: &[&str] = &["romeo", "laplacian"];
 pub const BF_OPTIONS: &[&str] = &["vsharp", "pdf", "lbv", "ismv", "sharp", "resharp", "harperella", "iharperella"];
-pub const PHASE_COMBO_OPTIONS: &[&str] = &["mcpc3ds", "linear-fit"];
 pub const QSM_REF_OPTIONS: &[&str] = &["mean", "none"];
 
 impl PipelineFormState {
@@ -1148,10 +1155,6 @@ impl PipelineFormState {
 
         // General settings (QSM-only)
         if self.do_qsm {
-        rows.push(PipelineRow::AlgoSelect {
-            label: "Phase Combination", field: "phase_combination",
-            options: PHASE_COMBO_OPTIONS, help: PHASE_COMBO_HELP,
-        });
         rows.push(PipelineRow::Param {
             label: "Obliquity", field: "obliquity_threshold",
             help: "Resample oblique acquisitions to axial if obliquity exceeds this (degrees, -1 = disabled)",
@@ -1198,12 +1201,48 @@ impl PipelineFormState {
         rows.push(PipelineRow::Separator);
 
         if self.do_qsm {
-        // Unwrapping (hidden if TGV or QSMART)
+        // Field Mapping (hidden if TGV or QSMART)
         if !is_tgv && !is_qsmart {
+            let is_laplacian = self.unwrapping_algorithm == 1;
+
+            // Phase offset removal (disabled for Laplacian)
+            if !is_laplacian {
+                rows.push(PipelineRow::Toggle {
+                    label: "Phase Offset Removal", field: "phase_offset_removal",
+                    help: "Remove spatially-varying phase offset using HIP (Eckstein et al., 2018)",
+                });
+                if self.phase_offset_removal {
+                    rows.push(PipelineRow::Param { label: "  Sigma", field: "phase_offset_sigma",
+                        help: "Gaussian smoothing sigma in voxels (x y z)" });
+                }
+
+                // Bipolar correction (disabled for Laplacian)
+                rows.push(PipelineRow::Toggle {
+                    label: "Bipolar Correction", field: "bipolar_correction",
+                    help: "Remove linear phase artefact from bipolar readout gradients (requires 3+ echoes)",
+                });
+            }
+
+            // Unwrapping
             rows.push(PipelineRow::AlgoSelect {
                 label: "Unwrapping", field: "unwrapping_algorithm",
                 options: UNWRAP_OPTIONS, help: UNWRAP_HELP,
             });
+
+            // ROMEO multi-echo params (only for ROMEO)
+            if !is_laplacian {
+                rows.push(PipelineRow::Toggle {
+                    label: "  Individual Mode", field: "romeo_individual",
+                    help: "Unwrap each echo independently (recommended). Off = template-based temporal unwrapping.",
+                });
+                if self.romeo_individual {
+                    rows.push(PipelineRow::Toggle {
+                        label: "  Correct Global", field: "romeo_correct_global",
+                        help: "Correct inter-echo 2π offsets after individual unwrapping",
+                    });
+                }
+            }
+
             rows.push(PipelineRow::Separator);
         }
 
@@ -1343,6 +1382,7 @@ impl PipelineFormState {
         "tikhonov_lambda",
         "nltv_lambda", "nltv_mu", "nltv_tol", "nltv_max_iter", "nltv_newton_iter",
         "medi_lambda", "medi_max_iter", "medi_cg_max_iter", "medi_cg_tol", "medi_tol", "medi_percentage", "medi_smv_radius",
+        "phase_offset_sigma",
         "vsharp_threshold", "pdf_tol", "lbv_tol", "ismv_tol", "ismv_max_iter", "sharp_threshold",
         "resharp_radius", "resharp_tik_reg", "resharp_tol", "resharp_max_iter",
         "harperella_radius", "harperella_max_iter", "harperella_tol",
@@ -1386,6 +1426,7 @@ impl PipelineFormState {
             "medi_tol" => &self.medi_tol,
             "medi_percentage" => &self.medi_percentage,
             "medi_smv_radius" => &self.medi_smv_radius,
+            "phase_offset_sigma" => &self.phase_offset_sigma,
             "vsharp_threshold" => &self.vsharp_threshold,
             "pdf_tol" => &self.pdf_tol,
             "lbv_tol" => &self.lbv_tol,
@@ -1450,6 +1491,7 @@ impl PipelineFormState {
             "medi_tol" => Some(&mut self.medi_tol),
             "medi_percentage" => Some(&mut self.medi_percentage),
             "medi_smv_radius" => Some(&mut self.medi_smv_radius),
+            "phase_offset_sigma" => Some(&mut self.phase_offset_sigma),
             "vsharp_threshold" => Some(&mut self.vsharp_threshold),
             "pdf_tol" => Some(&mut self.pdf_tol),
             "lbv_tol" => Some(&mut self.lbv_tol),
@@ -1486,7 +1528,7 @@ impl PipelineFormState {
             "unwrapping_algorithm" => self.unwrapping_algorithm,
             "bf_algorithm" => self.bf_algorithm,
             "qsm_reference" => self.qsm_reference,
-            "phase_combination" => self.phase_combination,
+
             "mask_preset" => self.mask_preset,
             _ => 0,
         }
@@ -1499,7 +1541,6 @@ impl PipelineFormState {
             "unwrapping_algorithm" => self.unwrapping_algorithm = val,
             "bf_algorithm" => self.bf_algorithm = val,
             "qsm_reference" => self.qsm_reference = val,
-            "phase_combination" => self.phase_combination = val,
             "mask_preset" => {
                 self.mask_preset = val;
                 self.apply_mask_preset(val);
@@ -1513,6 +1554,10 @@ impl PipelineFormState {
         match field {
             "do_qsm" => self.do_qsm,
             "inhomogeneity_correction" => self.inhomogeneity_correction,
+            "phase_offset_removal" => self.phase_offset_removal,
+            "bipolar_correction" => self.bipolar_correction,
+            "romeo_individual" => self.romeo_individual,
+            "romeo_correct_global" => self.romeo_correct_global,
             "medi_smv" => self.medi_smv,
             _ => false,
         }
@@ -1523,6 +1568,10 @@ impl PipelineFormState {
         match field {
             "do_qsm" => self.do_qsm = !self.do_qsm,
             "inhomogeneity_correction" => self.inhomogeneity_correction = !self.inhomogeneity_correction,
+            "phase_offset_removal" => self.phase_offset_removal = !self.phase_offset_removal,
+            "bipolar_correction" => self.bipolar_correction = !self.bipolar_correction,
+            "romeo_individual" => self.romeo_individual = !self.romeo_individual,
+            "romeo_correct_global" => self.romeo_correct_global = !self.romeo_correct_global,
             "medi_smv" => self.medi_smv = !self.medi_smv,
             _ => {}
         }
@@ -3703,11 +3752,11 @@ mod tests {
 
 
     #[test]
-    fn test_pipeline_phase_combination() {
+    fn test_pipeline_phase_offset_removal() {
         let mut app = App::new();
-        assert_eq!(app.pipeline_state.phase_combination, 0); // mcpc3ds
-        app.pipeline_state.set_select("phase_combination", 1);
-        assert_eq!(app.pipeline_state.phase_combination, 1); // linear_fit
+        assert!(app.pipeline_state.phase_offset_removal);
+        app.pipeline_state.toggle("phase_offset_removal");
+        assert!(!app.pipeline_state.phase_offset_removal);
     }
 
     // --- F5 triggers run ---
@@ -3863,7 +3912,7 @@ mod tests {
         }
         assert_eq!(ps.get_param("rts_delta"), "0.25");
 
-        // Test select (phase_combination)
+        // Test select (qsm_algorithm)
         ps.set_select("qsm_algorithm", 2);
         assert_eq!(ps.get_select("qsm_algorithm"), 2);
     }
@@ -4442,24 +4491,24 @@ mod tests {
     fn test_pipeline_enter_cycles_algo_select() {
         let mut app = App::new();
         app.active_tab = 1;
-        // Navigate to phase_combination AlgoSelect
+        // Navigate to unwrapping_algorithm AlgoSelect
         let rows = app.pipeline_state.visible_rows();
         let focusable = app.pipeline_state.focusable_rows();
-        let mut pc_focus = None;
+        let mut uw_focus = None;
         for (fi, &ri) in focusable.iter().enumerate() {
-            if let PipelineRow::AlgoSelect { field: "phase_combination", .. } = &rows[ri] {
-                pc_focus = Some(fi);
+            if let PipelineRow::AlgoSelect { field: "unwrapping_algorithm", .. } = &rows[ri] {
+                uw_focus = Some(fi);
                 break;
             }
         }
-        let fi = pc_focus.expect("phase_combination row not found");
+        let fi = uw_focus.expect("unwrapping_algorithm row not found");
         app.pipeline_state.focus = fi;
-        assert_eq!(app.pipeline_state.phase_combination, 0);
+        assert_eq!(app.pipeline_state.unwrapping_algorithm, 0); // romeo
         app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.pipeline_state.phase_combination, 1);
+        assert_eq!(app.pipeline_state.unwrapping_algorithm, 1); // laplacian
         // Wrap around
         app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.pipeline_state.phase_combination, 0);
+        assert_eq!(app.pipeline_state.unwrapping_algorithm, 0); // romeo
     }
 
     #[test]

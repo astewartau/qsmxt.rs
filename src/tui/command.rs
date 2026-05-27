@@ -56,10 +56,18 @@ pub fn build_command_string(app: &App) -> String {
         parts.push(format!("--qsm-reference {}", QSM_REF_OPTIONS[ps.qsm_reference]));
     }
 
-    // Phase combination (only if changed from default)
-    if ps.phase_combination != defaults.phase_combination {
-        let val = if ps.phase_combination == 0 { "true" } else { "false" };
-        parts.push(format!("--combine-phase {}", val));
+    // Field mapping flags (only if changed from default)
+    if ps.phase_offset_removal != defaults.phase_offset_removal {
+        parts.push(format!("--phase-offset-removal {}", ps.phase_offset_removal));
+    }
+    if ps.bipolar_correction != defaults.bipolar_correction {
+        parts.push("--bipolar-correction".to_string());
+    }
+    if ps.romeo_individual != defaults.romeo_individual && !ps.romeo_individual {
+        parts.push("--no-romeo-individual".to_string());
+    }
+    if ps.romeo_correct_global != defaults.romeo_correct_global && !ps.romeo_correct_global {
+        parts.push("--no-romeo-correct-global".to_string());
     }
 
     // Parameters (only if changed from default)
@@ -295,12 +303,12 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         bf_algorithm: Some(bf_options[ps.bf_algorithm]),
         masking_algorithm: None,
         masking_input: None,
-        phase_offset_removal: Some(ps.phase_combination == 0), // 0=mcpc3ds (true), 1=linear_fit (false)
+        phase_offset_removal: Some(ps.phase_offset_removal),
         phase_offset_sigma: None,
-        bipolar_correction: false,
-        romeo_individual: false,
-        no_romeo_individual: false,
-        no_romeo_correct_global: false,
+        bipolar_correction: ps.bipolar_correction,
+        romeo_individual: ps.romeo_individual,
+        no_romeo_individual: !ps.romeo_individual,
+        no_romeo_correct_global: !ps.romeo_correct_global,
         bet_fractional_intensity: parse_optional_f64(&ps.bet_fractional_intensity),
         bet_smoothness: parse_optional_f64(&ps.bet_smoothness),
         bet_gradient_threshold: parse_optional_f64(&ps.bet_gradient_threshold),
@@ -567,7 +575,7 @@ pub fn config_from_app(app: &App) -> PipelineConfig {
         qsm_algorithm,
         unwrapping_algorithm: if is_end_to_end { None } else { Some(unwrap_algorithms[ps.unwrapping_algorithm]) },
         bf_algorithm: if is_end_to_end { None } else { Some(bf_algorithms[ps.bf_algorithm]) },
-        phase_offset_removal: ps.phase_combination == 0,
+        phase_offset_removal: ps.phase_offset_removal,
         qsm_reference: match ps.qsm_reference {
             0 => QsmReference::Mean,
             _ => QsmReference::None,
@@ -650,11 +658,11 @@ mod tests {
     }
 
     #[test]
-    fn test_command_string_phase_combination() {
+    fn test_command_string_phase_offset_removal() {
         let mut app = default_app();
-        app.pipeline_state.phase_combination = 1; // linear-fit (non-default)
+        app.pipeline_state.phase_offset_removal = false;
         let cmd = build_command_string(&app);
-        assert!(cmd.contains("--combine-phase false"));
+        assert!(cmd.contains("--phase-offset-removal false"));
     }
 
     #[test]
@@ -751,11 +759,11 @@ mod tests {
     }
 
     #[test]
-    fn test_build_run_args_phase_combination_linear_fit() {
+    fn test_build_run_args_phase_offset_removal_disabled() {
         let mut app = default_app();
         app.form.bids_dir = "/b".to_string();
         app.form.output_dir = "/o".to_string();
-        app.pipeline_state.phase_combination = 1; // linear_fit
+        app.pipeline_state.phase_offset_removal = false;
         let args = build_run_args(&app).unwrap();
         assert_eq!(args.phase_offset_removal, Some(false));
     }
