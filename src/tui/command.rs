@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::cli::*;
-use crate::pipeline::config::{PipelineConfig, QsmAlgorithm, UnwrappingAlgorithm, BfAlgorithm, QsmReference};
+use crate::pipeline::config::{PipelineConfig, QsmAlgorithm, UnwrappingAlgorithm, BfAlgorithm, QsmReference, B0Estimation, B0WeightType};
 use super::app::App;
 
 pub fn build_command_string(app: &App) -> String {
@@ -579,6 +579,21 @@ pub fn config_from_app(app: &App) -> PipelineConfig {
         unwrapping_algorithm: if is_end_to_end { None } else { Some(unwrap_algorithms[ps.unwrapping_algorithm]) },
         bf_algorithm: if is_end_to_end { None } else { Some(bf_algorithms[ps.bf_algorithm]) },
         phase_offset_removal: ps.phase_offset_removal,
+        bipolar_correction: ps.bipolar_correction,
+        romeo_individual: ps.romeo_individual,
+        romeo_correct_global: ps.romeo_correct_global,
+        romeo_template: ps.romeo_template.trim().parse::<usize>().unwrap_or(1).saturating_sub(1),
+        b0_estimation: match ps.b0_estimation {
+            0 => B0Estimation::WeightedAvg,
+            _ => B0Estimation::LinearFit,
+        },
+        b0_weight_type: match ps.b0_weight_type {
+            0 => B0WeightType::PhaseSNR,
+            1 => B0WeightType::PhaseVar,
+            2 => B0WeightType::Average,
+            3 => B0WeightType::TEs,
+            _ => B0WeightType::Mag,
+        },
         qsm_reference: match ps.qsm_reference {
             0 => QsmReference::Mean,
             _ => QsmReference::None,
