@@ -42,7 +42,7 @@ pub fn build_command_string(app: &App) -> String {
     }
 
     // Algorithm selects (only if changed from default)
-    use super::app::{QSM_ALGO_OPTIONS, UNWRAP_OPTIONS, BF_OPTIONS, QSM_REF_OPTIONS};
+    use super::app::{QSM_ALGO_OPTIONS, UNWRAP_OPTIONS, BF_OPTIONS, QSM_REF_OPTIONS, B0_ESTIMATION_OPTIONS, B0_WEIGHT_TYPE_OPTIONS};
     if ps.qsm_algorithm != defaults.qsm_algorithm {
         parts.push(format!("--qsm-algorithm {}", QSM_ALGO_OPTIONS[ps.qsm_algorithm]));
     }
@@ -63,14 +63,25 @@ pub fn build_command_string(app: &App) -> String {
     if ps.bipolar_correction != defaults.bipolar_correction {
         parts.push("--bipolar-correction".to_string());
     }
+    push_if_changed(&mut parts, "--phase-offset-sigma", &ps.phase_offset_sigma, &defaults.phase_offset_sigma);
     // ROMEO multi-echo flags (only when ROMEO is selected)
-    if ps.unwrapping_algorithm == defaults.unwrapping_algorithm || ps.unwrapping_algorithm == 0 {
+    if ps.unwrapping_algorithm == 0 { // romeo
         if ps.romeo_individual != defaults.romeo_individual && !ps.romeo_individual {
             parts.push("--no-romeo-individual".to_string());
+        }
+        if !ps.romeo_individual && ps.romeo_template != defaults.romeo_template {
+            parts.push(format!("--romeo-template {}", ps.romeo_template.trim()));
         }
         if ps.romeo_correct_global != defaults.romeo_correct_global && !ps.romeo_correct_global {
             parts.push("--no-romeo-correct-global".to_string());
         }
+    }
+    // B0 estimation
+    if ps.b0_estimation != defaults.b0_estimation {
+        parts.push(format!("--b0-estimation {}", B0_ESTIMATION_OPTIONS[ps.b0_estimation]));
+    }
+    if ps.b0_estimation == 0 && ps.b0_weight_type != defaults.b0_weight_type {
+        parts.push(format!("--b0-weight-type {}", B0_WEIGHT_TYPE_OPTIONS[ps.b0_weight_type]));
     }
 
     // Parameters (only if changed from default)
