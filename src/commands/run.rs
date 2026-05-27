@@ -66,7 +66,7 @@ pub fn execute(args: RunArgs) -> crate::Result<()> {
 
     if args.dry {
         println!("Pipeline:");
-        println!("  Phase Combination: {}", if config.combine_phase { "MCPC-3D-S" } else { "Linear Fit" });
+        println!("  Phase Offset Removal: {}", if config.phase_offset_removal { "enabled" } else { "disabled" });
         if config.inhomogeneity_correction {
             println!("  Inhomogeneity:     enabled");
         }

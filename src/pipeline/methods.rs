@@ -163,8 +163,8 @@ pub fn generate_methods(config: &PipelineConfig) -> String {
             }
             _ => {
                 // Multi-echo combination
-                if config.combine_phase {
-                    sentences.push("Multi-echo phase data was combined using the MCPC-3D-S method (Eckstein et al., 2018).".to_string());
+                if config.phase_offset_removal {
+                    sentences.push("Phase offset removal was performed using the HIP method (Eckstein et al., 2018).".to_string());
                     add_citation(&mut citations, &CITE_MCPC3DS);
                 }
 
@@ -483,7 +483,7 @@ mod tests {
         let out = generate_methods(&cfg);
         assert!(out.contains("QSM processing was performed using qsmxt.rs"));
         assert!(out.contains("Stewart, 2026"));
-        assert!(out.contains("MCPC-3D-S"));
+        assert!(out.contains("Phase offset removal"));
         assert!(out.contains("ROMEO"));
         assert!(out.contains("V-SHARP"));
         assert!(out.contains("RTS"));
@@ -527,21 +527,21 @@ mod tests {
     // ─── 4. Non-TGV with combine_phase ───
 
     #[test]
-    fn test_combine_phase_mcpc3ds() {
+    fn test_phase_offset_removal() {
         let cfg = PipelineConfig {
             qsm_algorithm: QsmAlgorithm::Rts,
-            combine_phase: true,
+            phase_offset_removal: true,
             ..default_cfg()
         };
         let out = generate_methods(&cfg);
-        assert!(out.contains("MCPC-3D-S"));
+        assert!(out.contains("Phase offset removal"));
         assert!(out.contains("Eckstein et al., 2018"));
     }
 
     #[test]
-    fn test_no_combine_phase() {
+    fn test_no_phase_offset_removal() {
         let cfg = PipelineConfig {
-            combine_phase: false,
+            phase_offset_removal: false,
             ..default_cfg()
         };
         let out = generate_methods(&cfg);

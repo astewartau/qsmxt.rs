@@ -34,7 +34,12 @@ mod integration_tests {
             bf_algorithm: None,
             masking_algorithm: None,
             masking_input: None,
-            combine_phase: None,
+            phase_offset_removal: None,
+            phase_offset_sigma: None,
+            bipolar_correction: false,
+            romeo_individual: false,
+            no_romeo_individual: false,
+            no_romeo_correct_global: false,
             bet_fractional_intensity: None,
             bet_smoothness: None,
             bet_gradient_threshold: None,
@@ -62,7 +67,6 @@ mod integration_tests {
             iharperella_params: Default::default(),
             romeo_params: Default::default(),
             swi_params: Default::default(),
-            mcpc3ds_sigma: None,
             n_procs: Some(1),
             homogeneity_sigma_mm: None,
             homogeneity_nbox: None,
@@ -716,7 +720,7 @@ mod integration_tests {
         args.bf_algorithm = Some(BfAlgorithmArg::Vsharp);
         args.masking_algorithm = Some(MaskAlgorithmArg::Threshold);
         args.masking_input = Some(MaskInputArg::Magnitude);
-        args.combine_phase = Some(true);
+        args.phase_offset_removal = Some(true);
         args.mask_erosions = Some(vec![1]);
         args.dry = false;
         args.no_mem_limit = true;

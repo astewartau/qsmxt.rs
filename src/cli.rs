@@ -404,9 +404,29 @@ pub struct RunArgs {
     #[arg(long, value_enum)]
     pub masking_input: Option<MaskInputArg>,
 
-    /// Combine multi-echo phase data
+    /// Enable phase offset removal for multi-echo data (default: true)
     #[arg(long)]
-    pub combine_phase: Option<bool>,
+    pub phase_offset_removal: Option<bool>,
+
+    /// Phase offset removal smoothing sigma (3 values, in voxels)
+    #[arg(long, num_args = 3)]
+    pub phase_offset_sigma: Option<Vec<f64>>,
+
+    /// Enable bipolar gradient correction (requires >= 3 echoes)
+    #[arg(long)]
+    pub bipolar_correction: bool,
+
+    /// ROMEO: use individual per-echo unwrapping (default)
+    #[arg(long)]
+    pub romeo_individual: bool,
+
+    /// ROMEO: use template-based temporal unwrapping
+    #[arg(long)]
+    pub no_romeo_individual: bool,
+
+    /// ROMEO: disable inter-echo 2π offset correction
+    #[arg(long)]
+    pub no_romeo_correct_global: bool,
 
     /// BET fractional intensity (0.0-1.0)
     #[arg(long)]
@@ -477,9 +497,6 @@ pub struct RunArgs {
     #[command(flatten)]
     pub swi_params: SwiParamArgs,
 
-    /// MCPC-3D-S smoothing sigma (3 values, in voxels)
-    #[arg(long, num_args = 3)]
-    pub mcpc3ds_sigma: Option<Vec<f64>>,
 
     /// Number of parallel threads
     #[arg(long)]

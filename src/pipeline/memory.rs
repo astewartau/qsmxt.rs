@@ -163,8 +163,8 @@ fn estimate_unwrap_mem(n: usize, n_echoes: usize, config: &PipelineConfig) -> us
         Some(UnwrappingAlgorithm::Romeo) => 12 * n,
     };
 
-    if n_echoes > 1 && config.combine_phase {
-        // MCPC-3D-S: HIP (16N) + per-echo ROMEO (~12N, sequential) +
+    if n_echoes > 1 && config.phase_offset_removal {
+        // Phase offset removal: HIP (16N) + per-echo ROMEO (~12N, sequential) +
         // smoothing (32N) + corrected_phases (n_echoes*8N) + offsets (16N)
         (n_echoes * 8 + 56) * n
     } else if n_echoes > 1 {
@@ -313,7 +313,7 @@ mod tests {
             qsm_algorithm: QsmAlgorithm::Tgv,
             unwrapping_algorithm: None,
             bf_algorithm: None,
-            combine_phase: false,
+            phase_offset_removal: false,
             ..PipelineConfig::default()
         };
         let est = estimate_peak_memory_bytes(128, 128, 128, 1, true, &config);

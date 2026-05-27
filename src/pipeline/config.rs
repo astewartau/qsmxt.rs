@@ -295,9 +295,15 @@ pub struct PipelineConfig {
     #[serde(default = "default_bf")]
     pub bf_algorithm: Option<BfAlgorithm>,
 
-    // Multi-echo
+    // Field mapping
+    #[serde(default = "default_true", alias = "combine_phase")]
+    pub phase_offset_removal: bool,
+    #[serde(default)]
+    pub bipolar_correction: bool,
     #[serde(default = "default_true")]
-    pub combine_phase: bool,
+    pub romeo_individual: bool,
+    #[serde(default = "default_true")]
+    pub romeo_correct_global: bool,
 
     // QSM reference
     #[serde(default = "default_reference")]
@@ -452,8 +458,8 @@ pub struct PipelineConfig {
     pub romeo_mag_weight: bool,
 
     // MCPC-3D-S parameters
-    #[serde(default = "default_mcpc3ds_sigma")]
-    pub mcpc3ds_sigma: [f64; 3],
+    #[serde(default = "default_phase_offset_sigma", alias = "phase_offset_sigma")]
+    pub phase_offset_sigma: [f64; 3],
 
     // SWI parameters
     #[serde(default = "default_swi_hp_sigma")]
@@ -560,7 +566,7 @@ fn default_iharperella_tol() -> f64 { qsm_core::pipeline::HarperellaParams::defa
 fn default_romeo_phase_gradient_coherence() -> bool { qsm_core::unwrap::RomeoParams::default().phase_gradient_coherence }
 fn default_romeo_mag_coherence() -> bool { qsm_core::unwrap::RomeoParams::default().mag_coherence }
 fn default_romeo_mag_weight() -> bool { qsm_core::unwrap::RomeoParams::default().mag_weight }
-fn default_mcpc3ds_sigma() -> [f64; 3] { qsm_core::utils::Mcpc3dsParams::default().sigma }
+fn default_phase_offset_sigma() -> [f64; 3] { qsm_core::utils::PhaseOffsetParams::default().sigma }
 fn default_swi_hp_sigma() -> [f64; 3] { qsm_core::swi::SwiParams::default().hp_sigma }
 fn default_swi_scaling() -> String {
     match qsm_core::swi::SwiParams::default().scaling {
@@ -626,7 +632,10 @@ impl Default for PipelineConfig {
             qsm_algorithm: QsmAlgorithm::Rts,
             unwrapping_algorithm: Some(UnwrappingAlgorithm::Romeo),
             bf_algorithm: Some(BfAlgorithm::Vsharp),
-            combine_phase: true,
+            phase_offset_removal: true,
+            bipolar_correction: false,
+            romeo_individual: true,
+            romeo_correct_global: true,
             qsm_reference: QsmReference::Mean,
             bet_fractional_intensity: default_bet_fi(),
             bet_smoothness: default_bet_smoothness(),
@@ -684,7 +693,7 @@ impl Default for PipelineConfig {
             romeo_phase_gradient_coherence: default_romeo_phase_gradient_coherence(),
             romeo_mag_coherence: default_romeo_mag_coherence(),
             romeo_mag_weight: default_romeo_mag_weight(),
-            mcpc3ds_sigma: default_mcpc3ds_sigma(),
+            phase_offset_sigma: default_phase_offset_sigma(),
             swi_hp_sigma: default_swi_hp_sigma(),
             swi_scaling: default_swi_scaling(),
             swi_strength: default_swi_strength(),
@@ -750,8 +759,20 @@ impl PipelineConfig {
                 cli::BfAlgorithmArg::Iharperella => BfAlgorithm::Iharperella,
             });
         }
-        if let Some(v) = args.combine_phase {
-            self.combine_phase = v;
+        if let Some(v) = args.phase_offset_removal {
+            self.phase_offset_removal = v;
+        }
+        if args.bipolar_correction {
+            self.bipolar_correction = true;
+        }
+        if args.romeo_individual {
+            self.romeo_individual = true;
+        }
+        if args.no_romeo_individual {
+            self.romeo_individual = false;
+        }
+        if args.no_romeo_correct_global {
+            self.romeo_correct_global = false;
         }
         override_field!(bet_fractional_intensity);
         override_field!(bet_smoothness);
@@ -829,9 +850,9 @@ impl PipelineConfig {
         if args.romeo_params.no_romeo_mag_weight {
             self.romeo_mag_weight = false;
         }
-        if let Some(ref s) = args.mcpc3ds_sigma {
+        if let Some(ref s) = args.phase_offset_sigma {
             if s.len() == 3 {
-                self.mcpc3ds_sigma = [s[0], s[1], s[2]];
+                self.phase_offset_sigma = [s[0], s[1], s[2]];
             }
         }
         override_field!(tgv_params.tgv_iterations);
@@ -1035,7 +1056,7 @@ impl PipelineConfig {
             None => s.push_str("# bf_algorithm = \"pdf\"  # Not used with TGV\n"),
         }
         s.push_str("# Combine multi-echo phase data using MCPC-3D-S\n");
-        s.push_str(&format!("combine_phase = {}\n", self.combine_phase));
+        s.push_str(&format!("phase_offset_removal = {}\n", self.phase_offset_removal));
         s.push_str("# QSM reference: mean | none\n");
         s.push_str(&format!("qsm_reference = \"{}\"\n", self.qsm_reference));
         s.push_str(&format!("do_swi = {}\n", self.do_swi));
@@ -1097,7 +1118,12 @@ mod tests {
             bf_algorithm: None,
             masking_algorithm: None,
             masking_input: None,
-            combine_phase: None,
+            phase_offset_removal: None,
+            phase_offset_sigma: None,
+            bipolar_correction: false,
+            romeo_individual: false,
+            no_romeo_individual: false,
+            no_romeo_correct_global: false,
             bet_fractional_intensity: None,
             bet_smoothness: None,
             bet_gradient_threshold: None,
@@ -1125,7 +1151,6 @@ mod tests {
             iharperella_params: Default::default(),
             romeo_params: Default::default(),
             swi_params: Default::default(),
-            mcpc3ds_sigma: None,
             n_procs: None,
             homogeneity_sigma_mm: None,
             homogeneity_nbox: None,
@@ -1182,7 +1207,9 @@ mod tests {
             qsm_algorithm: QsmAlgorithm::Tgv,
             unwrapping_algorithm: None,
             bf_algorithm: None,
-            combine_phase: false,
+            phase_offset_removal: false,
+            bipolar_correction: false,
+            romeo_individual: false,
             ..PipelineConfig::default()
         };
         assert!(config.validate().is_ok());
@@ -1204,7 +1231,9 @@ mod tests {
             qsm_algorithm: QsmAlgorithm::Tgv,
             unwrapping_algorithm: None,
             bf_algorithm: None,
-            combine_phase: false,
+            phase_offset_removal: false,
+            bipolar_correction: false,
+            romeo_individual: false,
             ..PipelineConfig::default()
         };
         let toml = config.to_annotated_toml();
@@ -1355,14 +1384,16 @@ mod tests {
             qsm_algorithm: QsmAlgorithm::Tgv,
             unwrapping_algorithm: None,
             bf_algorithm: None,
-            combine_phase: false,
+            phase_offset_removal: false,
+            bipolar_correction: false,
+            romeo_individual: false,
             ..PipelineConfig::default()
         };
         let toml = config.to_annotated_toml();
         assert!(toml.contains("qsm_algorithm = \"tgv\""));
         assert!(toml.contains("# unwrapping_algorithm")); // commented out
         assert!(toml.contains("# bf_algorithm")); // commented out
-        assert!(toml.contains("combine_phase = false"));
+        assert!(toml.contains("phase_offset_removal = false"));
         assert!(toml.contains("do_swi = false"));
         assert!(toml.contains("do_t2starmap = false"));
         assert!(toml.contains("do_r2starmap = false"));
@@ -1699,12 +1730,12 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_run_overrides_combine_phase() {
+    fn test_apply_run_overrides_phase_offset_removal() {
         let mut config = PipelineConfig::default();
         let mut args = default_run_args();
-        args.combine_phase = Some(false);
+        args.phase_offset_removal = Some(false);
         config.apply_run_overrides(&args);
-        assert!(!config.combine_phase);
+        assert!(!config.phase_offset_removal);
     }
 
     #[test]
@@ -1847,7 +1878,7 @@ mod tests {
         let mut config = PipelineConfig::default();
         assert!(config.romeo_phase_gradient_coherence);
         assert!(config.romeo_mag_coherence);
-        assert!(config.romeo_mag_weight);
+        // mag_weight defaults to false in ROMEO.jl (:romeo mode)
         let mut args = default_run_args();
         args.romeo_params.no_romeo_phase_gradient_coherence = true;
         args.romeo_params.no_romeo_mag_coherence = true;
@@ -1858,25 +1889,25 @@ mod tests {
         assert!(!config.romeo_mag_weight);
     }
 
-    // ─── apply_run_overrides: mcpc3ds_sigma ───
+    // ─── apply_run_overrides: phase_offset_sigma ───
 
     #[test]
-    fn test_apply_run_overrides_mcpc3ds_sigma() {
+    fn test_apply_run_overrides_phase_offset_sigma() {
         let mut config = PipelineConfig::default();
         let mut args = default_run_args();
-        args.mcpc3ds_sigma = Some(vec![1.0, 2.0, 3.0]);
+        args.phase_offset_sigma = Some(vec![1.0, 2.0, 3.0]);
         config.apply_run_overrides(&args);
-        assert_eq!(config.mcpc3ds_sigma, [1.0, 2.0, 3.0]);
+        assert_eq!(config.phase_offset_sigma, [1.0, 2.0, 3.0]);
     }
 
     #[test]
-    fn test_apply_run_overrides_mcpc3ds_sigma_wrong_length_ignored() {
+    fn test_apply_run_overrides_phase_offset_sigma_wrong_length_ignored() {
         let mut config = PipelineConfig::default();
-        let original = config.mcpc3ds_sigma;
+        let original = config.phase_offset_sigma;
         let mut args = default_run_args();
-        args.mcpc3ds_sigma = Some(vec![1.0, 2.0]); // only 2 elements
+        args.phase_offset_sigma = Some(vec![1.0, 2.0]); // only 2 elements
         config.apply_run_overrides(&args);
-        assert_eq!(config.mcpc3ds_sigma, original);
+        assert_eq!(config.phase_offset_sigma, original);
     }
 
     // ─── apply_run_overrides: tgv_alphas ───

@@ -295,7 +295,12 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
         bf_algorithm: Some(bf_options[ps.bf_algorithm]),
         masking_algorithm: None,
         masking_input: None,
-        combine_phase: Some(ps.phase_combination == 0), // 0=mcpc3ds (true), 1=linear_fit (false)
+        phase_offset_removal: Some(ps.phase_combination == 0), // 0=mcpc3ds (true), 1=linear_fit (false)
+        phase_offset_sigma: None,
+        bipolar_correction: false,
+        romeo_individual: false,
+        no_romeo_individual: false,
+        no_romeo_correct_global: false,
         bet_fractional_intensity: parse_optional_f64(&ps.bet_fractional_intensity),
         bet_smoothness: parse_optional_f64(&ps.bet_smoothness),
         bet_gradient_threshold: parse_optional_f64(&ps.bet_gradient_threshold),
@@ -424,12 +429,6 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
             },
             swi_strength: parse_optional_f64(&form.swi_strength),
             swi_mip_window: parse_optional_usize(&form.swi_mip_window),
-        },
-        mcpc3ds_sigma: {
-            let vals: Vec<f64> = ps.mcpc3ds_sigma.split_whitespace()
-                .filter_map(|w| w.parse().ok())
-                .collect();
-            if vals.is_empty() { None } else { Some(vals) }
         },
         n_procs: parse_optional_usize(&form.n_procs),
         homogeneity_sigma_mm: None,
@@ -568,7 +567,7 @@ pub fn config_from_app(app: &App) -> PipelineConfig {
         qsm_algorithm,
         unwrapping_algorithm: if is_end_to_end { None } else { Some(unwrap_algorithms[ps.unwrapping_algorithm]) },
         bf_algorithm: if is_end_to_end { None } else { Some(bf_algorithms[ps.bf_algorithm]) },
-        combine_phase: ps.phase_combination == 0,
+        phase_offset_removal: ps.phase_combination == 0,
         qsm_reference: match ps.qsm_reference {
             0 => QsmReference::Mean,
             _ => QsmReference::None,
@@ -748,7 +747,7 @@ mod tests {
         assert!(args.inhomogeneity_correction);
         assert!(args.dry);
         assert!(args.debug);
-        assert_eq!(args.combine_phase, Some(true)); // default mcpc3ds
+        assert_eq!(args.phase_offset_removal, Some(true)); // default mcpc3ds
     }
 
     #[test]
@@ -758,7 +757,7 @@ mod tests {
         app.form.output_dir = "/o".to_string();
         app.pipeline_state.phase_combination = 1; // linear_fit
         let args = build_run_args(&app).unwrap();
-        assert_eq!(args.combine_phase, Some(false));
+        assert_eq!(args.phase_offset_removal, Some(false));
     }
 
 

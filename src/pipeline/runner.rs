@@ -582,10 +582,14 @@ fn stage_unwrap(
     ctx: &mut StageContext, mask_path: &Path, field_path: &Path, progress: &dyn Fn(&str),
 ) -> crate::Result<()> {
     let unwrap_name = ctx.config.unwrapping_algorithm.map(|a| format!("{}", a)).unwrap_or("laplacian".to_string());
-    let unwrap_alg = if ctx.meta.n_echoes > 1 && ctx.config.combine_phase { "mcpc3ds" } else { &unwrap_name };
+    let do_offset = ctx.meta.n_echoes > 1 && ctx.config.phase_offset_removal && unwrap_name != "laplacian";
+    let unwrap_alg = if do_offset { "phase_offset_removal" } else { &unwrap_name };
     let unwrap_params = serde_json::json!({
         "n_echoes": ctx.meta.n_echoes,
-        "combine_phase": ctx.config.combine_phase,
+        "phase_offset_removal": ctx.config.phase_offset_removal,
+        "bipolar_correction": ctx.config.bipolar_correction,
+        "romeo_individual": ctx.config.romeo_individual,
+        "romeo_correct_global": ctx.config.romeo_correct_global,
         "echo_times": ctx.meta.echo_times,
         "field_strength": ctx.meta.field_strength,
     });
@@ -596,10 +600,10 @@ fn stage_unwrap(
     let t = Instant::now();
     let (nx, ny, nz) = ctx.dims();
     let (vsx, vsy, vsz) = ctx.voxel_size();
-    if ctx.meta.n_echoes > 1 && ctx.config.combine_phase {
-        log::info!("Phase combination (MCPC-3D-S, {} echoes, weighted B0)", ctx.meta.n_echoes);
+    if do_offset {
+        log::info!("Field mapping: offset removal + {} unwrapping ({} echoes)", unwrap_name, ctx.meta.n_echoes);
     } else if ctx.meta.n_echoes > 1 {
-        log::info!("Phase unwrapping ({}, {} echoes, linear fit)", unwrap_name, ctx.meta.n_echoes);
+        log::info!("Field mapping: {} unwrapping ({} echoes)", unwrap_name, ctx.meta.n_echoes);
     } else {
         log::info!("Phase unwrapping ({}, single echo)", unwrap_name);
     }
@@ -628,8 +632,8 @@ fn stage_unwrap(
         vec![1.0f64; n_voxels]
     };
 
-    let field_ppm = if phases.len() > 1 && ctx.config.combine_phase {
-        // MCPC-3D-S: needs all per-echo magnitudes
+    let field_ppm = if phases.len() > 1 && do_offset {
+        // Phase offset removal + unwrap + B0 estimation
         let mut magnitudes: Vec<Vec<f64>> = Vec::new();
         for i in 0..ctx.meta.n_echoes {
             let m_path = ctx.output.mag_path(&ctx.run.key, i + 1);
@@ -639,9 +643,49 @@ fn stage_unwrap(
         }
         let phase_slices: Vec<&[f64]> = phases.iter().map(|p| p.data.as_slice()).collect();
         let mag_slices: Vec<&[f64]> = magnitudes.iter().map(|m| m.as_slice()).collect();
-        let (b0_hz, _, _) = qsm_core::utils::mcpc3ds_b0_pipeline(
+
+        // Step 1: Phase offset removal
+        let (mut corrected, _offset) = qsm_core::utils::phase_offset_removal(
             &phase_slices, &mag_slices, &echo_times_ms, &mask,
-            ctx.config.mcpc3ds_sigma, qsm_core::utils::B0WeightType::PhaseSNR, nx, ny, nz,
+            ctx.config.phase_offset_sigma, [0, 1],
+            qsm_core::unwrap::UnwrapMethod::Romeo, [vsx, vsy, vsz],
+            nx, ny, nz,
+        );
+
+        // Step 2: Bipolar correction (optional)
+        if ctx.config.bipolar_correction && ctx.meta.n_echoes >= 3 {
+            log::info!("Bipolar correction");
+            qsm_core::utils::bipolar_correction(
+                &mut corrected, &mag_slices, &echo_times_ms, &mask,
+                ctx.config.phase_offset_sigma, nx, ny, nz,
+            );
+        }
+
+        // Step 3: Multi-echo unwrapping
+        let unwrapped = match ctx.config.unwrapping_algorithm {
+            Some(UnwrappingAlgorithm::Laplacian) | None => {
+                corrected.iter()
+                    .map(|p| qsm_core::unwrap::laplacian_unwrap(p, &mask, nx, ny, nz, vsx, vsy, vsz))
+                    .collect()
+            }
+            Some(UnwrappingAlgorithm::Romeo) => {
+                let params = qsm_core::unwrap::RomeoParams {
+                    individual: ctx.config.romeo_individual,
+                    correct_global: ctx.config.romeo_correct_global,
+                    ..Default::default()
+                };
+                qsm_core::unwrap::unwrap_romeo_multi_echo(
+                    &corrected, &mag_slices, &echo_times_ms, &mask,
+                    &params, nx, ny, nz,
+                )
+            }
+        };
+
+        // Step 4: Weighted B0 averaging
+        let n_total = nx * ny * nz;
+        let b0_hz = qsm_core::utils::calculate_b0_weighted(
+            &unwrapped, &magnitudes, &echo_times_ms, &mask,
+            qsm_core::utils::B0WeightType::PhaseSNR, n_total,
         );
         phase::hz_to_ppm(&b0_hz, ctx.meta.field_strength)
     } else if phases.len() > 1 {
