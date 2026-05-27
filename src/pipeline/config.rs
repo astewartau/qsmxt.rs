@@ -246,6 +246,45 @@ impl fmt::Display for MaskingInput {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum B0Estimation {
+    WeightedAvg,
+    LinearFit,
+}
+
+impl fmt::Display for B0Estimation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WeightedAvg => write!(f, "weighted-avg"),
+            Self::LinearFit => write!(f, "linear-fit"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum B0WeightType {
+    PhaseSNR,
+    PhaseVar,
+    Average,
+    #[serde(rename = "tes")]
+    TEs,
+    Mag,
+}
+
+impl fmt::Display for B0WeightType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PhaseSNR => write!(f, "phase-snr"),
+            Self::PhaseVar => write!(f, "phase-var"),
+            Self::Average => write!(f, "average"),
+            Self::TEs => write!(f, "tes"),
+            Self::Mag => write!(f, "mag"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum QsmReference {
     Mean,
@@ -304,6 +343,12 @@ pub struct PipelineConfig {
     pub romeo_individual: bool,
     #[serde(default = "default_true")]
     pub romeo_correct_global: bool,
+    #[serde(default)]
+    pub romeo_template: usize,
+    #[serde(default = "default_b0_estimation")]
+    pub b0_estimation: B0Estimation,
+    #[serde(default = "default_b0_weight_type")]
+    pub b0_weight_type: B0WeightType,
 
     // QSM reference
     #[serde(default = "default_reference")]
@@ -567,6 +612,8 @@ fn default_romeo_phase_gradient_coherence() -> bool { qsm_core::unwrap::RomeoPar
 fn default_romeo_mag_coherence() -> bool { qsm_core::unwrap::RomeoParams::default().mag_coherence }
 fn default_romeo_mag_weight() -> bool { qsm_core::unwrap::RomeoParams::default().mag_weight }
 fn default_phase_offset_sigma() -> [f64; 3] { qsm_core::utils::PhaseOffsetParams::default().sigma }
+fn default_b0_estimation() -> B0Estimation { B0Estimation::WeightedAvg }
+fn default_b0_weight_type() -> B0WeightType { B0WeightType::PhaseSNR }
 fn default_swi_hp_sigma() -> [f64; 3] { qsm_core::swi::SwiParams::default().hp_sigma }
 fn default_swi_scaling() -> String {
     match qsm_core::swi::SwiParams::default().scaling {
@@ -636,6 +683,9 @@ impl Default for PipelineConfig {
             bipolar_correction: false,
             romeo_individual: true,
             romeo_correct_global: true,
+            romeo_template: 0,
+            b0_estimation: default_b0_estimation(),
+            b0_weight_type: default_b0_weight_type(),
             qsm_reference: QsmReference::Mean,
             bet_fractional_intensity: default_bet_fi(),
             bet_smoothness: default_bet_smoothness(),
@@ -773,6 +823,24 @@ impl PipelineConfig {
         }
         if args.no_romeo_correct_global {
             self.romeo_correct_global = false;
+        }
+        if let Some(t) = args.romeo_template {
+            self.romeo_template = if t > 0 { t - 1 } else { 0 }; // CLI is 1-indexed
+        }
+        if let Some(a) = args.b0_estimation {
+            self.b0_estimation = match a {
+                cli::B0EstimationArg::WeightedAvg => B0Estimation::WeightedAvg,
+                cli::B0EstimationArg::LinearFit => B0Estimation::LinearFit,
+            };
+        }
+        if let Some(a) = args.b0_weight_type {
+            self.b0_weight_type = match a {
+                cli::B0WeightTypeArg::PhaseSNR => B0WeightType::PhaseSNR,
+                cli::B0WeightTypeArg::PhaseVar => B0WeightType::PhaseVar,
+                cli::B0WeightTypeArg::Average => B0WeightType::Average,
+                cli::B0WeightTypeArg::TEs => B0WeightType::TEs,
+                cli::B0WeightTypeArg::Mag => B0WeightType::Mag,
+            };
         }
         override_field!(bet_fractional_intensity);
         override_field!(bet_smoothness);
@@ -1124,6 +1192,9 @@ mod tests {
             romeo_individual: false,
             no_romeo_individual: false,
             no_romeo_correct_global: false,
+            romeo_template: None,
+            b0_estimation: None,
+            b0_weight_type: None,
             bet_fractional_intensity: None,
             bet_smoothness: None,
             bet_gradient_threshold: None,

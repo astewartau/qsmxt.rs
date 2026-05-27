@@ -428,6 +428,18 @@ pub struct RunArgs {
     #[arg(long)]
     pub no_romeo_correct_global: bool,
 
+    /// ROMEO: template echo index (1-indexed, only for template mode)
+    #[arg(long)]
+    pub romeo_template: Option<usize>,
+
+    /// B0 field estimation method
+    #[arg(long, value_enum)]
+    pub b0_estimation: Option<B0EstimationArg>,
+
+    /// B0 weighted averaging weight type
+    #[arg(long, value_enum)]
+    pub b0_weight_type: Option<B0WeightTypeArg>,
+
     /// BET fractional intensity (0.0-1.0)
     #[arg(long)]
     pub bet_fractional_intensity: Option<f64>,
@@ -1331,6 +1343,16 @@ pub enum UnwrapAlgorithmArg {
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum BfAlgorithmArg {
     Vsharp, Pdf, Lbv, Ismv, Sharp, Resharp, Harperella, Iharperella,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
+pub enum B0EstimationArg {
+    WeightedAvg, LinearFit,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
+pub enum B0WeightTypeArg {
+    PhaseSNR, PhaseVar, Average, TEs, Mag,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]

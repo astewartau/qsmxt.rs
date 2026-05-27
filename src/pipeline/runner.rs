@@ -672,6 +672,7 @@ fn stage_unwrap(
                 let params = qsm_core::unwrap::RomeoParams {
                     individual: ctx.config.romeo_individual,
                     correct_global: ctx.config.romeo_correct_global,
+                    template: ctx.config.romeo_template,
                     ..Default::default()
                 };
                 qsm_core::unwrap::unwrap_romeo_multi_echo(
@@ -681,12 +682,31 @@ fn stage_unwrap(
             }
         };
 
-        // Step 4: Weighted B0 averaging
+        // Step 4: B0 estimation
         let n_total = nx * ny * nz;
-        let b0_hz = qsm_core::utils::calculate_b0_weighted(
-            &unwrapped, &magnitudes, &echo_times_ms, &mask,
-            qsm_core::utils::B0WeightType::PhaseSNR, n_total,
-        );
+        let b0_hz = match ctx.config.b0_estimation {
+            B0Estimation::WeightedAvg => {
+                let wt = match ctx.config.b0_weight_type {
+                    B0WeightType::PhaseSNR => qsm_core::utils::B0WeightType::PhaseSNR,
+                    B0WeightType::PhaseVar => qsm_core::utils::B0WeightType::PhaseVar,
+                    B0WeightType::Average => qsm_core::utils::B0WeightType::Average,
+                    B0WeightType::TEs => qsm_core::utils::B0WeightType::TEs,
+                    B0WeightType::Mag => qsm_core::utils::B0WeightType::Mag,
+                };
+                qsm_core::utils::calculate_b0_weighted(
+                    &unwrapped, &magnitudes, &echo_times_ms, &mask, wt, n_total,
+                )
+            }
+            B0Estimation::LinearFit => {
+                let uw_refs: Vec<&[f64]> = unwrapped.iter().map(|u| u.as_slice()).collect();
+                let mag_refs: Vec<&[f64]> = magnitudes.iter().map(|m| m.as_slice()).collect();
+                let fit = qsm_core::utils::multi_echo_linear_fit(
+                    &uw_refs, &mag_refs, &ctx.meta.echo_times, &mask,
+                    true, ctx.config.linear_fit_reliability_threshold,
+                );
+                qsm_core::utils::field_to_hz(&fit.field)
+            }
+        };
         phase::hz_to_ppm(&b0_hz, ctx.meta.field_strength)
     } else if phases.len() > 1 {
         // Linear fit: ROMEO uses first-echo mag, linear fit uses per-echo mags as weights

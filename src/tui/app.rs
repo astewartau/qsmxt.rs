@@ -905,6 +905,9 @@ pub struct PipelineFormState {
     pub bipolar_correction: bool,
     pub romeo_individual: bool,
     pub romeo_correct_global: bool,
+    pub romeo_template: String,
+    pub b0_estimation: usize,    // 0=weighted_avg, 1=linear_fit
+    pub b0_weight_type: usize,   // 0=phase_snr, 1=phase_var, 2=average, 3=tes, 4=mag
 
     // Parameters (as Strings for text editing)
     pub inhomogeneity_correction: bool,
@@ -1050,6 +1053,9 @@ impl Default for PipelineFormState {
             bipolar_correction: false,
             romeo_individual: true,
             romeo_correct_global: true,
+            romeo_template: "1".to_string(),
+            b0_estimation: 0,    // weighted_avg
+            b0_weight_type: 0,   // phase_snr
             inhomogeneity_correction: true,
             obliquity_threshold: "-1".to_string(),
             rts_delta: format!("{}", rts.delta),
@@ -1135,6 +1141,19 @@ impl Default for PipelineFormState {
 pub const QSM_ALGO_OPTIONS: &[&str] = &["rts", "tv", "tkd", "tsvd", "tgv", "tikhonov", "nltv", "medi", "ilsqr", "qsmart"];
 pub const UNWRAP_OPTIONS: &[&str] = &["romeo", "laplacian"];
 pub const BF_OPTIONS: &[&str] = &["vsharp", "pdf", "lbv", "ismv", "sharp", "resharp", "harperella", "iharperella"];
+pub const B0_ESTIMATION_OPTIONS: &[&str] = &["weighted-avg", "linear-fit"];
+pub const B0_WEIGHT_TYPE_OPTIONS: &[&str] = &["phase-snr", "phase-var", "average", "tes", "mag"];
+const B0_ESTIMATION_HELP: &[&str] = &[
+    "Weighted average of phase/TE across echoes (default)",
+    "Magnitude-weighted linear fit of phase vs TE",
+];
+const B0_WEIGHT_TYPE_HELP: &[&str] = &[
+    "mag × TE — optimal for phase SNR (default)",
+    "mag² × TE² — based on phase variance",
+    "Uniform weights (unweighted average)",
+    "TE only",
+    "Magnitude only",
+];
 pub const QSM_REF_OPTIONS: &[&str] = &["mean", "none"];
 
 impl PipelineFormState {
@@ -1166,39 +1185,6 @@ impl PipelineFormState {
 
         rows.push(PipelineRow::Separator);
         } // end if do_qsm (general settings)
-
-        // Mask preset selector (always visible — needed for SWI/T2*/R2* too)
-        rows.push(PipelineRow::AlgoSelect {
-            label: "Mask Preset", field: "mask_preset",
-            options: MASK_PRESET_OPTIONS, help: MASK_PRESET_HELP,
-        });
-
-        // Mask sections
-        let multi_section = self.mask_sections.len() > 1;
-        for si in 0..self.mask_sections.len() {
-            if si > 0 {
-                rows.push(PipelineRow::MaskOrSeparator);
-            }
-            if multi_section {
-                rows.push(PipelineRow::MaskSectionHeader { section: si });
-            }
-            rows.push(PipelineRow::MaskOpInput { section: si });
-            rows.push(PipelineRow::MaskOpGenerator { section: si });
-            rows.push(PipelineRow::MaskOpGeneratorParam { section: si });
-            // Show value row for fixed/percentile threshold
-            if let crate::pipeline::config::MaskOp::Threshold { method, .. } = &self.mask_sections[si].generator {
-                if matches!(method, crate::pipeline::config::MaskThresholdMethod::Fixed | crate::pipeline::config::MaskThresholdMethod::Percentile) {
-                    rows.push(PipelineRow::MaskOpThresholdValue { section: si });
-                }
-            }
-            for oi in 0..self.mask_sections[si].refinements.len() {
-                rows.push(PipelineRow::MaskOpEntry { section: si, index: oi });
-            }
-            rows.push(PipelineRow::MaskOpAddStep { section: si });
-        }
-        rows.push(PipelineRow::MaskOpAddSection);
-
-        rows.push(PipelineRow::Separator);
 
         if self.do_qsm {
         // Field Mapping (hidden if TGV or QSMART)
@@ -1240,11 +1226,60 @@ impl PipelineFormState {
                         label: "  Correct Global", field: "romeo_correct_global",
                         help: "Correct inter-echo 2π offsets after individual unwrapping",
                     });
+                } else {
+                    rows.push(PipelineRow::Param {
+                        label: "  Template Echo", field: "romeo_template",
+                        help: "Echo index for spatial unwrapping (1-indexed)",
+                    });
                 }
+            }
+
+            // B0 estimation
+            rows.push(PipelineRow::AlgoSelect {
+                label: "B0 Estimation", field: "b0_estimation",
+                options: B0_ESTIMATION_OPTIONS, help: B0_ESTIMATION_HELP,
+            });
+            if self.b0_estimation == 0 { // weighted_avg
+                rows.push(PipelineRow::AlgoSelect {
+                    label: "  Weight Type", field: "b0_weight_type",
+                    options: B0_WEIGHT_TYPE_OPTIONS, help: B0_WEIGHT_TYPE_HELP,
+                });
             }
 
             rows.push(PipelineRow::Separator);
         }
+
+        // Mask preset selector (always visible — needed for SWI/T2*/R2* too)
+        rows.push(PipelineRow::AlgoSelect {
+            label: "Mask Preset", field: "mask_preset",
+            options: MASK_PRESET_OPTIONS, help: MASK_PRESET_HELP,
+        });
+
+        // Mask sections
+        let multi_section = self.mask_sections.len() > 1;
+        for si in 0..self.mask_sections.len() {
+            if si > 0 {
+                rows.push(PipelineRow::MaskOrSeparator);
+            }
+            if multi_section {
+                rows.push(PipelineRow::MaskSectionHeader { section: si });
+            }
+            rows.push(PipelineRow::MaskOpInput { section: si });
+            rows.push(PipelineRow::MaskOpGenerator { section: si });
+            rows.push(PipelineRow::MaskOpGeneratorParam { section: si });
+            if let crate::pipeline::config::MaskOp::Threshold { method, .. } = &self.mask_sections[si].generator {
+                if matches!(method, crate::pipeline::config::MaskThresholdMethod::Fixed | crate::pipeline::config::MaskThresholdMethod::Percentile) {
+                    rows.push(PipelineRow::MaskOpThresholdValue { section: si });
+                }
+            }
+            for oi in 0..self.mask_sections[si].refinements.len() {
+                rows.push(PipelineRow::MaskOpEntry { section: si, index: oi });
+            }
+            rows.push(PipelineRow::MaskOpAddStep { section: si });
+        }
+        rows.push(PipelineRow::MaskOpAddSection);
+
+        rows.push(PipelineRow::Separator);
 
         // BG Removal (hidden for TGV, QSMART, and MEDI+SMV)
         if !is_tgv && !is_qsmart && !is_medi_smv {
@@ -1382,7 +1417,7 @@ impl PipelineFormState {
         "tikhonov_lambda",
         "nltv_lambda", "nltv_mu", "nltv_tol", "nltv_max_iter", "nltv_newton_iter",
         "medi_lambda", "medi_max_iter", "medi_cg_max_iter", "medi_cg_tol", "medi_tol", "medi_percentage", "medi_smv_radius",
-        "phase_offset_sigma",
+        "phase_offset_sigma", "romeo_template",
         "vsharp_threshold", "pdf_tol", "lbv_tol", "ismv_tol", "ismv_max_iter", "sharp_threshold",
         "resharp_radius", "resharp_tik_reg", "resharp_tol", "resharp_max_iter",
         "harperella_radius", "harperella_max_iter", "harperella_tol",
@@ -1427,6 +1462,7 @@ impl PipelineFormState {
             "medi_percentage" => &self.medi_percentage,
             "medi_smv_radius" => &self.medi_smv_radius,
             "phase_offset_sigma" => &self.phase_offset_sigma,
+            "romeo_template" => &self.romeo_template,
             "vsharp_threshold" => &self.vsharp_threshold,
             "pdf_tol" => &self.pdf_tol,
             "lbv_tol" => &self.lbv_tol,
@@ -1492,6 +1528,7 @@ impl PipelineFormState {
             "medi_percentage" => Some(&mut self.medi_percentage),
             "medi_smv_radius" => Some(&mut self.medi_smv_radius),
             "phase_offset_sigma" => Some(&mut self.phase_offset_sigma),
+            "romeo_template" => Some(&mut self.romeo_template),
             "vsharp_threshold" => Some(&mut self.vsharp_threshold),
             "pdf_tol" => Some(&mut self.pdf_tol),
             "lbv_tol" => Some(&mut self.lbv_tol),
@@ -1528,7 +1565,8 @@ impl PipelineFormState {
             "unwrapping_algorithm" => self.unwrapping_algorithm,
             "bf_algorithm" => self.bf_algorithm,
             "qsm_reference" => self.qsm_reference,
-
+            "b0_estimation" => self.b0_estimation,
+            "b0_weight_type" => self.b0_weight_type,
             "mask_preset" => self.mask_preset,
             _ => 0,
         }
@@ -1541,6 +1579,8 @@ impl PipelineFormState {
             "unwrapping_algorithm" => self.unwrapping_algorithm = val,
             "bf_algorithm" => self.bf_algorithm = val,
             "qsm_reference" => self.qsm_reference = val,
+            "b0_estimation" => self.b0_estimation = val,
+            "b0_weight_type" => self.b0_weight_type = val,
             "mask_preset" => {
                 self.mask_preset = val;
                 self.apply_mask_preset(val);
