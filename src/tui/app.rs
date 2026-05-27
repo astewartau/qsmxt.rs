@@ -1221,17 +1221,16 @@ impl PipelineFormState {
                     label: "  Individual Mode", field: "romeo_individual",
                     help: "Unwrap each echo independently (recommended). Off = template-based temporal unwrapping.",
                 });
-                if self.romeo_individual {
-                    rows.push(PipelineRow::Toggle {
-                        label: "  Correct Global", field: "romeo_correct_global",
-                        help: "Correct inter-echo 2π offsets after individual unwrapping",
-                    });
-                } else {
+                if !self.romeo_individual {
                     rows.push(PipelineRow::Param {
                         label: "  Template Echo", field: "romeo_template",
                         help: "Echo index for spatial unwrapping (1-indexed)",
                     });
                 }
+                rows.push(PipelineRow::Toggle {
+                    label: "  Correct Global", field: "romeo_correct_global",
+                    help: "Correct inter-echo 2π offsets after unwrapping",
+                });
             }
 
             // B0 estimation

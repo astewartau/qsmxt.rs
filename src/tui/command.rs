@@ -63,11 +63,14 @@ pub fn build_command_string(app: &App) -> String {
     if ps.bipolar_correction != defaults.bipolar_correction {
         parts.push("--bipolar-correction".to_string());
     }
-    if ps.romeo_individual != defaults.romeo_individual && !ps.romeo_individual {
-        parts.push("--no-romeo-individual".to_string());
-    }
-    if ps.romeo_correct_global != defaults.romeo_correct_global && !ps.romeo_correct_global {
-        parts.push("--no-romeo-correct-global".to_string());
+    // ROMEO multi-echo flags (only when ROMEO is selected)
+    if ps.unwrapping_algorithm == defaults.unwrapping_algorithm || ps.unwrapping_algorithm == 0 {
+        if ps.romeo_individual != defaults.romeo_individual && !ps.romeo_individual {
+            parts.push("--no-romeo-individual".to_string());
+        }
+        if ps.romeo_correct_global != defaults.romeo_correct_global && !ps.romeo_correct_global {
+            parts.push("--no-romeo-correct-global".to_string());
+        }
     }
 
     // Parameters (only if changed from default)
