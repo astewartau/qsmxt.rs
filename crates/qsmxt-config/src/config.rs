@@ -1,0 +1,308 @@
+use serde::{Deserialize, Serialize};
+use crate::enums::*;
+use crate::masking::*;
+
+// ─── Macro for algorithm parameter structs ───
+// Generates a serde struct with Default sourced from qsm-core.
+
+macro_rules! param_config {
+    ($name:ident from $core:path { $($field:ident : $ty:ty),* $(,)? }) => {
+        #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+        #[serde(default)]
+        pub struct $name { $(pub $field: $ty),* }
+
+        impl Default for $name {
+            fn default() -> Self {
+                #[allow(unused)]
+                let p = <$core>::default();
+                Self { $($field: p.$field as $ty),* }
+            }
+        }
+    };
+}
+
+// ─── Algorithm parameter configs (each ~1-3 lines) ───
+
+param_config!(RtsConfig from qsm_core::inversion::RtsParams {
+    delta: f64, mu: f64, rho: f64, tol: f64, max_iter: usize, lsmr_iter: usize
+});
+param_config!(TvConfig from qsm_core::inversion::TvParams {
+    lambda: f64, rho: f64, tol: f64, max_iter: usize
+});
+param_config!(TkdConfig from qsm_core::inversion::TkdParams { threshold: f64 });
+param_config!(TikhonovConfig from qsm_core::inversion::TikhonovParams { lambda: f64 });
+param_config!(NltvConfig from qsm_core::inversion::NltvParams {
+    lambda: f64, mu: f64, tol: f64, max_iter: usize, newton_iter: usize
+});
+param_config!(MediConfig from qsm_core::inversion::MediParams {
+    lambda: f64, max_iter: usize, cg_max_iter: usize, cg_tol: f64, tol: f64,
+    percentage: f64, smv_radius: f64, smv: bool
+});
+param_config!(IlsqrConfig from qsm_core::inversion::IlsqrParams { tol: f64, max_iter: usize });
+param_config!(VsharpConfig from qsm_core::bgremove::VsharpParams {
+    threshold: f64, max_radius_factor: f64, min_radius_factor: f64
+});
+param_config!(PdfConfig from qsm_core::bgremove::PdfParams { tol: f64 });
+param_config!(LbvConfig from qsm_core::bgremove::LbvParams { tol: f64 });
+param_config!(IsmvConfig from qsm_core::bgremove::IsmvParams {
+    tol: f64, max_iter: usize, radius_factor: f64
+});
+param_config!(SharpConfig from qsm_core::bgremove::SharpParams { threshold: f64, radius_factor: f64 });
+param_config!(ResharpConfig from qsm_core::bgremove::ResharpParams {
+    radius: f64, tik_reg: f64, tol: f64, max_iter: usize
+});
+param_config!(HarperellaConfig from qsm_core::pipeline::HarperellaParams {
+    radius: f64, max_iter: usize, tol: f64
+});
+param_config!(BetConfig from qsm_core::bet::BetParams {
+    fractional_intensity: f64, smoothness: f64, gradient_threshold: f64,
+    iterations: usize, subdivisions: usize
+});
+param_config!(HomogeneityConfig from qsm_core::utils::HomogeneityParams {
+    sigma_mm: f64, nbox: usize
+});
+param_config!(LinearFitConfig from qsm_core::utils::LinearFitParams {
+    reliability_threshold_percentile: f64
+});
+
+// TGV needs special handling (f32→f64 conversion)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TgvConfig {
+    pub iterations: usize,
+    pub erosions: usize,
+    pub alpha0: f64,
+    pub alpha1: f64,
+    pub step_size: f64,
+    pub tol: f64,
+}
+impl Default for TgvConfig {
+    fn default() -> Self {
+        let p = qsm_core::inversion::TgvParams::default();
+        Self {
+            iterations: p.iterations, erosions: p.erosions,
+            alpha0: p.alpha0 as f64, alpha1: p.alpha1 as f64,
+            step_size: p.step_size as f64, tol: p.tol as f64,
+        }
+    }
+}
+
+// QSMART config
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct QsmartConfig {
+    pub ilsqr_tol: f64,
+    pub ilsqr_max_iter: usize,
+    pub vasc_sphere_radius: i32,
+    pub sdf_spatial_radius: i32,
+}
+impl Default for QsmartConfig {
+    fn default() -> Self {
+        let p = qsm_core::utils::QsmartParams::default();
+        Self {
+            ilsqr_tol: p.ilsqr_tol, ilsqr_max_iter: p.ilsqr_max_iter,
+            vasc_sphere_radius: p.vasc_sphere_radius, sdf_spatial_radius: p.sdf_spatial_radius,
+        }
+    }
+}
+
+// ROMEO config
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RomeoConfig {
+    pub individual: bool,
+    pub correct_global: bool,
+    pub template: usize,
+    pub phase_gradient_coherence: bool,
+    pub mag_coherence: bool,
+    pub mag_weight: bool,
+}
+impl Default for RomeoConfig {
+    fn default() -> Self {
+        let p = qsm_core::unwrap::RomeoParams::default();
+        Self {
+            individual: true,       // qsmxt default (matches Julia qsm_romeo_B0)
+            correct_global: true,   // qsmxt default
+            template: p.template,
+            phase_gradient_coherence: p.phase_gradient_coherence,
+            mag_coherence: p.mag_coherence,
+            mag_weight: p.mag_weight,
+        }
+    }
+}
+
+// SWI config (special: scaling is a string mapped from enum)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SwiConfig {
+    pub hp_sigma: [f64; 3],
+    pub scaling: String,
+    pub strength: f64,
+    pub mip_window: usize,
+}
+impl Default for SwiConfig {
+    fn default() -> Self {
+        let p = qsm_core::swi::SwiParams::default();
+        Self {
+            hp_sigma: p.hp_sigma,
+            scaling: match p.scaling {
+                qsm_core::swi::PhaseScaling::Tanh => "tanh",
+                qsm_core::swi::PhaseScaling::NegativeTanh => "negative-tanh",
+                qsm_core::swi::PhaseScaling::Positive => "positive",
+                qsm_core::swi::PhaseScaling::Negative => "negative",
+                qsm_core::swi::PhaseScaling::Triangular => "triangular",
+            }.to_string(),
+            strength: p.strength,
+            mip_window: p.mip_window,
+        }
+    }
+}
+
+// ─── Top-level config and section structs ───
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PipelineConfig {
+    #[serde(default)]
+    pub description: String,
+    pub pipeline: PipelineToggles,
+    pub field_mapping: FieldMappingConfig,
+    pub masking: MaskingConfig,
+    pub bg_removal: BgRemovalConfig,
+    pub inversion: InversionConfig,
+    pub qsm: QsmConfig,
+    pub swi: SwiConfig,
+    pub bet: BetConfig,
+    pub homogeneity: HomogeneityConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PipelineToggles {
+    pub do_qsm: bool,
+    pub do_swi: bool,
+    pub do_t2starmap: bool,
+    pub do_r2starmap: bool,
+    pub obliquity_threshold: f64,
+}
+impl Default for PipelineToggles {
+    fn default() -> Self {
+        Self { do_qsm: true, do_swi: false, do_t2starmap: false, do_r2starmap: false, obliquity_threshold: -1.0 }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct FieldMappingConfig {
+    pub phase_offset_removal: bool,
+    pub phase_offset_sigma: [f64; 3],
+    pub bipolar_correction: bool,
+    pub unwrapping_algorithm: UnwrappingAlgorithm,
+    pub b0_estimation: B0Estimation,
+    pub b0_weight_type: B0WeightType,
+    pub romeo: RomeoConfig,
+    pub linear_fit: LinearFitConfig,
+}
+impl Default for FieldMappingConfig {
+    fn default() -> Self {
+        Self {
+            phase_offset_removal: true,
+            phase_offset_sigma: qsm_core::utils::PhaseOffsetParams::default().sigma,
+            bipolar_correction: false,
+            unwrapping_algorithm: UnwrappingAlgorithm::Romeo,
+            b0_estimation: B0Estimation::WeightedAvg,
+            b0_weight_type: B0WeightType::PhaseSNR,
+            romeo: RomeoConfig::default(),
+            linear_fit: LinearFitConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct MaskingConfig {
+    pub inhomogeneity_correction: bool,
+    pub sections: Vec<MaskSection>,
+}
+impl Default for MaskingConfig {
+    fn default() -> Self {
+        Self { inhomogeneity_correction: true, sections: default_mask_sections() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct BgRemovalConfig {
+    pub algorithm: BfAlgorithm,
+    pub vsharp: VsharpConfig,
+    pub pdf: PdfConfig,
+    pub lbv: LbvConfig,
+    pub ismv: IsmvConfig,
+    pub sharp: SharpConfig,
+    pub resharp: ResharpConfig,
+    pub harperella: HarperellaConfig,
+    pub iharperella: HarperellaConfig,
+}
+impl Default for BgRemovalConfig {
+    fn default() -> Self {
+        Self {
+            algorithm: BfAlgorithm::Vsharp,
+            vsharp: VsharpConfig::default(), pdf: PdfConfig::default(),
+            lbv: LbvConfig::default(), ismv: IsmvConfig::default(),
+            sharp: SharpConfig::default(), resharp: ResharpConfig::default(),
+            harperella: HarperellaConfig::default(), iharperella: HarperellaConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct InversionConfig {
+    pub algorithm: QsmAlgorithm,
+    pub rts: RtsConfig,
+    pub tv: TvConfig,
+    pub tkd: TkdConfig,
+    pub tsvd: TkdConfig,
+    pub tikhonov: TikhonovConfig,
+    pub nltv: NltvConfig,
+    pub medi: MediConfig,
+    pub ilsqr: IlsqrConfig,
+    pub tgv: TgvConfig,
+    pub qsmart: QsmartConfig,
+}
+impl Default for InversionConfig {
+    fn default() -> Self {
+        Self {
+            algorithm: QsmAlgorithm::Rts,
+            rts: RtsConfig::default(), tv: TvConfig::default(),
+            tkd: TkdConfig::default(), tsvd: TkdConfig::default(),
+            tikhonov: TikhonovConfig::default(), nltv: NltvConfig::default(),
+            medi: MediConfig::default(), ilsqr: IlsqrConfig::default(),
+            tgv: TgvConfig::default(), qsmart: QsmartConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct QsmConfig {
+    pub reference: QsmReference,
+}
+impl Default for QsmConfig {
+    fn default() -> Self { Self { reference: QsmReference::Mean } }
+}
+
+
+impl PipelineConfig {
+    pub fn from_toml(s: &str) -> crate::Result<Self> {
+        toml::from_str(s).map_err(|e| crate::error::ConfigError::Parse(format!("{}", e)))
+    }
+
+    pub fn to_toml(&self) -> crate::Result<String> {
+        toml::to_string_pretty(self).map_err(|e| crate::error::ConfigError::Serialize(format!("{}", e)))
+    }
+
+    pub fn to_json(&self) -> crate::Result<String> {
+        serde_json::to_string(self).map_err(|e| crate::error::ConfigError::Serialize(format!("{}", e)))
+    }
+}

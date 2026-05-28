@@ -1,0 +1,12 @@
+[package]
+name = "qsmxt-config"
+version = "0.0.0"  # set automatically by release CI from git tag
+edition = "2021"
+description = "Pipeline configuration, command generation, and methods text for QSMxT"
+
+[dependencies]
+qsm-core = { git = "https://github.com/astewartau/QSM.rs.git", tag = "v0.12.1" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "2"
