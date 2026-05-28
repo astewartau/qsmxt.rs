@@ -52,7 +52,10 @@ impl fmt::Display for B0Estimation {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum B0WeightType {
-    PhaseSNR, PhaseVar, Average, #[serde(rename = "tes")] TEs, Mag,
+    #[serde(rename = "phase-snr")] PhaseSNR,
+    PhaseVar, Average,
+    #[serde(rename = "tes")] TEs,
+    Mag,
 }
 impl fmt::Display for B0WeightType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
