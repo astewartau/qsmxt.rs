@@ -3,7 +3,7 @@ use crate::pipeline::config::PipelineConfig;
 
 pub fn execute(args: InitArgs) -> crate::Result<()> {
     let config = PipelineConfig::default();
-    let toml_str = config.to_annotated_toml();
+    let toml_str = config.to_toml().unwrap_or_default();
 
     match args.output {
         Some(path) => {

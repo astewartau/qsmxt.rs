@@ -46,20 +46,20 @@ pub fn estimate_peak_memory_bytes(
 
     // Masking stage (temporary) — worst case across all sections
     // BET is the most expensive: sorted nonzero vec (~N*8) + within_brain values (~N*8) + output (N)
-    let has_bet = config.mask_sections.iter().any(|s| matches!(s.generator, MaskOp::Bet { .. }));
+    let has_bet = config.masking.sections.iter().any(|s| matches!(s.generator, MaskOp::Bet { .. }));
     let mask_mem = if has_bet { 17 * n } else { 9 * n };
 
     // SWI runs before QSM; its outputs persist through QSM stages
-    let swi_persistent = if config.do_swi { 16 * n } else { 0 }; // swi + mip results
-    let swi_temp = if config.do_swi { 32 * n } else { 0 };       // highpass + mask + output
+    let swi_persistent = if config.pipeline.do_swi { 16 * n } else { 0 }; // swi + mip results
+    let swi_temp = if config.pipeline.do_swi { 32 * n } else { 0 };       // highpass + mask + output
 
-    let qsm_stage_mem = if config.qsm_algorithm == QsmAlgorithm::Tgv {
+    let qsm_stage_mem = if config.inversion.algorithm == QsmAlgorithm::Tgv {
         // TGV path: single-step (no separate unwrap/bgremove)
         // TGV workspace: 35 Vec<f32> fields + additional sub-volumes
         // Worst case: bounding box = full volume (actual is often 30-70% of N)
         // phase_f32 input: 4N, TGV workspace: 154*N (f32), mask temps: 6N, output: 12N
         20 * n + 154 * n * F32 / F64 + 10 * 1024 * 1024 // ~97N + 10MB stencil
-    } else if config.qsm_algorithm == QsmAlgorithm::Qsmart {
+    } else if config.inversion.algorithm == QsmAlgorithm::Qsmart {
         // QSMART: ~2× standard pipeline (two-stage SDF + iLSQR) + vasculature buffers
         // Vasculature detection: Frangi vesselness + sphere filtering (~80N)
         // Two SDF passes (~80N each) + two iLSQR passes (~160N each) + combine step
@@ -99,30 +99,30 @@ fn estimate_standard_pipeline(n: usize, n_echoes: usize, config: &PipelineConfig
     // Background field removal
     // Input: field_ppm (8N) + bg_mask (N) carry forward from unwrap stage
     let bg_carry = 9 * n;
-    let bg_temp = match config.bf_algorithm {
+    let bg_temp = match config.bg_removal.algorithm {
         // V-SHARP: persistent field_fft (16N) + per-radius buffers (kernel/mask/filtered FFTs)
-        Some(BfAlgorithm::Vsharp) => 80 * n,
+        BfAlgorithm::Vsharp => 80 * n,
         // PDF: dipole kernel + masks + LSMR state + FFT workspace
-        Some(BfAlgorithm::Pdf) => 112 * n,
+        BfAlgorithm::Pdf => 112 * n,
         // LBV: minimal — no FFT, Gauss-Seidel in-place. interior/boundary bools + copies
-        Some(BfAlgorithm::Lbv) => 26 * n,
+        BfAlgorithm::Lbv => 26 * n,
         // iSMV: kernel + kernel_fft + masks + field copies + per-iteration FFT
-        Some(BfAlgorithm::Ismv) => 96 * n,
+        BfAlgorithm::Ismv => 96 * n,
         // SHARP: similar to V-SHARP but single radius
-        Some(BfAlgorithm::Sharp) => 60 * n,
+        BfAlgorithm::Sharp => 60 * n,
         // RESHARP: SMV kernel + CG solver state
-        Some(BfAlgorithm::Resharp) => 80 * n,
+        BfAlgorithm::Resharp => 80 * n,
         // HARPERELLA: iterative Laplacian solver + SMV kernel
-        Some(BfAlgorithm::Harperella) => 60 * n,
+        BfAlgorithm::Harperella => 60 * n,
         // iHARPERELLA: similar to HARPERELLA
-        Some(BfAlgorithm::Iharperella) => 60 * n,
-        None => 0,
+        BfAlgorithm::Iharperella => 60 * n,
+        
     };
 
     // Dipole inversion
     // Input: local_field (8N) + eroded_mask (N) carry forward from bg stage
     let inv_carry = 9 * n;
-    let inv_temp = match config.qsm_algorithm {
+    let inv_temp = match config.inversion.algorithm {
         // TKD: dipole kernel + inverse + complex field + output
         QsmAlgorithm::Tkd => 40 * n,
         // TSVD: same as TKD (closed-form k-space solution with different thresholding)
@@ -156,14 +156,14 @@ fn estimate_standard_pipeline(n: usize, n_echoes: usize, config: &PipelineConfig
 
 /// Estimate peak temporary memory for phase unwrapping / echo combination.
 fn estimate_unwrap_mem(n: usize, n_echoes: usize, config: &PipelineConfig) -> usize {
-    let unwrap_per_echo = match config.unwrapping_algorithm {
+    let unwrap_per_echo = match config.field_mapping.unwrapping_algorithm {
         // Laplacian: d2u (8N) + d2u_masked (8N) + FFT complex (16N) + result (8N)
-        Some(UnwrappingAlgorithm::Laplacian) | None => 40 * n,
+        UnwrappingAlgorithm::Laplacian => 40 * n,
         // ROMEO: weights (3N) + phase clone (8N) + mask clone (N)
-        Some(UnwrappingAlgorithm::Romeo) => 12 * n,
+        UnwrappingAlgorithm::Romeo => 12 * n,
     };
 
-    if n_echoes > 1 && config.phase_offset_removal {
+    if n_echoes > 1 && config.field_mapping.phase_offset_removal {
         // Phase offset removal: HIP (16N) + per-echo ROMEO (~12N, sequential) +
         // smoothing (32N) + corrected_phases (n_echoes*8N) + offsets (16N)
         (n_echoes * 8 + 56) * n
@@ -253,9 +253,9 @@ mod tests {
     #[test]
     fn test_swi_adds_memory() {
         let mut config = default_config();
-        config.do_swi = false;
+        config.pipeline.do_swi = false;
         let est_no_swi = estimate_peak_memory_bytes(128, 128, 128, 1, true, &config);
-        config.do_swi = true;
+        config.pipeline.do_swi = true;
         let est_swi = estimate_peak_memory_bytes(128, 128, 128, 1, true, &config);
         assert!(est_swi >= est_no_swi, "SWI ({}) should use at least as much memory as no SWI ({})", est_swi, est_no_swi);
     }
@@ -263,9 +263,9 @@ mod tests {
     #[test]
     fn test_tkd_less_than_rts() {
         let mut config = default_config();
-        config.qsm_algorithm = QsmAlgorithm::Tkd;
+        config.inversion.algorithm = QsmAlgorithm::Tkd;
         let est_tkd = estimate_peak_memory_bytes(128, 128, 128, 1, true, &config);
-        config.qsm_algorithm = QsmAlgorithm::Rts;
+        config.inversion.algorithm = QsmAlgorithm::Rts;
         let est_rts = estimate_peak_memory_bytes(128, 128, 128, 1, true, &config);
         assert!(est_tkd < est_rts, "TKD ({}) should use less memory than RTS ({})", est_tkd, est_rts);
     }
@@ -273,10 +273,10 @@ mod tests {
     #[test]
     fn test_lbv_less_than_vsharp() {
         let mut config = default_config();
-        config.qsm_algorithm = QsmAlgorithm::Tkd;
-        config.bf_algorithm = Some(BfAlgorithm::Lbv);
+        config.inversion.algorithm = QsmAlgorithm::Tkd;
+        config.bg_removal.algorithm = BfAlgorithm::Lbv;
         let est_lbv = estimate_peak_memory_bytes(128, 128, 128, 1, true, &config);
-        config.bf_algorithm = Some(BfAlgorithm::Vsharp);
+        config.bg_removal.algorithm = BfAlgorithm::Vsharp;
         let est_vsharp = estimate_peak_memory_bytes(128, 128, 128, 1, true, &config);
         assert!(est_lbv < est_vsharp, "LBV ({}) should use less memory than V-SHARP ({})", est_lbv, est_vsharp);
     }
@@ -284,12 +284,10 @@ mod tests {
     #[test]
     fn test_reasonable_range() {
         // A 64^3 single-echo minimal pipeline should use less than 1 GB
-        let config = PipelineConfig {
-            qsm_algorithm: QsmAlgorithm::Tkd,
-            bf_algorithm: Some(BfAlgorithm::Lbv),
-            do_swi: false,
-            ..default_config()
-        };
+        let mut config = default_config();
+        config.inversion.algorithm = QsmAlgorithm::Tkd;
+        config.bg_removal.algorithm = BfAlgorithm::Lbv;
+        config.pipeline.do_swi = false;
         let est = estimate_peak_memory_bytes(64, 64, 64, 1, false, &config);
         let one_gb = 1024 * 1024 * 1024;
         assert!(est < one_gb, "64^3 minimal pipeline should use < 1 GB, got {}", format_bytes(est));
@@ -309,13 +307,9 @@ mod tests {
 
     #[test]
     fn test_tgv_path() {
-        let config = PipelineConfig {
-            qsm_algorithm: QsmAlgorithm::Tgv,
-            unwrapping_algorithm: None,
-            bf_algorithm: None,
-            phase_offset_removal: false,
-            ..PipelineConfig::default()
-        };
+        let mut config = PipelineConfig::default();
+        config.inversion.algorithm = QsmAlgorithm::Tgv;
+        config.field_mapping.phase_offset_removal = false;
         let est = estimate_peak_memory_bytes(128, 128, 128, 1, true, &config);
         assert!(est > 0, "TGV estimate should be positive");
     }

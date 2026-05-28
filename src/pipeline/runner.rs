@@ -197,10 +197,10 @@ pub fn run_pipeline_cached(
 
     let meta = stage_load(qsm_run, &mut state, &state_path, progress)?;
 
-    let needs_mask = config.do_qsm || config.do_swi
-        || (config.do_t2starmap && meta.n_echoes >= 3 && meta.has_magnitude)
-        || (config.do_r2starmap && meta.n_echoes >= 3 && meta.has_magnitude);
-    let needs_phase = needs_mask || config.do_qsm;
+    let needs_mask = config.pipeline.do_qsm || config.pipeline.do_swi
+        || (config.pipeline.do_t2starmap && meta.n_echoes >= 3 && meta.has_magnitude)
+        || (config.pipeline.do_r2starmap && meta.n_echoes >= 3 && meta.has_magnitude);
+    let needs_phase = needs_mask || config.pipeline.do_qsm;
 
     if !needs_phase {
         log::info!("No outputs enabled — nothing to process");
@@ -222,27 +222,27 @@ pub fn run_pipeline_cached(
         stage_mask(&mut ctx, &mask_path, progress)?;
     }
 
-    if config.do_swi && meta.has_magnitude {
+    if config.pipeline.do_swi && meta.has_magnitude {
         stage_swi(&mut ctx, &mask_path, progress)?;
     }
 
-    if (config.do_t2starmap || config.do_r2starmap) && meta.n_echoes >= 3 && meta.has_magnitude {
+    if (config.pipeline.do_t2starmap || config.pipeline.do_r2starmap) && meta.n_echoes >= 3 && meta.has_magnitude {
         stage_t2star_r2star(&mut ctx, &mask_path, progress)?;
     }
 
-    if !config.do_qsm {
+    if !config.pipeline.do_qsm {
         log::info!("QSM processing disabled — skipping reconstruction");
     }
 
-    if config.do_qsm {
+    if config.pipeline.do_qsm {
         let field_path = output.field_ppm_path(&qsm_run.key);
-        let need_field = !matches!(config.qsm_algorithm, QsmAlgorithm::Tgv if meta.n_echoes == 1);
+        let need_field = !matches!(config.inversion.algorithm, QsmAlgorithm::Tgv if meta.n_echoes == 1);
 
         if need_field {
             stage_unwrap(&mut ctx, &mask_path, &field_path, progress)?;
         }
 
-        match config.qsm_algorithm {
+        match config.inversion.algorithm {
             QsmAlgorithm::Tgv => stage_tgv(&mut ctx, &mask_path, &field_path, progress)?,
             QsmAlgorithm::Qsmart => stage_qsmart(&mut ctx, &mask_path, &field_path, progress)?,
             _ => stage_standard_qsm(&mut ctx, &mask_path, &field_path, progress)?,
@@ -347,9 +347,9 @@ fn stage_scale_phase(ctx: &mut StageContext, progress: &dyn Fn(&str)) -> crate::
 
 fn stage_magnitude(ctx: &mut StageContext, progress: &dyn Fn(&str)) -> crate::Result<()> {
     let mag_params = serde_json::json!({
-        "inhomogeneity_correction": ctx.config.inhomogeneity_correction,
-        "homogeneity_sigma_mm": ctx.config.homogeneity_sigma_mm,
-        "homogeneity_nbox": ctx.config.homogeneity_nbox,
+        "inhomogeneity_correction": ctx.config.masking.inhomogeneity_correction,
+        "homogeneity_sigma_mm": ctx.config.homogeneity.sigma_mm,
+        "homogeneity_nbox": ctx.config.homogeneity.nbox,
     });
     if ctx.is_cached_with_params("magnitude", Some("rss"), &mag_params) {
         log::info!("Skipping magnitude (cached)");
@@ -381,11 +381,11 @@ fn stage_magnitude(ctx: &mut StageContext, progress: &dyn Fn(&str)) -> crate::Re
         let mut combined = phase::rss_combine(&refs);
 
         // Apply homogeneity correction to the combined result
-        if ctx.config.inhomogeneity_correction {
+        if ctx.config.masking.inhomogeneity_correction {
             progress("Applying inhomogeneity correction");
             combined = qsm_core::utils::makehomogeneous(
                 &combined, nx, ny, nz, vsx, vsy, vsz,
-                ctx.config.homogeneity_sigma_mm, ctx.config.homogeneity_nbox,
+                ctx.config.homogeneity.sigma_mm, ctx.config.homogeneity.nbox,
             );
         }
 
@@ -401,7 +401,7 @@ fn stage_magnitude(ctx: &mut StageContext, progress: &dyn Fn(&str)) -> crate::Re
 
 fn stage_mask(ctx: &mut StageContext, mask_path: &Path, progress: &dyn Fn(&str)) -> crate::Result<()> {
     let mask_params = serde_json::json!({
-        "sections": ctx.config.mask_sections.iter().map(|s| format!("{}", s)).collect::<Vec<_>>(),
+        "sections": ctx.config.masking.sections.iter().map(|s| format!("{}", s)).collect::<Vec<_>>(),
     });
     if ctx.is_cached_with_params("mask", None, &mask_params) {
         log::info!("Skipping mask (cached)");
@@ -410,7 +410,7 @@ fn stage_mask(ctx: &mut StageContext, mask_path: &Path, progress: &dyn Fn(&str))
     let t = Instant::now();
     let (nx, ny, nz) = ctx.dims();
     let (vsx, vsy, vsz) = ctx.voxel_size();
-    log::info!("Creating mask ({} section(s))", ctx.config.mask_sections.len());
+    log::info!("Creating mask ({} section(s))", ctx.config.masking.sections.len());
     progress("Creating mask");
 
     // Load phases (needed for PhaseQuality masking input)
@@ -430,7 +430,7 @@ fn stage_mask(ctx: &mut StageContext, mask_path: &Path, progress: &dyn Fn(&str))
     let magnitude = resolve_mask_magnitude(ctx)?;
 
     let working_mask = build_mask_from_sections(
-        &ctx.config.mask_sections, &phases, &magnitude, nx, ny, nz, vsx, vsy, vsz, &ctx.meta.echo_times,
+        &ctx.config.masking.sections, &phases, &magnitude, nx, ny, nz, vsx, vsy, vsz, &ctx.meta.echo_times,
     )?;
     save_mask(mask_path, &working_mask, ctx.meta)?;
     let mag_path = ctx.output.magnitude_path(&ctx.run.key);
@@ -447,7 +447,7 @@ fn resolve_mask_magnitude(ctx: &StageContext) -> crate::Result<Vec<NiftiData>> {
     let (vsx, vsy, vsz) = ctx.voxel_size();
 
     // Determine which masking inputs are needed
-    let inputs: Vec<MaskingInput> = ctx.config.mask_sections.iter()
+    let inputs: Vec<MaskingInput> = ctx.config.masking.sections.iter()
         .map(|s| s.input)
         .collect();
 
@@ -462,10 +462,10 @@ fn resolve_mask_magnitude(ctx: &StageContext) -> crate::Result<Vec<NiftiData>> {
         if let Some(ref src) = ctx.run.echoes[echo_idx].magnitude_nifti {
             let nifti = nifti_io::read_nifti_file(src)
                 .map_err(|e| QsmxtError::NiftiIo(format!("{}: {}", src.display(), e)))?;
-            let data = if ctx.config.inhomogeneity_correction {
+            let data = if ctx.config.masking.inhomogeneity_correction {
                 qsm_core::utils::makehomogeneous(
                     &nifti.data, nx, ny, nz, vsx, vsy, vsz,
-                    ctx.config.homogeneity_sigma_mm, ctx.config.homogeneity_nbox,
+                    ctx.config.homogeneity.sigma_mm, ctx.config.homogeneity.nbox,
                 )
             } else {
                 nifti.data
@@ -487,10 +487,10 @@ fn resolve_mask_magnitude(ctx: &StageContext) -> crate::Result<Vec<NiftiData>> {
 
 fn stage_swi(ctx: &mut StageContext, mask_path: &Path, progress: &dyn Fn(&str)) -> crate::Result<()> {
     let swi_params = serde_json::json!({
-        "scaling": ctx.config.swi_scaling,
-        "strength": ctx.config.swi_strength,
-        "hp_sigma": ctx.config.swi_hp_sigma,
-        "mip_window": ctx.config.swi_mip_window,
+        "scaling": ctx.config.swi.scaling,
+        "strength": ctx.config.swi.strength,
+        "hp_sigma": ctx.config.swi.hp_sigma,
+        "mip_window": ctx.config.swi.mip_window,
     });
     if ctx.is_cached_with_params("swi", Some("clear-swi"), &swi_params) {
         log::info!("Skipping swi (cached)");
@@ -506,7 +506,7 @@ fn stage_swi(ctx: &mut StageContext, mask_path: &Path, progress: &dyn Fn(&str)) 
     let mask = load_mask(mask_path)?;
 
     let unwrapped = qsm_core::unwrap::laplacian_unwrap(&phase_data, &mask, nx, ny, nz, vsx, vsy, vsz);
-    let swi_scaling = match ctx.config.swi_scaling.as_str() {
+    let swi_scaling = match ctx.config.swi.scaling.as_str() {
         "negative_tanh" => qsm_core::swi::PhaseScaling::NegativeTanh,
         "positive" => qsm_core::swi::PhaseScaling::Positive,
         "negative" => qsm_core::swi::PhaseScaling::Negative,
@@ -515,9 +515,9 @@ fn stage_swi(ctx: &mut StageContext, mask_path: &Path, progress: &dyn Fn(&str)) 
     };
     let swi = qsm_core::swi::calculate_swi(
         &unwrapped, &mag_data, &mask, nx, ny, nz, vsx, vsy, vsz,
-        ctx.config.swi_hp_sigma, swi_scaling, ctx.config.swi_strength,
+        ctx.config.swi.hp_sigma, swi_scaling, ctx.config.swi.strength,
     );
-    let mip = qsm_core::swi::create_mip(&swi, nx, ny, nz, ctx.config.swi_mip_window);
+    let mip = qsm_core::swi::create_mip(&swi, nx, ny, nz, ctx.config.swi.mip_window);
 
     let swi_path = ctx.output.swi_path(&ctx.run.key);
     let mip_path = ctx.output.swi_mip_path(&ctx.run.key);
@@ -581,15 +581,15 @@ fn stage_t2star_r2star(ctx: &mut StageContext, mask_path: &Path, progress: &dyn 
 fn stage_unwrap(
     ctx: &mut StageContext, mask_path: &Path, field_path: &Path, progress: &dyn Fn(&str),
 ) -> crate::Result<()> {
-    let unwrap_name = ctx.config.unwrapping_algorithm.map(|a| format!("{}", a)).unwrap_or("laplacian".to_string());
-    let do_offset = ctx.meta.n_echoes > 1 && ctx.config.phase_offset_removal && unwrap_name != "laplacian";
+    let unwrap_name = format!("{}", ctx.config.field_mapping.unwrapping_algorithm);
+    let do_offset = ctx.meta.n_echoes > 1 && ctx.config.field_mapping.phase_offset_removal && unwrap_name != "laplacian";
     let unwrap_alg = if do_offset { "phase_offset_removal" } else { &unwrap_name };
     let unwrap_params = serde_json::json!({
         "n_echoes": ctx.meta.n_echoes,
-        "phase_offset_removal": ctx.config.phase_offset_removal,
-        "bipolar_correction": ctx.config.bipolar_correction,
-        "romeo_individual": ctx.config.romeo_individual,
-        "romeo_correct_global": ctx.config.romeo_correct_global,
+        "phase_offset_removal": ctx.config.field_mapping.phase_offset_removal,
+        "bipolar_correction": ctx.config.field_mapping.bipolar_correction,
+        "romeo_individual": ctx.config.field_mapping.romeo.individual,
+        "romeo_correct_global": ctx.config.field_mapping.romeo.correct_global,
         "echo_times": ctx.meta.echo_times,
         "field_strength": ctx.meta.field_strength,
     });
@@ -647,32 +647,32 @@ fn stage_unwrap(
         // Step 1: Phase offset removal
         let (mut corrected, _offset) = qsm_core::utils::phase_offset_removal(
             &phase_slices, &mag_slices, &echo_times_ms, &mask,
-            ctx.config.phase_offset_sigma, [0, 1],
+            ctx.config.field_mapping.phase_offset_sigma, [0, 1],
             qsm_core::unwrap::UnwrapMethod::Romeo, [vsx, vsy, vsz],
             nx, ny, nz,
         );
 
         // Step 2: Bipolar correction (optional)
-        if ctx.config.bipolar_correction && ctx.meta.n_echoes >= 3 {
+        if ctx.config.field_mapping.bipolar_correction && ctx.meta.n_echoes >= 3 {
             log::info!("Bipolar correction");
             qsm_core::utils::bipolar_correction(
                 &mut corrected, &mag_slices, &echo_times_ms, &mask,
-                ctx.config.phase_offset_sigma, nx, ny, nz,
+                ctx.config.field_mapping.phase_offset_sigma, nx, ny, nz,
             );
         }
 
         // Step 3: Multi-echo unwrapping
-        let unwrapped = match ctx.config.unwrapping_algorithm {
-            Some(UnwrappingAlgorithm::Laplacian) | None => {
+        let unwrapped = match ctx.config.field_mapping.unwrapping_algorithm {
+            UnwrappingAlgorithm::Laplacian => {
                 corrected.iter()
                     .map(|p| qsm_core::unwrap::laplacian_unwrap(p, &mask, nx, ny, nz, vsx, vsy, vsz))
                     .collect()
             }
-            Some(UnwrappingAlgorithm::Romeo) => {
+            UnwrappingAlgorithm::Romeo => {
                 let params = qsm_core::unwrap::RomeoParams {
-                    individual: ctx.config.romeo_individual,
-                    correct_global: ctx.config.romeo_correct_global,
-                    template: ctx.config.romeo_template,
+                    individual: ctx.config.field_mapping.romeo.individual,
+                    correct_global: ctx.config.field_mapping.romeo.correct_global,
+                    template: ctx.config.field_mapping.romeo.template,
                     ..Default::default()
                 };
                 qsm_core::unwrap::unwrap_romeo_multi_echo(
@@ -684,9 +684,9 @@ fn stage_unwrap(
 
         // Step 4: B0 estimation
         let n_total = nx * ny * nz;
-        let b0_hz = match ctx.config.b0_estimation {
+        let b0_hz = match ctx.config.field_mapping.b0_estimation {
             B0Estimation::WeightedAvg => {
-                let wt = match ctx.config.b0_weight_type {
+                let wt = match ctx.config.field_mapping.b0_weight_type {
                     B0WeightType::PhaseSNR => qsm_core::utils::B0WeightType::PhaseSNR,
                     B0WeightType::PhaseVar => qsm_core::utils::B0WeightType::PhaseVar,
                     B0WeightType::Average => qsm_core::utils::B0WeightType::Average,
@@ -702,7 +702,7 @@ fn stage_unwrap(
                 let mag_refs: Vec<&[f64]> = magnitudes.iter().map(|m| m.as_slice()).collect();
                 let fit = qsm_core::utils::multi_echo_linear_fit(
                     &uw_refs, &mag_refs, &ctx.meta.echo_times, &mask,
-                    true, ctx.config.linear_fit_reliability_threshold,
+                    true, ctx.config.field_mapping.linear_fit.reliability_threshold_percentile,
                 );
                 qsm_core::utils::field_to_hz(&fit.field)
             }
@@ -726,7 +726,7 @@ fn stage_unwrap(
         let uw_refs: Vec<&[f64]> = unwrapped.iter().map(|u| u.as_slice()).collect();
         let mag_refs: Vec<&[f64]> = magnitudes.iter().map(|m| m.as_slice()).collect();
         let fit = qsm_core::utils::multi_echo_linear_fit(
-            &uw_refs, &mag_refs, &ctx.meta.echo_times, &mask, true, ctx.config.linear_fit_reliability_threshold,
+            &uw_refs, &mag_refs, &ctx.meta.echo_times, &mask, true, ctx.config.field_mapping.linear_fit.reliability_threshold_percentile,
         );
         phase::rads_to_ppm(&fit.field, ctx.meta.field_strength)
     } else {
@@ -750,11 +750,11 @@ fn stage_tgv(
 ) -> crate::Result<()> {
     let chi_raw_path = ctx.output.chi_raw_path(&ctx.run.key);
     let tgv_params = serde_json::json!({
-        "iterations": ctx.config.tgv_iterations,
-        "alphas": ctx.config.tgv_alphas,
-        "erosions": ctx.config.tgv_erosions,
-        "step_size": ctx.config.tgv_step_size,
-        "tol": ctx.config.tgv_tol,
+        "iterations": ctx.config.inversion.tgv.iterations,
+        "alphas": [ctx.config.inversion.tgv.alpha1, ctx.config.inversion.tgv.alpha0],
+        "erosions": ctx.config.inversion.tgv.erosions,
+        "step_size": ctx.config.inversion.tgv.step_size,
+        "tol": ctx.config.inversion.tgv.tol,
         "te_ms": ctx.meta.echo_times[0] * 1000.0,
         "field_strength": ctx.meta.field_strength,
     });
@@ -767,8 +767,8 @@ fn stage_tgv(
     let (vsx, vsy, vsz) = ctx.voxel_size();
     log::info!(
         "TGV-QSM (iterations={}, alphas=[{}, {}], erosions={}, TE={:.3}ms, B0={:.1}T)",
-        ctx.config.tgv_iterations, ctx.config.tgv_alphas[0], ctx.config.tgv_alphas[1],
-        ctx.config.tgv_erosions, ctx.meta.echo_times[0] * 1000.0, ctx.meta.field_strength,
+        ctx.config.inversion.tgv.iterations, ctx.config.inversion.tgv.alpha1, ctx.config.inversion.tgv.alpha0,
+        ctx.config.inversion.tgv.erosions, ctx.meta.echo_times[0] * 1000.0, ctx.meta.field_strength,
     );
     progress("TGV-QSM reconstruction");
     let mask = load_mask(mask_path)?;
@@ -784,12 +784,12 @@ fn stage_tgv(
     drop(phase_data);
 
     let params = qsm_core::inversion::TgvParams {
-        alpha0: ctx.config.tgv_alphas[1] as f32,
-        alpha1: ctx.config.tgv_alphas[0] as f32,
-        iterations: ctx.config.tgv_iterations,
-        erosions: ctx.config.tgv_erosions,
-        step_size: ctx.config.tgv_step_size as f32,
-        tol: ctx.config.tgv_tol as f32,
+        alpha0: ctx.config.inversion.tgv.alpha0 as f32,
+        alpha1: ctx.config.inversion.tgv.alpha1 as f32,
+        iterations: ctx.config.inversion.tgv.iterations,
+        erosions: ctx.config.inversion.tgv.erosions,
+        step_size: ctx.config.inversion.tgv.step_size as f32,
+        tol: ctx.config.inversion.tgv.tol as f32,
         fieldstrength: ctx.meta.field_strength as f32,
         te: ctx.meta.echo_times[0] as f32,
     };
@@ -828,10 +828,10 @@ fn stage_qsmart(
 ) -> crate::Result<()> {
     let chi_raw_path = ctx.output.chi_raw_path(&ctx.run.key);
     let qsmart_params = serde_json::json!({
-        "sdf_spatial_radius": ctx.config.qsmart_sdf_spatial_radius,
-        "vasc_sphere_radius": ctx.config.qsmart_vasc_sphere_radius,
-        "ilsqr_tol": ctx.config.qsmart_ilsqr_tol,
-        "ilsqr_max_iter": ctx.config.qsmart_ilsqr_max_iter,
+        "sdf_spatial_radius": ctx.config.inversion.qsmart.sdf_spatial_radius,
+        "vasc_sphere_radius": ctx.config.inversion.qsmart.vasc_sphere_radius,
+        "ilsqr_tol": ctx.config.inversion.qsmart.ilsqr_tol,
+        "ilsqr_max_iter": ctx.config.inversion.qsmart.ilsqr_max_iter,
     });
     if ctx.is_cached_with_params("qsmart", Some("qsmart"), &qsmart_params) {
         log::info!("Skipping qsmart (cached)");
@@ -843,8 +843,8 @@ fn stage_qsmart(
     let bdir = ctx.meta.b0_direction;
     log::info!(
         "QSMART (iLSQR tol={:.0e}, max_iter={}, vasc_radius={}, sdf_radius={})",
-        ctx.config.qsmart_ilsqr_tol, ctx.config.qsmart_ilsqr_max_iter,
-        ctx.config.qsmart_vasc_sphere_radius, ctx.config.qsmart_sdf_spatial_radius,
+        ctx.config.inversion.qsmart.ilsqr_tol, ctx.config.inversion.qsmart.ilsqr_max_iter,
+        ctx.config.inversion.qsmart.vasc_sphere_radius, ctx.config.inversion.qsmart.sdf_spatial_radius,
     );
     progress("QSMART reconstruction");
     let field_ppm = load_volume(field_path)?;
@@ -857,7 +857,7 @@ fn stage_qsmart(
     let mag_combined_path = ctx.output.magnitude_path(&ctx.run.key);
     let magnitude = if mag_combined_path.exists() { load_volume(&mag_combined_path)? } else { vec![1.0f64; nx * ny * nz] };
     let vasc_params = qsm_core::utils::VasculatureParams {
-        sphere_radius: ctx.config.qsmart_vasc_sphere_radius,
+        sphere_radius: ctx.config.inversion.qsmart.vasc_sphere_radius,
         frangi_scale_range: qsmart_defaults.frangi_scale_range,
         frangi_scale_ratio: qsmart_defaults.frangi_scale_ratio,
         frangi_c: qsmart_defaults.frangi_c,
@@ -889,7 +889,7 @@ fn stage_qsmart(
     progress("QSMART: SDF stage 1");
     let sdf_params1 = qsm_core::bgremove::SdfParams {
         sigma1: qsmart_defaults.sdf_sigma1_stage1, sigma2: qsmart_defaults.sdf_sigma2_stage1,
-        spatial_radius: ctx.config.qsmart_sdf_spatial_radius,
+        spatial_radius: ctx.config.inversion.qsmart.sdf_spatial_radius,
         lower_lim: qsmart_defaults.sdf_lower_lim, curv_constant: qsmart_defaults.sdf_curv_constant, use_curvature: true,
     };
     let sdf1_pb: std::cell::RefCell<Option<ProgressBar>> = std::cell::RefCell::new(None);
@@ -916,14 +916,14 @@ fn stage_qsmart(
     let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "iLSQR-1");
     let chi1 = qsm_core::inversion::ilsqr_with_progress(
         &lfs1, &mask, nx, ny, nz, vsx, vsy, vsz,
-        bdir, ctx.config.qsmart_ilsqr_tol, ctx.config.qsmart_ilsqr_max_iter, prog,
+        bdir, ctx.config.inversion.qsmart.ilsqr_tol, ctx.config.inversion.qsmart.ilsqr_max_iter, prog,
     );
 
     // SDF stage 2
     progress("QSMART: SDF stage 2");
     let sdf_params2 = qsm_core::bgremove::SdfParams {
         sigma1: qsmart_defaults.sdf_sigma1_stage2, sigma2: qsmart_defaults.sdf_sigma2_stage2,
-        spatial_radius: ctx.config.qsmart_sdf_spatial_radius,
+        spatial_radius: ctx.config.inversion.qsmart.sdf_spatial_radius,
         lower_lim: qsmart_defaults.sdf_lower_lim, curv_constant: qsmart_defaults.sdf_curv_constant, use_curvature: true,
     };
     let sdf2_pb: std::cell::RefCell<Option<ProgressBar>> = std::cell::RefCell::new(None);
@@ -950,7 +950,7 @@ fn stage_qsmart(
     let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "iLSQR-2");
     let chi2 = qsm_core::inversion::ilsqr_with_progress(
         &lfs2, &mask, nx, ny, nz, vsx, vsy, vsz,
-        bdir, ctx.config.qsmart_ilsqr_tol, ctx.config.qsmart_ilsqr_max_iter, prog,
+        bdir, ctx.config.inversion.qsmart.ilsqr_tol, ctx.config.inversion.qsmart.ilsqr_max_iter, prog,
     );
 
     // Combine
@@ -973,44 +973,43 @@ fn stage_standard_qsm(
     let (vsx, vsy, vsz) = ctx.voxel_size();
 
     // --- Background removal ---
-    let skip_bgremove = ctx.config.qsm_algorithm == QsmAlgorithm::Medi && ctx.config.medi_smv;
+    let skip_bgremove = ctx.config.inversion.algorithm == QsmAlgorithm::Medi && ctx.config.inversion.medi.smv;
     let local_field_path = ctx.output.local_field_path(&ctx.run.key);
     let bg_mask_path = ctx.output.bg_mask_path(&ctx.run.key);
-    let bf_name = ctx.config.bf_algorithm.map(|a| format!("{}", a)).unwrap_or("none".to_string());
-    let bf_params = match ctx.config.bf_algorithm {
-        Some(BfAlgorithm::Vsharp) => serde_json::json!({
-            "max_radius_factor": ctx.config.vsharp_max_radius_factor,
-            "min_radius_factor": ctx.config.vsharp_min_radius_factor,
-            "threshold": ctx.config.vsharp_threshold,
+    let bf_name = format!("{}", ctx.config.bg_removal.algorithm);
+    let bf_params = match ctx.config.bg_removal.algorithm {
+        BfAlgorithm::Vsharp => serde_json::json!({
+            "max_radius_factor": ctx.config.bg_removal.vsharp.max_radius_factor,
+            "min_radius_factor": ctx.config.bg_removal.vsharp.min_radius_factor,
+            "threshold": ctx.config.bg_removal.vsharp.threshold,
         }),
-        Some(BfAlgorithm::Pdf) => serde_json::json!({ "tol": ctx.config.pdf_tol }),
-        Some(BfAlgorithm::Lbv) => serde_json::json!({ "tol": ctx.config.lbv_tol }),
-        Some(BfAlgorithm::Ismv) => serde_json::json!({
-            "radius_factor": ctx.config.ismv_radius_factor,
-            "tol": ctx.config.ismv_tol,
-            "max_iter": ctx.config.ismv_max_iter,
+        BfAlgorithm::Pdf => serde_json::json!({ "tol": ctx.config.bg_removal.pdf.tol }),
+        BfAlgorithm::Lbv => serde_json::json!({ "tol": ctx.config.bg_removal.lbv.tol }),
+        BfAlgorithm::Ismv => serde_json::json!({
+            "radius_factor": ctx.config.bg_removal.ismv.radius_factor,
+            "tol": ctx.config.bg_removal.ismv.tol,
+            "max_iter": ctx.config.bg_removal.ismv.max_iter,
         }),
-        Some(BfAlgorithm::Sharp) => serde_json::json!({
-            "radius_factor": ctx.config.sharp_radius_factor,
-            "threshold": ctx.config.sharp_threshold,
+        BfAlgorithm::Sharp => serde_json::json!({
+            "radius_factor": ctx.config.bg_removal.sharp.radius_factor,
+            "threshold": ctx.config.bg_removal.sharp.threshold,
         }),
-        Some(BfAlgorithm::Resharp) => serde_json::json!({
-            "radius": ctx.config.resharp_radius,
-            "tik_reg": ctx.config.resharp_tik_reg,
-            "tol": ctx.config.resharp_tol,
-            "max_iter": ctx.config.resharp_max_iter,
+        BfAlgorithm::Resharp => serde_json::json!({
+            "radius": ctx.config.bg_removal.resharp.radius,
+            "tik_reg": ctx.config.bg_removal.resharp.tik_reg,
+            "tol": ctx.config.bg_removal.resharp.tol,
+            "max_iter": ctx.config.bg_removal.resharp.max_iter,
         }),
-        Some(BfAlgorithm::Harperella) => serde_json::json!({
-            "radius": ctx.config.harperella_radius,
-            "max_iter": ctx.config.harperella_max_iter,
-            "tol": ctx.config.harperella_tol,
+        BfAlgorithm::Harperella => serde_json::json!({
+            "radius": ctx.config.bg_removal.harperella.radius,
+            "max_iter": ctx.config.bg_removal.harperella.max_iter,
+            "tol": ctx.config.bg_removal.harperella.tol,
         }),
-        Some(BfAlgorithm::Iharperella) => serde_json::json!({
-            "radius": ctx.config.iharperella_radius,
-            "max_iter": ctx.config.iharperella_max_iter,
-            "tol": ctx.config.iharperella_tol,
+        BfAlgorithm::Iharperella => serde_json::json!({
+            "radius": ctx.config.bg_removal.iharperella.radius,
+            "max_iter": ctx.config.bg_removal.iharperella.max_iter,
+            "tol": ctx.config.bg_removal.iharperella.tol,
         }),
-        None => serde_json::json!({}),
     };
     if skip_bgremove {
         log::info!("Skipping background removal (MEDI SMV handles it internally)");
@@ -1022,79 +1021,78 @@ fn stage_standard_qsm(
         let mask = load_mask(mask_path)?;
         let bdir = ctx.meta.b0_direction;
 
-        let (local_field, eroded_mask) = match ctx.config.bf_algorithm {
-            Some(BfAlgorithm::Vsharp) => {
+        let (local_field, eroded_mask) = match ctx.config.bg_removal.algorithm {
+            BfAlgorithm::Vsharp => {
                 let min_vox = vsx.min(vsy).min(vsz);
                 let max_vox = vsx.max(vsy).max(vsz);
                 let mut radii = Vec::new();
-                let mut r = ctx.config.vsharp_max_radius_factor * min_vox;
-                while r >= ctx.config.vsharp_min_radius_factor * max_vox { radii.push(r); r -= ctx.config.vsharp_min_radius_factor * max_vox; }
-                log::info!("Background removal (V-SHARP, {} radii, threshold={})", radii.len(), ctx.config.vsharp_threshold);
+                let mut r = ctx.config.bg_removal.vsharp.max_radius_factor * min_vox;
+                while r >= ctx.config.bg_removal.vsharp.min_radius_factor * max_vox { radii.push(r); r -= ctx.config.bg_removal.vsharp.min_radius_factor * max_vox; }
+                log::info!("Background removal (V-SHARP, {} radii, threshold={})", radii.len(), ctx.config.bg_removal.vsharp.threshold);
                 let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "V-SHARP");
                 qsm_core::bgremove::vsharp_with_progress(
-                    &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz, &radii, ctx.config.vsharp_threshold, prog,
+                    &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz, &radii, ctx.config.bg_removal.vsharp.threshold, prog,
                 )
             }
-            Some(BfAlgorithm::Pdf) => {
+            BfAlgorithm::Pdf => {
                 let max_iter = ((nx * ny * nz) as f64).sqrt().ceil() as usize;
-                log::info!("Background removal (PDF, tol={:.0e}, max_iter={})", ctx.config.pdf_tol, max_iter);
+                log::info!("Background removal (PDF, tol={:.0e}, max_iter={})", ctx.config.bg_removal.pdf.tol, max_iter);
                 let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "PDF");
                 let lf = qsm_core::bgremove::pdf_with_progress(
-                    &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz, bdir, ctx.config.pdf_tol, max_iter, prog,
+                    &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz, bdir, ctx.config.bg_removal.pdf.tol, max_iter, prog,
                 );
                 (lf, mask.clone())
             }
-            Some(BfAlgorithm::Lbv) => {
+            BfAlgorithm::Lbv => {
                 let max_iter = (3 * nx.max(ny).max(nz)).max(500);
-                log::info!("Background removal (LBV, tol={:.0e}, max_iter={})", ctx.config.lbv_tol, max_iter);
+                log::info!("Background removal (LBV, tol={:.0e}, max_iter={})", ctx.config.bg_removal.lbv.tol, max_iter);
                 let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "LBV");
                 qsm_core::bgremove::lbv_with_progress(
-                    &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz, ctx.config.lbv_tol, max_iter, prog,
+                    &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz, ctx.config.bg_removal.lbv.tol, max_iter, prog,
                 )
             }
-            Some(BfAlgorithm::Ismv) => {
-                let radius = ctx.config.ismv_radius_factor * vsx.max(vsy).max(vsz);
-                log::info!("Background removal (iSMV, radius={:.1}, tol={:.0e}, max_iter={})", radius, ctx.config.ismv_tol, ctx.config.ismv_max_iter);
+            BfAlgorithm::Ismv => {
+                let radius = ctx.config.bg_removal.ismv.radius_factor * vsx.max(vsy).max(vsz);
+                log::info!("Background removal (iSMV, radius={:.1}, tol={:.0e}, max_iter={})", radius, ctx.config.bg_removal.ismv.tol, ctx.config.bg_removal.ismv.max_iter);
                 let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "iSMV");
                 qsm_core::bgremove::ismv_with_progress(
-                    &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz, radius, ctx.config.ismv_tol, ctx.config.ismv_max_iter, prog,
+                    &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz, radius, ctx.config.bg_removal.ismv.tol, ctx.config.bg_removal.ismv.max_iter, prog,
                 )
             }
-            Some(BfAlgorithm::Sharp) => {
-                let radius = ctx.config.sharp_radius_factor * vsx.min(vsy).min(vsz);
-                log::info!("Background removal (SHARP, radius={:.1}, threshold={})", radius, ctx.config.sharp_threshold);
+            BfAlgorithm::Sharp => {
+                let radius = ctx.config.bg_removal.sharp.radius_factor * vsx.min(vsy).min(vsz);
+                log::info!("Background removal (SHARP, radius={:.1}, threshold={})", radius, ctx.config.bg_removal.sharp.threshold);
                 qsm_core::bgremove::sharp(
-                    &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz, radius, ctx.config.sharp_threshold,
+                    &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz, radius, ctx.config.bg_removal.sharp.threshold,
                 )
             }
-            Some(BfAlgorithm::Resharp) => {
+            BfAlgorithm::Resharp => {
                 log::info!("Background removal (RESHARP, radius={:.1}, tik_reg={:.0e}, tol={:.0e}, max_iter={})",
-                    ctx.config.resharp_radius, ctx.config.resharp_tik_reg, ctx.config.resharp_tol, ctx.config.resharp_max_iter);
+                    ctx.config.bg_removal.resharp.radius, ctx.config.bg_removal.resharp.tik_reg, ctx.config.bg_removal.resharp.tol, ctx.config.bg_removal.resharp.max_iter);
                 let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "RESHARP");
                 qsm_core::bgremove::resharp_with_progress(
                     &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
-                    ctx.config.resharp_radius, ctx.config.resharp_tik_reg, ctx.config.resharp_tol, ctx.config.resharp_max_iter, prog,
+                    ctx.config.bg_removal.resharp.radius, ctx.config.bg_removal.resharp.tik_reg, ctx.config.bg_removal.resharp.tol, ctx.config.bg_removal.resharp.max_iter, prog,
                 )
             }
-            Some(BfAlgorithm::Harperella) => {
+            BfAlgorithm::Harperella => {
                 log::info!("Background removal (HARPERELLA, radius={:.1}, max_iter={}, tol={:.0e})",
-                    ctx.config.harperella_radius, ctx.config.harperella_max_iter, ctx.config.harperella_tol);
+                    ctx.config.bg_removal.harperella.radius, ctx.config.bg_removal.harperella.max_iter, ctx.config.bg_removal.harperella.tol);
                 let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "HARPERELLA");
                 qsm_core::pipeline::harperella_with_progress(
                     &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
-                    ctx.config.harperella_radius, ctx.config.harperella_max_iter, ctx.config.harperella_tol, prog,
+                    ctx.config.bg_removal.harperella.radius, ctx.config.bg_removal.harperella.max_iter, ctx.config.bg_removal.harperella.tol, prog,
                 )
             }
-            Some(BfAlgorithm::Iharperella) => {
+            BfAlgorithm::Iharperella => {
                 log::info!("Background removal (iHARPERELLA, radius={:.1}, max_iter={}, tol={:.0e})",
-                    ctx.config.iharperella_radius, ctx.config.iharperella_max_iter, ctx.config.iharperella_tol);
+                    ctx.config.bg_removal.iharperella.radius, ctx.config.bg_removal.iharperella.max_iter, ctx.config.bg_removal.iharperella.tol);
                 let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "iHARPERELLA");
                 qsm_core::pipeline::iharperella_with_progress(
                     &field_ppm, &mask, nx, ny, nz, vsx, vsy, vsz,
-                    ctx.config.iharperella_radius, ctx.config.iharperella_max_iter, ctx.config.iharperella_tol, prog,
+                    ctx.config.bg_removal.iharperella.radius, ctx.config.bg_removal.iharperella.max_iter, ctx.config.bg_removal.iharperella.tol, prog,
                 )
             }
-            None => return Err(QsmxtError::Config("bf_algorithm must be set for standard pipeline".to_string())),
         };
         save_volume(&local_field_path, &local_field, ctx.meta)?;
         save_mask(&bg_mask_path, &eroded_mask, ctx.meta)?;
@@ -1109,27 +1107,27 @@ fn stage_standard_qsm(
 
     // --- Dipole inversion ---
     let chi_raw_path = ctx.output.chi_raw_path(&ctx.run.key);
-    let alg_name = format!("{}", ctx.config.qsm_algorithm);
-    let invert_params = match ctx.config.qsm_algorithm {
+    let alg_name = format!("{}", ctx.config.inversion.algorithm);
+    let invert_params = match ctx.config.inversion.algorithm {
         QsmAlgorithm::Rts => serde_json::json!({
-            "delta": ctx.config.rts_delta, "mu": ctx.config.rts_mu,
-            "tol": ctx.config.rts_tol, "max_iter": ctx.config.rts_max_iter,
+            "delta": ctx.config.inversion.rts.delta, "mu": ctx.config.inversion.rts.mu,
+            "tol": ctx.config.inversion.rts.tol, "max_iter": ctx.config.inversion.rts.max_iter,
         }),
         QsmAlgorithm::Tv => serde_json::json!({
-            "lambda": ctx.config.tv_lambda, "max_iter": ctx.config.tv_max_iter,
+            "lambda": ctx.config.inversion.tv.lambda, "max_iter": ctx.config.inversion.tv.max_iter,
         }),
-        QsmAlgorithm::Tkd => serde_json::json!({ "threshold": ctx.config.tkd_threshold }),
-        QsmAlgorithm::Tsvd => serde_json::json!({ "threshold": ctx.config.tsvd_threshold }),
+        QsmAlgorithm::Tkd => serde_json::json!({ "threshold": ctx.config.inversion.tkd.threshold }),
+        QsmAlgorithm::Tsvd => serde_json::json!({ "threshold": ctx.config.inversion.tsvd.threshold }),
         QsmAlgorithm::Ilsqr => serde_json::json!({
-            "tol": ctx.config.ilsqr_tol, "max_iter": ctx.config.ilsqr_max_iter,
+            "tol": ctx.config.inversion.ilsqr.tol, "max_iter": ctx.config.inversion.ilsqr.max_iter,
         }),
-        QsmAlgorithm::Tikhonov => serde_json::json!({ "lambda": ctx.config.tikhonov_lambda }),
+        QsmAlgorithm::Tikhonov => serde_json::json!({ "lambda": ctx.config.inversion.tikhonov.lambda }),
         QsmAlgorithm::Nltv => serde_json::json!({
-            "lambda": ctx.config.nltv_lambda, "max_iter": ctx.config.nltv_max_iter,
+            "lambda": ctx.config.inversion.nltv.lambda, "max_iter": ctx.config.inversion.nltv.max_iter,
         }),
         QsmAlgorithm::Medi => serde_json::json!({
-            "lambda": ctx.config.medi_lambda, "max_iter": ctx.config.medi_max_iter,
-            "smv": ctx.config.medi_smv,
+            "lambda": ctx.config.inversion.medi.lambda, "max_iter": ctx.config.inversion.medi.max_iter,
+            "smv": ctx.config.inversion.medi.smv,
         }),
         _ => serde_json::json!({}),
     };
@@ -1140,57 +1138,57 @@ fn stage_standard_qsm(
         let eroded_mask = if skip_bgremove { load_mask(mask_path)? } else { load_mask(&bg_mask_path)? };
         let bdir = ctx.meta.b0_direction;
 
-        let chi = match ctx.config.qsm_algorithm {
+        let chi = match ctx.config.inversion.algorithm {
             QsmAlgorithm::Rts => {
                 log::info!("Dipole inversion (RTS, delta={}, mu={:.0e}, tol={:.0e}, max_iter={})",
-                    ctx.config.rts_delta, ctx.config.rts_mu, ctx.config.rts_tol, ctx.config.rts_max_iter);
+                    ctx.config.inversion.rts.delta, ctx.config.inversion.rts.mu, ctx.config.inversion.rts.tol, ctx.config.inversion.rts.max_iter);
                 let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "RTS");
                 qsm_core::inversion::rts_with_progress(
                     &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
-                    bdir, ctx.config.rts_delta, ctx.config.rts_mu, ctx.config.rts_rho,
-                    ctx.config.rts_tol, ctx.config.rts_max_iter, ctx.config.rts_lsmr_iter, prog,
+                    bdir, ctx.config.inversion.rts.delta, ctx.config.inversion.rts.mu, ctx.config.inversion.rts.rho,
+                    ctx.config.inversion.rts.tol, ctx.config.inversion.rts.max_iter, ctx.config.inversion.rts.lsmr_iter, prog,
                 )
             }
             QsmAlgorithm::Tv => {
-                log::info!("Dipole inversion (TV-ADMM, lambda={:.0e}, max_iter={})", ctx.config.tv_lambda, ctx.config.tv_max_iter);
+                log::info!("Dipole inversion (TV-ADMM, lambda={:.0e}, max_iter={})", ctx.config.inversion.tv.lambda, ctx.config.inversion.tv.max_iter);
                 let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "TV");
                 qsm_core::inversion::tv_admm_with_progress(
                     &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
-                    bdir, ctx.config.tv_lambda, ctx.config.tv_rho, ctx.config.tv_tol, ctx.config.tv_max_iter, prog,
+                    bdir, ctx.config.inversion.tv.lambda, ctx.config.inversion.tv.rho, ctx.config.inversion.tv.tol, ctx.config.inversion.tv.max_iter, prog,
                 )
             }
             QsmAlgorithm::Tkd => {
-                log::info!("Dipole inversion (TKD, threshold={})", ctx.config.tkd_threshold);
-                qsm_core::inversion::tkd(&local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz, bdir, ctx.config.tkd_threshold)
+                log::info!("Dipole inversion (TKD, threshold={})", ctx.config.inversion.tkd.threshold);
+                qsm_core::inversion::tkd(&local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz, bdir, ctx.config.inversion.tkd.threshold)
             }
             QsmAlgorithm::Tsvd => {
-                log::info!("Dipole inversion (TSVD, threshold={})", ctx.config.tsvd_threshold);
-                qsm_core::inversion::tsvd(&local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz, bdir, ctx.config.tsvd_threshold)
+                log::info!("Dipole inversion (TSVD, threshold={})", ctx.config.inversion.tsvd.threshold);
+                qsm_core::inversion::tsvd(&local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz, bdir, ctx.config.inversion.tsvd.threshold)
             }
             QsmAlgorithm::Ilsqr => {
-                log::info!("Dipole inversion (iLSQR, tol={:.0e}, max_iter={})", ctx.config.ilsqr_tol, ctx.config.ilsqr_max_iter);
+                log::info!("Dipole inversion (iLSQR, tol={:.0e}, max_iter={})", ctx.config.inversion.ilsqr.tol, ctx.config.inversion.ilsqr.max_iter);
                 let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "iLSQR");
                 qsm_core::inversion::ilsqr_with_progress(
-                    &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz, bdir, ctx.config.ilsqr_tol, ctx.config.ilsqr_max_iter, prog,
+                    &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz, bdir, ctx.config.inversion.ilsqr.tol, ctx.config.inversion.ilsqr.max_iter, prog,
                 )
             }
             QsmAlgorithm::Tikhonov => {
-                log::info!("Dipole inversion (Tikhonov, lambda={:.0e})", ctx.config.tikhonov_lambda);
+                log::info!("Dipole inversion (Tikhonov, lambda={:.0e})", ctx.config.inversion.tikhonov.lambda);
                 qsm_core::inversion::tikhonov(
-                    &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz, bdir, ctx.config.tikhonov_lambda, qsm_core::inversion::Regularization::Identity,
+                    &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz, bdir, ctx.config.inversion.tikhonov.lambda, qsm_core::inversion::Regularization::Identity,
                 )
             }
             QsmAlgorithm::Nltv => {
-                log::info!("Dipole inversion (NLTV, lambda={:.0e}, max_iter={})", ctx.config.nltv_lambda, ctx.config.nltv_max_iter);
+                log::info!("Dipole inversion (NLTV, lambda={:.0e}, max_iter={})", ctx.config.inversion.nltv.lambda, ctx.config.inversion.nltv.max_iter);
                 let (prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "NLTV");
                 qsm_core::inversion::nltv_with_progress(
                     &local_field, &eroded_mask, nx, ny, nz, vsx, vsy, vsz,
-                    bdir, ctx.config.nltv_lambda, ctx.config.nltv_mu, ctx.config.nltv_tol,
-                    ctx.config.nltv_max_iter, ctx.config.nltv_newton_iter, prog,
+                    bdir, ctx.config.inversion.nltv.lambda, ctx.config.inversion.nltv.mu, ctx.config.inversion.nltv.tol,
+                    ctx.config.inversion.nltv.max_iter, ctx.config.inversion.nltv.newton_iter, prog,
                 )
             }
             QsmAlgorithm::Medi => {
-                log::info!("Dipole inversion (MEDI, lambda={:.0e}, max_iter={})", ctx.config.medi_lambda, ctx.config.medi_max_iter);
+                log::info!("Dipole inversion (MEDI, lambda={:.0e}, max_iter={})", ctx.config.inversion.medi.lambda, ctx.config.inversion.medi.max_iter);
                 let mag_combined_path = ctx.output.magnitude_path(&ctx.run.key);
                 let magnitude = if mag_combined_path.exists() { load_volume(&mag_combined_path)? } else { vec![1.0f64; nx * ny * nz] };
                 let n_std = vec![1.0f64; nx * ny * nz];
@@ -1198,9 +1196,9 @@ fn stage_standard_qsm(
                 qsm_core::inversion::medi_l1_with_progress(
                     &local_field, &n_std, &magnitude, &eroded_mask,
                     nx, ny, nz, vsx, vsy, vsz,
-                    ctx.config.medi_lambda, bdir, false, ctx.config.medi_smv, ctx.config.medi_smv_radius,
-                    1, ctx.config.medi_percentage, ctx.config.medi_cg_tol, ctx.config.medi_cg_max_iter,
-                    ctx.config.medi_max_iter, ctx.config.medi_tol, prog,
+                    ctx.config.inversion.medi.lambda, bdir, false, ctx.config.inversion.medi.smv, ctx.config.inversion.medi.smv_radius,
+                    1, ctx.config.inversion.medi.percentage, ctx.config.inversion.medi.cg_tol, ctx.config.inversion.medi.cg_max_iter,
+                    ctx.config.inversion.medi.max_iter, ctx.config.inversion.medi.tol, prog,
                 )
             }
             QsmAlgorithm::Tgv => unreachable!("TGV handled separately"),
@@ -1212,7 +1210,7 @@ fn stage_standard_qsm(
         ctx.complete_step("invert", Some(&alg_name),
             invert_params, &[lf_input, mask_input], vec![chi_raw_path], t,
         )?;
-        log_step_done(&format!("Dipole inversion ({})", ctx.config.qsm_algorithm), t);
+        log_step_done(&format!("Dipole inversion ({})", ctx.config.inversion.algorithm), t);
     } else {
         log::info!("Skipping invert (cached)");
     }
@@ -1221,14 +1219,14 @@ fn stage_standard_qsm(
 
 fn stage_reference(ctx: &mut StageContext, mask_path: &Path, progress: &dyn Fn(&str)) -> crate::Result<()> {
     let qsm_path = ctx.output.qsm_path(&ctx.run.key);
-    let ref_method = format!("{}", ctx.config.qsm_reference);
+    let ref_method = format!("{}", ctx.config.qsm.reference);
     let ref_params = serde_json::json!({ "method": ref_method });
     if ctx.is_cached_with_params("reference", Some(&ref_method), &ref_params) {
         log::info!("Skipping reference (cached)");
         return Ok(());
     }
     let t = Instant::now();
-    log::info!("QSM referencing ({})", ctx.config.qsm_reference);
+    log::info!("QSM referencing ({})", ctx.config.qsm.reference);
     progress("Referencing QSM");
     let chi_raw_path = ctx.output.chi_raw_path(&ctx.run.key);
     let chi = load_volume(&chi_raw_path)?;
@@ -1425,11 +1423,11 @@ fn unwrap_phase(
     combined_magnitude: &[f64],
     config: &PipelineConfig,
 ) -> Vec<f64> {
-    match config.unwrapping_algorithm {
-        Some(UnwrappingAlgorithm::Laplacian) | None => {
+    match config.field_mapping.unwrapping_algorithm {
+        UnwrappingAlgorithm::Laplacian => {
             qsm_core::unwrap::laplacian_unwrap(phase, mask, nx, ny, nz, vsx, vsy, vsz)
         }
-        Some(UnwrappingAlgorithm::Romeo) => {
+        UnwrappingAlgorithm::Romeo => {
             let weights = qsm_core::unwrap::calculate_weights_single_echo(
                 phase, combined_magnitude, mask, nx, ny, nz,
             );
@@ -1453,7 +1451,7 @@ fn unwrap_phase(
 
 /// Apply QSM referencing (e.g., subtract mean within mask).
 fn apply_reference(chi: &[f64], mask: &[u8], config: &PipelineConfig) -> Vec<f64> {
-    match config.qsm_reference {
+    match config.qsm.reference {
         QsmReference::Mean => {
             let mut sum = 0.0f64;
             let mut count = 0usize;
@@ -1484,7 +1482,7 @@ fn apply_reference(chi: &[f64], mask: &[u8], config: &PipelineConfig) -> Vec<f64
 mod tests {
     use super::*;
     fn config_with_reference(reference: QsmReference) -> PipelineConfig {
-        PipelineConfig { qsm_reference: reference, ..PipelineConfig::default() }
+        let mut c = PipelineConfig::default(); c.qsm.reference = reference; c
     }
 
     #[test]

@@ -13,13 +13,13 @@ use crate::pipeline::memory;
 pub fn execute(args: RunArgs) -> crate::Result<()> {
     // Build config: file -> CLI overrides
     let mut config = if let Some(ref path) = args.config {
-        PipelineConfig::from_file(path)?
+        crate::pipeline::config::load_config(path)?
     } else {
         PipelineConfig::default()
     };
 
-    config.apply_run_overrides(&args);
-    config.validate()?;
+    crate::pipeline::config::apply_run_overrides(&mut config, &args);
+    
 
     // Discover BIDS runs
     let filter = DiscoveryFilter {
@@ -66,22 +66,18 @@ pub fn execute(args: RunArgs) -> crate::Result<()> {
 
     if args.dry {
         println!("Pipeline:");
-        println!("  Phase Offset Removal: {}", if config.phase_offset_removal { "enabled" } else { "disabled" });
-        if config.inhomogeneity_correction {
+        println!("  Phase Offset Removal: {}", if config.field_mapping.phase_offset_removal { "enabled" } else { "disabled" });
+        if config.masking.inhomogeneity_correction {
             println!("  Inhomogeneity:     enabled");
         }
-        println!("  Masking:           {}", config.mask_sections.iter()
+        println!("  Masking:           {}", config.masking.sections.iter()
             .map(|s| format!("{}", s))
             .collect::<Vec<_>>()
             .join(" | "));
-        if let Some(ref unwrap) = config.unwrapping_algorithm {
-            println!("  Unwrapping:        {:?}", unwrap);
-        }
-        if let Some(ref bf) = config.bf_algorithm {
-            println!("  BG Removal:        {:?}", bf);
-        }
-        println!("  QSM Algorithm:     {:?}", config.qsm_algorithm);
-        println!("  QSM Reference:     {:?}", config.qsm_reference);
+        println!("  Unwrapping:        {}", config.field_mapping.unwrapping_algorithm);
+        println!("  BG Removal:        {}", config.bg_removal.algorithm);
+        println!("  QSM Algorithm:     {:?}", config.inversion.algorithm);
+        println!("  QSM Reference:     {:?}", config.qsm.reference);
         println!();
         for run in &runs {
             let (nx, ny, nz) = run.dims;
@@ -170,7 +166,7 @@ pub fn execute(args: RunArgs) -> crate::Result<()> {
 
     // Save config to derivatives dir
     let config_path = derivatives_dir.join("pipeline_config.toml");
-    std::fs::write(&config_path, config.to_annotated_toml())?;
+    std::fs::write(&config_path, config.to_toml().unwrap_or_default())?;
 
     // Save methods description
     let methods_path = derivatives_dir.join("methods.md");

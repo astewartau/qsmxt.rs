@@ -4,7 +4,7 @@ use crate::pipeline::config::PipelineConfig;
 
 pub fn execute(args: SlurmArgs) -> crate::Result<()> {
     let config = if let Some(ref path) = args.config {
-        PipelineConfig::from_file(path)?
+        crate::pipeline::config::load_config(path)?
     } else {
         PipelineConfig::default()
     };

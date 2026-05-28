@@ -522,7 +522,7 @@ mod integration_tests {
         super::init::execute(InitArgs { output: Some(output.clone()) }).unwrap();
         assert!(output.exists());
         let content = std::fs::read_to_string(&output).unwrap();
-        assert!(content.contains("qsm_algorithm"));
+        assert!(content.contains("[inversion]"));
     }
 
     #[test]

@@ -583,38 +583,39 @@ pub fn config_from_app(app: &App) -> PipelineConfig {
     let qsm_algorithm = qsm_algorithms[ps.qsm_algorithm];
     let is_end_to_end = matches!(qsm_algorithm, QsmAlgorithm::Tgv | QsmAlgorithm::Qsmart);
 
-    PipelineConfig {
-        do_qsm: ps.do_qsm,
-        do_swi: app.form.do_swi,
-        do_t2starmap: app.form.do_t2starmap,
-        do_r2starmap: app.form.do_r2starmap,
-        inhomogeneity_correction: ps.inhomogeneity_correction,
-        qsm_algorithm,
-        unwrapping_algorithm: if is_end_to_end { None } else { Some(unwrap_algorithms[ps.unwrapping_algorithm]) },
-        bf_algorithm: if is_end_to_end { None } else { Some(bf_algorithms[ps.bf_algorithm]) },
-        phase_offset_removal: ps.phase_offset_removal,
-        bipolar_correction: ps.bipolar_correction,
-        romeo_individual: ps.romeo_individual,
-        romeo_correct_global: ps.romeo_correct_global,
-        romeo_template: ps.romeo_template.trim().parse::<usize>().unwrap_or(1).saturating_sub(1),
-        b0_estimation: match ps.b0_estimation {
-            0 => B0Estimation::WeightedAvg,
-            _ => B0Estimation::LinearFit,
-        },
-        b0_weight_type: match ps.b0_weight_type {
-            0 => B0WeightType::PhaseSNR,
-            1 => B0WeightType::PhaseVar,
-            2 => B0WeightType::Average,
-            3 => B0WeightType::TEs,
-            _ => B0WeightType::Mag,
-        },
-        qsm_reference: match ps.qsm_reference {
-            0 => QsmReference::Mean,
-            _ => QsmReference::None,
-        },
-        mask_sections: ps.mask_sections.clone(),
-        ..PipelineConfig::default()
+    let mut config = PipelineConfig::default();
+    config.pipeline.do_qsm = ps.do_qsm;
+    config.pipeline.do_swi = app.form.do_swi;
+    config.pipeline.do_t2starmap = app.form.do_t2starmap;
+    config.pipeline.do_r2starmap = app.form.do_r2starmap;
+    config.masking.inhomogeneity_correction = ps.inhomogeneity_correction;
+    config.inversion.algorithm = qsm_algorithm;
+    if !is_end_to_end {
+        config.field_mapping.unwrapping_algorithm = unwrap_algorithms[ps.unwrapping_algorithm];
+        config.bg_removal.algorithm = bf_algorithms[ps.bf_algorithm];
     }
+    config.field_mapping.phase_offset_removal = ps.phase_offset_removal;
+    config.field_mapping.bipolar_correction = ps.bipolar_correction;
+    config.field_mapping.romeo.individual = ps.romeo_individual;
+    config.field_mapping.romeo.correct_global = ps.romeo_correct_global;
+    config.field_mapping.romeo.template = ps.romeo_template.trim().parse::<usize>().unwrap_or(1).saturating_sub(1);
+    config.field_mapping.b0_estimation = match ps.b0_estimation {
+        0 => B0Estimation::WeightedAvg,
+        _ => B0Estimation::LinearFit,
+    };
+    config.field_mapping.b0_weight_type = match ps.b0_weight_type {
+        0 => B0WeightType::PhaseSNR,
+        1 => B0WeightType::PhaseVar,
+        2 => B0WeightType::Average,
+        3 => B0WeightType::TEs,
+        _ => B0WeightType::Mag,
+    };
+    config.qsm.reference = match ps.qsm_reference {
+        0 => QsmReference::Mean,
+        _ => QsmReference::None,
+    };
+    config.masking.sections = ps.mask_sections.clone();
+    config
 }
 
 #[cfg(test)]

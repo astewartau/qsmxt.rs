@@ -25,7 +25,7 @@ jobs:
         uses: taiki-e/install-action@cargo-tarpaulin
 
       - name: Run coverage
-        run: cargo tarpaulin --out json --output-dir target/tarpaulin --exclude-files src/main.rs --exclude-files src/tui/mod.rs --exclude-files src/tui/ui.rs -- --test-threads=1
+        run: cargo tarpaulin --workspace --out json --output-dir target/tarpaulin --exclude-files src/main.rs --exclude-files src/tui/mod.rs --exclude-files src/tui/ui.rs -- --test-threads=1
 
       - name: Enforce 70% coverage
         run: |
@@ -72,7 +72,8 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
           sed -i.bak "s/^version = .*/version = \"${VERSION}\"/" Cargo.toml
-          rm -f Cargo.toml.bak
+          sed -i.bak "s/^version = .*/version = \"${VERSION}\"/" crates/qsmxt-config/Cargo.toml
+          rm -f Cargo.toml.bak crates/qsmxt-config/Cargo.toml.bak
 
       - name: Install cross-compilation tools (aarch64-linux)
         if: matrix.target == 'aarch64-unknown-linux-gnu'

@@ -33,6 +33,9 @@ pub enum QsmxtError {
     #[error("File I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("{0}")]
+    ConfigLib(#[from] qsmxt_config::ConfigError),
+
     #[error("SLURM submission error: {0}")]
     Slurm(String),
 

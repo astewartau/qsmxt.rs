@@ -185,7 +185,7 @@ impl PipelineState {
 
 /// Compute a hash of the pipeline config for change detection.
 fn config_hash(config: &PipelineConfig) -> String {
-    let toml = config.to_annotated_toml();
+    let toml = config.to_toml().unwrap_or_default();
     format!("{:x}", md5_simple(&toml))
 }
 
@@ -419,10 +419,8 @@ mod tests {
     #[test]
     fn test_config_change_preserves_state_with_per_step_invalidation() {
         let config1 = PipelineConfig::default();
-        let config2 = PipelineConfig {
-            qsm_algorithm: crate::pipeline::config::QsmAlgorithm::Tkd,
-            ..PipelineConfig::default()
-        };
+        let mut config2 = PipelineConfig::default();
+        config2.inversion.algorithm = crate::pipeline::config::QsmAlgorithm::Tkd;
 
         let key = AcquisitionKey {
             subject: "01".to_string(),
