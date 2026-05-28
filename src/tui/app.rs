@@ -882,10 +882,6 @@ const BF_HELP: &[&str] = &[
     "HARPERELLA integrated unwrap+BFR — https://doi.org/10.1002/nbm.3056",
     "Improved HARPERELLA (iHARPERELLA) — Li et al., Proc. ISMRM 2015, p.3313",
 ];
-const PHASE_COMBO_HELP: &[&str] = &[
-    "MCPC-3D-S: combine wrapped phase directly via phase offset estimation",
-    "Linear fit: unwrap each echo, then magnitude-weighted linear fit of field vs TE",
-];
 const QSM_REF_HELP: &[&str] = &[
     "Subtract mean susceptibility within mask (recommended)",
     "No referencing (raw susceptibility values)",

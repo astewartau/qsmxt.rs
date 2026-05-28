@@ -6,8 +6,6 @@ use super::app::App;
 
 pub fn build_command_string(app: &App) -> String {
     let form = &app.form;
-    let ps = &app.pipeline_state;
-    let defaults = super::app::PipelineFormState::default();
     let is_slurm = form.execution_mode == 1;
     let mut parts = vec![
         "qsmxt".to_string(),
@@ -41,200 +39,21 @@ pub fn build_command_string(app: &App) -> String {
         parts.push(format!("--num-echoes {}", app.filter_state.num_echoes));
     }
 
-    // Algorithm selects (only if changed from default)
-    use super::app::{QSM_ALGO_OPTIONS, UNWRAP_OPTIONS, BF_OPTIONS, QSM_REF_OPTIONS, B0_ESTIMATION_OPTIONS, B0_WEIGHT_TYPE_OPTIONS};
-    if ps.qsm_algorithm != defaults.qsm_algorithm {
-        parts.push(format!("--qsm-algorithm {}", QSM_ALGO_OPTIONS[ps.qsm_algorithm]));
-    }
-    if ps.unwrapping_algorithm != defaults.unwrapping_algorithm {
-        parts.push(format!("--unwrapping-algorithm {}", UNWRAP_OPTIONS[ps.unwrapping_algorithm]));
-    }
-    if ps.bf_algorithm != defaults.bf_algorithm {
-        parts.push(format!("--bf-algorithm {}", BF_OPTIONS[ps.bf_algorithm]));
-    }
-    if ps.qsm_reference != defaults.qsm_reference {
-        parts.push(format!("--qsm-reference {}", QSM_REF_OPTIONS[ps.qsm_reference]));
-    }
-
-    // Field mapping flags (only if changed from default)
-    if ps.phase_offset_removal != defaults.phase_offset_removal {
-        parts.push(format!("--phase-offset-removal {}", ps.phase_offset_removal));
-    }
-    if ps.bipolar_correction != defaults.bipolar_correction {
-        parts.push("--bipolar-correction".to_string());
-    }
-    push_if_changed(&mut parts, "--phase-offset-sigma", &ps.phase_offset_sigma, &defaults.phase_offset_sigma);
-    // ROMEO multi-echo flags (only when ROMEO is selected)
-    if ps.unwrapping_algorithm == 0 { // romeo
-        if ps.romeo_individual != defaults.romeo_individual && !ps.romeo_individual {
-            parts.push("--no-romeo-individual".to_string());
-        }
-        if !ps.romeo_individual && ps.romeo_template != defaults.romeo_template {
-            parts.push(format!("--romeo-template {}", ps.romeo_template.trim()));
-        }
-        if ps.romeo_correct_global != defaults.romeo_correct_global && !ps.romeo_correct_global {
-            parts.push("--no-romeo-correct-global".to_string());
-        }
-    }
-    // B0 estimation
-    if ps.b0_estimation != defaults.b0_estimation {
-        parts.push(format!("--b0-estimation {}", B0_ESTIMATION_OPTIONS[ps.b0_estimation]));
-    }
-    if ps.b0_estimation == 0 && ps.b0_weight_type != defaults.b0_weight_type {
-        parts.push(format!("--b0-weight-type {}", B0_WEIGHT_TYPE_OPTIONS[ps.b0_weight_type]));
-    }
-
-    // Parameters (only if changed from default)
-    push_if_changed(&mut parts, "--obliquity-threshold", &ps.obliquity_threshold, &defaults.obliquity_threshold);
-
-    // BET params
-    push_if_changed(&mut parts, "--bet-fractional-intensity", &ps.bet_fractional_intensity, &defaults.bet_fractional_intensity);
-    push_if_changed(&mut parts, "--bet-smoothness", &ps.bet_smoothness, &defaults.bet_smoothness);
-    push_if_changed(&mut parts, "--bet-gradient-threshold", &ps.bet_gradient_threshold, &defaults.bet_gradient_threshold);
-    push_if_changed(&mut parts, "--bet-iterations", &ps.bet_iterations, &defaults.bet_iterations);
-    push_if_changed(&mut parts, "--bet-subdivisions", &ps.bet_subdivisions, &defaults.bet_subdivisions);
-
-    // RTS params
-    push_if_changed(&mut parts, "--rts-delta", &ps.rts_delta, &defaults.rts_delta);
-    push_if_changed(&mut parts, "--rts-mu", &ps.rts_mu, &defaults.rts_mu);
-    push_if_changed(&mut parts, "--rts-tol", &ps.rts_tol, &defaults.rts_tol);
-    push_if_changed(&mut parts, "--rts-rho", &ps.rts_rho, &defaults.rts_rho);
-    push_if_changed(&mut parts, "--rts-max-iter", &ps.rts_max_iter, &defaults.rts_max_iter);
-    push_if_changed(&mut parts, "--rts-lsmr-iter", &ps.rts_lsmr_iter, &defaults.rts_lsmr_iter);
-
-    // TV params
-    push_if_changed(&mut parts, "--tv-lambda", &ps.tv_lambda, &defaults.tv_lambda);
-    push_if_changed(&mut parts, "--tv-rho", &ps.tv_rho, &defaults.tv_rho);
-    push_if_changed(&mut parts, "--tv-tol", &ps.tv_tol, &defaults.tv_tol);
-    push_if_changed(&mut parts, "--tv-max-iter", &ps.tv_max_iter, &defaults.tv_max_iter);
-
-    // TKD params
-    push_if_changed(&mut parts, "--tkd-threshold", &ps.tkd_threshold, &defaults.tkd_threshold);
-
-    // TSVD params
-    push_if_changed(&mut parts, "--tsvd-threshold", &ps.tsvd_threshold, &defaults.tsvd_threshold);
-
-    // iLSQR params
-    push_if_changed(&mut parts, "--ilsqr-tol", &ps.ilsqr_tol, &defaults.ilsqr_tol);
-    push_if_changed(&mut parts, "--ilsqr-max-iter", &ps.ilsqr_max_iter, &defaults.ilsqr_max_iter);
-
-    // Tikhonov
-    push_if_changed(&mut parts, "--tikhonov-lambda", &ps.tikhonov_lambda, &defaults.tikhonov_lambda);
-
-    // NLTV
-    push_if_changed(&mut parts, "--nltv-lambda", &ps.nltv_lambda, &defaults.nltv_lambda);
-    push_if_changed(&mut parts, "--nltv-mu", &ps.nltv_mu, &defaults.nltv_mu);
-    push_if_changed(&mut parts, "--nltv-tol", &ps.nltv_tol, &defaults.nltv_tol);
-    push_if_changed(&mut parts, "--nltv-max-iter", &ps.nltv_max_iter, &defaults.nltv_max_iter);
-    push_if_changed(&mut parts, "--nltv-newton-iter", &ps.nltv_newton_iter, &defaults.nltv_newton_iter);
-
-    // MEDI
-    push_if_changed(&mut parts, "--medi-lambda", &ps.medi_lambda, &defaults.medi_lambda);
-    push_if_changed(&mut parts, "--medi-max-iter", &ps.medi_max_iter, &defaults.medi_max_iter);
-    push_if_changed(&mut parts, "--medi-cg-max-iter", &ps.medi_cg_max_iter, &defaults.medi_cg_max_iter);
-    push_if_changed(&mut parts, "--medi-cg-tol", &ps.medi_cg_tol, &defaults.medi_cg_tol);
-    push_if_changed(&mut parts, "--medi-tol", &ps.medi_tol, &defaults.medi_tol);
-    push_if_changed(&mut parts, "--medi-percentage", &ps.medi_percentage, &defaults.medi_percentage);
-    push_if_changed(&mut parts, "--medi-smv-radius", &ps.medi_smv_radius, &defaults.medi_smv_radius);
-    if ps.medi_smv != defaults.medi_smv
-        && ps.medi_smv {
-            parts.push("--medi-smv".to_string());
-        }
-
-    // BG removal params
-    push_if_changed(&mut parts, "--vsharp-threshold", &ps.vsharp_threshold, &defaults.vsharp_threshold);
-    push_if_changed(&mut parts, "--pdf-tol", &ps.pdf_tol, &defaults.pdf_tol);
-    push_if_changed(&mut parts, "--lbv-tol", &ps.lbv_tol, &defaults.lbv_tol);
-    push_if_changed(&mut parts, "--ismv-tol", &ps.ismv_tol, &defaults.ismv_tol);
-    push_if_changed(&mut parts, "--ismv-max-iter", &ps.ismv_max_iter, &defaults.ismv_max_iter);
-    push_if_changed(&mut parts, "--sharp-threshold", &ps.sharp_threshold, &defaults.sharp_threshold);
-
-    // RESHARP params
-    push_if_changed(&mut parts, "--resharp-radius", &ps.resharp_radius, &defaults.resharp_radius);
-    push_if_changed(&mut parts, "--resharp-tik-reg", &ps.resharp_tik_reg, &defaults.resharp_tik_reg);
-    push_if_changed(&mut parts, "--resharp-tol", &ps.resharp_tol, &defaults.resharp_tol);
-    push_if_changed(&mut parts, "--resharp-max-iter", &ps.resharp_max_iter, &defaults.resharp_max_iter);
-
-    // HARPERELLA params
-    push_if_changed(&mut parts, "--harperella-radius", &ps.harperella_radius, &defaults.harperella_radius);
-    push_if_changed(&mut parts, "--harperella-max-iter", &ps.harperella_max_iter, &defaults.harperella_max_iter);
-    push_if_changed(&mut parts, "--harperella-tol", &ps.harperella_tol, &defaults.harperella_tol);
-
-    // iHARPERELLA params
-    push_if_changed(&mut parts, "--iharperella-radius", &ps.iharperella_radius, &defaults.iharperella_radius);
-    push_if_changed(&mut parts, "--iharperella-max-iter", &ps.iharperella_max_iter, &defaults.iharperella_max_iter);
-    push_if_changed(&mut parts, "--iharperella-tol", &ps.iharperella_tol, &defaults.iharperella_tol);
-
-    // TGV params
-    push_if_changed(&mut parts, "--tgv-iterations", &ps.tgv_iterations, &defaults.tgv_iterations);
-    push_if_changed(&mut parts, "--tgv-erosions", &ps.tgv_erosions, &defaults.tgv_erosions);
-    push_if_changed(&mut parts, "--tgv-alpha1", &ps.tgv_alpha1, &defaults.tgv_alpha1);
-    push_if_changed(&mut parts, "--tgv-alpha0", &ps.tgv_alpha0, &defaults.tgv_alpha0);
-
-    // QSMART params
-    push_if_changed(&mut parts, "--qsmart-ilsqr-tol", &ps.qsmart_ilsqr_tol, &defaults.qsmart_ilsqr_tol);
-    push_if_changed(&mut parts, "--qsmart-ilsqr-max-iter", &ps.qsmart_ilsqr_max_iter, &defaults.qsmart_ilsqr_max_iter);
-    push_if_changed(&mut parts, "--qsmart-vasc-sphere-radius", &ps.qsmart_vasc_sphere_radius, &defaults.qsmart_vasc_sphere_radius);
-    push_if_changed(&mut parts, "--qsmart-sdf-spatial-radius", &ps.qsmart_sdf_spatial_radius, &defaults.qsmart_sdf_spatial_radius);
-
-    // Mask: emit --mask-preset for known presets, --mask for custom
-    let default_sections = super::app::PipelineFormState::default().mask_sections;
-    if ps.mask_sections != default_sections {
-        // Check if it matches the BET preset
-        let bet_preset = vec![crate::pipeline::config::MaskSection {
-            input: crate::pipeline::config::MaskingInput::Magnitude,
-            generator: crate::pipeline::config::MaskOp::Bet { fractional_intensity: 0.5 },
-            refinements: vec![crate::pipeline::config::MaskOp::Erode { iterations: 2 }],
-        }];
-        if ps.mask_sections == bet_preset {
-            parts.push("--mask-preset bet".to_string());
-        } else {
-            for section in ps.mask_sections.iter() {
-                let mut section_parts = vec![format!("{}", section.input)];
-                for op in &section.all_ops() {
-                    section_parts.push(format!("{}", op));
-                }
-                parts.push(format!("--mask {}", section_parts.join(",")));
+    // Pipeline flags — delegate to qsmxt-config library
+    {
+        let config = config_from_app(app);
+        let lib_cmd = qsmxt_config::generate_command(&config);
+        // The library generates "qsmxt run <bids_dir> [flags]"
+        // Strip the prefix and append only the flags
+        let flags = lib_cmd.strip_prefix("qsmxt run <bids_dir>").unwrap_or(&lib_cmd).trim();
+        if !flags.is_empty() {
+            for flag in flags.split_whitespace() {
+                parts.push(flag.to_string());
             }
         }
     }
 
-    // Execution flags (only if non-default — defaults are all false/empty)
-    if !ps.do_qsm {
-        parts.push("--no-qsm".to_string());
-    }
-    if form.do_swi {
-        parts.push("--do-swi".to_string());
-        // SWI params (only if changed from default)
-        let swi_scaling_options = ["tanh", "negative-tanh", "positive", "negative", "triangular"];
-        let swi_scaling = swi_scaling_options.get(form.swi_scaling).unwrap_or(&"tanh");
-        if *swi_scaling != "tanh" {
-            parts.push(format!("--swi-scaling {}", swi_scaling));
-        }
-        let form_defaults = super::app::RunForm::default();
-        push_if_changed(&mut parts, "--swi-strength", &form.swi_strength, &form_defaults.swi_strength);
-        // HP sigma: emit if any component differs from default
-        if form.swi_hp_sigma_x != form_defaults.swi_hp_sigma_x
-            || form.swi_hp_sigma_y != form_defaults.swi_hp_sigma_y
-            || form.swi_hp_sigma_z != form_defaults.swi_hp_sigma_z {
-            parts.push(format!("--swi-hp-sigma {} {} {}",
-                form.swi_hp_sigma_x.trim(), form.swi_hp_sigma_y.trim(), form.swi_hp_sigma_z.trim()));
-        }
-        push_if_changed(&mut parts, "--swi-mip-window", &form.swi_mip_window, &form_defaults.swi_mip_window);
-    }
-    if form.do_t2starmap {
-        parts.push("--do-t2starmap".to_string());
-    }
-    if form.do_r2starmap {
-        parts.push("--do-r2starmap".to_string());
-    }
-    if ps.inhomogeneity_correction != defaults.inhomogeneity_correction {
-        if ps.inhomogeneity_correction {
-            parts.push("--inhomogeneity-correction".to_string());
-        } else {
-            parts.push("--no-inhomogeneity-correction".to_string());
-        }
-    }
+    // TUI-specific execution flags (not handled by the library)
     if is_slurm {
         // SLURM-specific flags
         if !form.slurm_account.trim().is_empty() {
@@ -615,6 +434,103 @@ pub fn config_from_app(app: &App) -> PipelineConfig {
         _ => QsmReference::None,
     };
     config.masking.sections = ps.mask_sections.clone();
+
+    // Obliquity
+    if let Ok(v) = ps.obliquity_threshold.trim().parse::<f64>() { config.pipeline.obliquity_threshold = v; }
+
+    // Parse algorithm parameters from TUI form strings
+    macro_rules! set_f64 { ($dst:expr, $src:expr) => { if let Ok(v) = $src.trim().parse::<f64>() { $dst = v; } } }
+    macro_rules! set_usize { ($dst:expr, $src:expr) => { if let Ok(v) = $src.trim().parse::<usize>() { $dst = v; } } }
+
+    // BET
+    set_f64!(config.bet.fractional_intensity, ps.bet_fractional_intensity);
+    set_f64!(config.bet.smoothness, ps.bet_smoothness);
+    set_f64!(config.bet.gradient_threshold, ps.bet_gradient_threshold);
+    set_usize!(config.bet.iterations, ps.bet_iterations);
+    set_usize!(config.bet.subdivisions, ps.bet_subdivisions);
+
+    // RTS
+    set_f64!(config.inversion.rts.delta, ps.rts_delta);
+    set_f64!(config.inversion.rts.mu, ps.rts_mu);
+    set_f64!(config.inversion.rts.tol, ps.rts_tol);
+    set_f64!(config.inversion.rts.rho, ps.rts_rho);
+    set_usize!(config.inversion.rts.max_iter, ps.rts_max_iter);
+    set_usize!(config.inversion.rts.lsmr_iter, ps.rts_lsmr_iter);
+
+    // TV
+    set_f64!(config.inversion.tv.lambda, ps.tv_lambda);
+    set_f64!(config.inversion.tv.rho, ps.tv_rho);
+    set_f64!(config.inversion.tv.tol, ps.tv_tol);
+    set_usize!(config.inversion.tv.max_iter, ps.tv_max_iter);
+
+    // TKD / TSVD
+    set_f64!(config.inversion.tkd.threshold, ps.tkd_threshold);
+    set_f64!(config.inversion.tsvd.threshold, ps.tsvd_threshold);
+
+    // iLSQR
+    set_f64!(config.inversion.ilsqr.tol, ps.ilsqr_tol);
+    set_usize!(config.inversion.ilsqr.max_iter, ps.ilsqr_max_iter);
+
+    // Tikhonov
+    set_f64!(config.inversion.tikhonov.lambda, ps.tikhonov_lambda);
+
+    // NLTV
+    set_f64!(config.inversion.nltv.lambda, ps.nltv_lambda);
+    set_f64!(config.inversion.nltv.mu, ps.nltv_mu);
+    set_f64!(config.inversion.nltv.tol, ps.nltv_tol);
+    set_usize!(config.inversion.nltv.max_iter, ps.nltv_max_iter);
+    set_usize!(config.inversion.nltv.newton_iter, ps.nltv_newton_iter);
+
+    // MEDI
+    set_f64!(config.inversion.medi.lambda, ps.medi_lambda);
+    set_usize!(config.inversion.medi.max_iter, ps.medi_max_iter);
+    set_usize!(config.inversion.medi.cg_max_iter, ps.medi_cg_max_iter);
+    set_f64!(config.inversion.medi.cg_tol, ps.medi_cg_tol);
+    set_f64!(config.inversion.medi.tol, ps.medi_tol);
+    set_f64!(config.inversion.medi.percentage, ps.medi_percentage);
+    set_f64!(config.inversion.medi.smv_radius, ps.medi_smv_radius);
+    config.inversion.medi.smv = ps.medi_smv;
+
+    // TGV
+    set_usize!(config.inversion.tgv.iterations, ps.tgv_iterations);
+    set_usize!(config.inversion.tgv.erosions, ps.tgv_erosions);
+    set_f64!(config.inversion.tgv.alpha1, ps.tgv_alpha1);
+    set_f64!(config.inversion.tgv.alpha0, ps.tgv_alpha0);
+
+    // QSMART
+    set_f64!(config.inversion.qsmart.ilsqr_tol, ps.qsmart_ilsqr_tol);
+    set_usize!(config.inversion.qsmart.ilsqr_max_iter, ps.qsmart_ilsqr_max_iter);
+
+    // BG removal
+    set_f64!(config.bg_removal.vsharp.threshold, ps.vsharp_threshold);
+    set_f64!(config.bg_removal.pdf.tol, ps.pdf_tol);
+    set_f64!(config.bg_removal.lbv.tol, ps.lbv_tol);
+    set_f64!(config.bg_removal.ismv.tol, ps.ismv_tol);
+    set_usize!(config.bg_removal.ismv.max_iter, ps.ismv_max_iter);
+    set_f64!(config.bg_removal.sharp.threshold, ps.sharp_threshold);
+    set_f64!(config.bg_removal.resharp.radius, ps.resharp_radius);
+    set_f64!(config.bg_removal.resharp.tik_reg, ps.resharp_tik_reg);
+    set_f64!(config.bg_removal.resharp.tol, ps.resharp_tol);
+    set_usize!(config.bg_removal.resharp.max_iter, ps.resharp_max_iter);
+    set_f64!(config.bg_removal.harperella.radius, ps.harperella_radius);
+    set_usize!(config.bg_removal.harperella.max_iter, ps.harperella_max_iter);
+    set_f64!(config.bg_removal.harperella.tol, ps.harperella_tol);
+    set_f64!(config.bg_removal.iharperella.radius, ps.iharperella_radius);
+    set_usize!(config.bg_removal.iharperella.max_iter, ps.iharperella_max_iter);
+    set_f64!(config.bg_removal.iharperella.tol, ps.iharperella_tol);
+
+    // Phase offset sigma
+    if let Ok(vals) = ps.phase_offset_sigma.split_whitespace()
+        .map(|s| s.parse::<f64>())
+        .collect::<Result<Vec<_>, _>>() {
+        if vals.len() == 3 { config.field_mapping.phase_offset_sigma = [vals[0], vals[1], vals[2]]; }
+    }
+
+    // ROMEO weight flags
+    config.field_mapping.romeo.phase_gradient_coherence = ps.romeo_phase_gradient_coherence;
+    config.field_mapping.romeo.mag_coherence = ps.romeo_mag_coherence;
+    config.field_mapping.romeo.mag_weight = ps.romeo_mag_weight;
+
     config
 }
 
