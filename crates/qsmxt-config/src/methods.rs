@@ -138,21 +138,37 @@ const CITE_BIAS: Citation = Citation {
 };
 
 const CITE_QSMXT: Citation = Citation {
-    key: "stewart2026",
+    key: "stewart2026qsmxt",
     text: "Stewart, A. (2026). QSMxT.rs. https://github.com/astewartau/qsmxt.rs",
 };
 
+const CITE_QSMBLY: Citation = Citation {
+    key: "stewart2026qsmbly",
+    text: "Stewart, A. (2026). QSMbly: Browser-based Quantitative Susceptibility Mapping. https://github.com/astewartau/qsmbly",
+};
+
 /// Generate a methods description and citation list from a pipeline configuration.
+/// Uses "qsmxt.rs" as the tool name by default.
 pub fn generate_methods(config: &PipelineConfig) -> String {
+    generate_methods_for(config, "qsmxt.rs")
+}
+
+/// Generate methods for a specific tool (e.g. "qsmxt.rs" or "QSMbly").
+pub fn generate_methods_for(config: &PipelineConfig, tool: &str) -> String {
     let mut sentences = Vec::new();
     let mut citations: Vec<&Citation> = Vec::new();
 
+    let (cite, author_year) = match tool {
+        "QSMbly" | "qsmbly" => (&CITE_QSMBLY, "Stewart, 2026"),
+        _ => (&CITE_QSMXT, "Stewart, 2026"),
+    };
+
     if config.pipeline.do_qsm {
-        sentences.push("QSM processing was performed using qsmxt.rs (Stewart, 2026).".to_string());
+        sentences.push(format!("QSM processing was performed using {} ({}).", tool, author_year));
     } else {
-        sentences.push("MRI processing was performed using qsmxt.rs (Stewart, 2026).".to_string());
+        sentences.push(format!("MRI processing was performed using {} ({}).", tool, author_year));
     }
-    add_citation(&mut citations, &CITE_QSMXT);
+    add_citation(&mut citations, cite);
 
     // Masking (inhomogeneity correction is described inline)
     describe_masking(config, &mut sentences, &mut citations);
