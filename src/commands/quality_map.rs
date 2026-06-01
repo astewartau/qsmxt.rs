@@ -23,9 +23,10 @@ pub fn execute(args: QualityMapArgs) -> crate::Result<()> {
 
     info!("Computing ROMEO quality map ({}x{}x{})", nx, ny, nz);
 
+    let grid = super::common::nifti_grid(&phase_nifti);
     let quality = qsm_core::unwrap::voxel_quality_romeo(
         &phase_nifti.data, &mag, phase2.as_deref(),
-        args.te1, args.te2, &all_ones, nx, ny, nz,
+        args.te1, args.te2, &all_ones, &grid,
     );
 
     save_nifti(&args.output, &quality, &phase_nifti)?;

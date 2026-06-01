@@ -10,21 +10,21 @@ pub fn execute(cmd: BgremoveCommand) -> crate::Result<()> {
             let (mask, _) = load_mask(&c.mask)?;
             let (nx, ny, nz) = field_nifti.dims;
             let (vsx, vsy, vsz) = field_nifti.voxel_size;
-            info!("Background removal (V-SHARP, {}x{}x{})", nx, ny, nz);
+            let grid = qsm_core::Grid::new(nx, ny, nz, vsx, vsy, vsz);
+            info!("Background removal (V-SHARP, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::bgremove::VsharpParams::default();
-            let max_radius = args.max_radius_factor.unwrap_or(d.max_radius_factor) * vsx.min(vsy).min(vsz);
-            let min_radius = args.min_radius_factor.unwrap_or(d.min_radius_factor) * vsx.max(vsy).max(vsz);
-            let step = vsx.max(vsy).max(vsz);
+            let max_radius = args.max_radius_factor.unwrap_or(d.max_radius_factor) * grid.vsx().min(grid.vsy()).min(grid.vsz());
+            let min_radius = args.min_radius_factor.unwrap_or(d.min_radius_factor) * grid.vsx().max(grid.vsy()).max(grid.vsz());
+            let step = grid.vsx().max(grid.vsy()).max(grid.vsz());
             let mut radii = Vec::new();
             let mut r = max_radius;
             while r >= min_radius { radii.push(r); r -= step; }
             if radii.is_empty() { radii.push(min_radius); }
             let threshold = args.threshold.unwrap_or(d.threshold);
 
-            let (lf, em) = qsm_core::bgremove::vsharp_with_progress(
-                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
-                &radii, threshold, |_, _| {},
+            let (lf, em) = qsm_core::bgremove::vsharp(
+                &field_nifti.data, &mask, &grid, &radii, threshold, |_, _| {},
             );
             (c, (lf, field_nifti), em)
         }
@@ -34,15 +34,15 @@ pub fn execute(cmd: BgremoveCommand) -> crate::Result<()> {
             let (mask, _) = load_mask(&c.mask)?;
             let (nx, ny, nz) = field_nifti.dims;
             let (vsx, vsy, vsz) = field_nifti.voxel_size;
+            let grid = qsm_core::Grid::new(nx, ny, nz, vsx, vsy, vsz);
             let bdir = (c.b0_direction[0], c.b0_direction[1], c.b0_direction[2]);
-            info!("Background removal (PDF, {}x{}x{})", nx, ny, nz);
+            info!("Background removal (PDF, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::bgremove::PdfParams::default();
-            let max_iter = ((nx * ny * nz) as f64).sqrt().ceil() as usize;
+            let max_iter = (grid.n_total() as f64).sqrt().ceil() as usize;
             let tol = args.tol.unwrap_or(d.tol);
-            let lf = qsm_core::bgremove::pdf_with_progress(
-                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
-                bdir, tol, max_iter, |_, _| {},
+            let lf = qsm_core::bgremove::pdf(
+                &field_nifti.data, &mask, &grid, bdir, tol, max_iter, |_, _| {},
             );
             (c, (lf, field_nifti), mask)
         }
@@ -52,14 +52,14 @@ pub fn execute(cmd: BgremoveCommand) -> crate::Result<()> {
             let (mask, _) = load_mask(&c.mask)?;
             let (nx, ny, nz) = field_nifti.dims;
             let (vsx, vsy, vsz) = field_nifti.voxel_size;
-            info!("Background removal (LBV, {}x{}x{})", nx, ny, nz);
+            let grid = qsm_core::Grid::new(nx, ny, nz, vsx, vsy, vsz);
+            info!("Background removal (LBV, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::bgremove::LbvParams::default();
-            let max_iter = ((nx * ny * nz) as f64).sqrt().ceil() as usize;
+            let max_iter = (grid.n_total() as f64).sqrt().ceil() as usize;
             let tol = args.tol.unwrap_or(d.tol);
-            let (lf, em) = qsm_core::bgremove::lbv_with_progress(
-                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
-                tol, max_iter, |_, _| {},
+            let (lf, em) = qsm_core::bgremove::lbv(
+                &field_nifti.data, &mask, &grid, tol, max_iter, |_, _| {},
             );
             (c, (lf, field_nifti), em)
         }
@@ -69,15 +69,15 @@ pub fn execute(cmd: BgremoveCommand) -> crate::Result<()> {
             let (mask, _) = load_mask(&c.mask)?;
             let (nx, ny, nz) = field_nifti.dims;
             let (vsx, vsy, vsz) = field_nifti.voxel_size;
-            info!("Background removal (iSMV, {}x{}x{})", nx, ny, nz);
+            let grid = qsm_core::Grid::new(nx, ny, nz, vsx, vsy, vsz);
+            info!("Background removal (iSMV, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::bgremove::IsmvParams::default();
-            let radius = args.radius_factor.unwrap_or(d.radius_factor) * vsx.max(vsy).max(vsz);
+            let radius = args.radius_factor.unwrap_or(d.radius_factor) * grid.vsx().max(grid.vsy()).max(grid.vsz());
             let tol = args.tol.unwrap_or(d.tol);
             let max_iter = args.max_iter.unwrap_or(d.max_iter);
-            let (lf, em) = qsm_core::bgremove::ismv_with_progress(
-                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
-                radius, tol, max_iter, |_, _| {},
+            let (lf, em) = qsm_core::bgremove::ismv(
+                &field_nifti.data, &mask, &grid, radius, tol, max_iter, |_, _| {},
             );
             (c, (lf, field_nifti), em)
         }
@@ -87,14 +87,14 @@ pub fn execute(cmd: BgremoveCommand) -> crate::Result<()> {
             let (mask, _) = load_mask(&c.mask)?;
             let (nx, ny, nz) = field_nifti.dims;
             let (vsx, vsy, vsz) = field_nifti.voxel_size;
-            info!("Background removal (SHARP, {}x{}x{})", nx, ny, nz);
+            let grid = qsm_core::Grid::new(nx, ny, nz, vsx, vsy, vsz);
+            info!("Background removal (SHARP, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::bgremove::SharpParams::default();
-            let radius = args.radius_factor.unwrap_or(d.radius_factor) * vsx.min(vsy).min(vsz);
+            let radius = args.radius_factor.unwrap_or(d.radius_factor) * grid.vsx().min(grid.vsy()).min(grid.vsz());
             let threshold = args.threshold.unwrap_or(d.threshold);
             let (lf, em) = qsm_core::bgremove::sharp(
-                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
-                radius, threshold,
+                &field_nifti.data, &mask, &grid, threshold, radius,
             );
             (c, (lf, field_nifti), em)
         }
@@ -104,16 +104,18 @@ pub fn execute(cmd: BgremoveCommand) -> crate::Result<()> {
             let (mask, _) = load_mask(&c.mask)?;
             let (nx, ny, nz) = field_nifti.dims;
             let (vsx, vsy, vsz) = field_nifti.voxel_size;
-            info!("Background removal (RESHARP, {}x{}x{})", nx, ny, nz);
+            let grid = qsm_core::Grid::new(nx, ny, nz, vsx, vsy, vsz);
+            info!("Background removal (RESHARP, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::bgremove::ResharpParams::default();
-            let radius = args.radius.unwrap_or(d.radius);
-            let tik_reg = args.tik_reg.unwrap_or(d.tik_reg);
-            let tol = args.tol.unwrap_or(d.tol);
-            let max_iter = args.max_iter.unwrap_or(d.max_iter);
-            let (lf, em) = qsm_core::bgremove::resharp_with_progress(
-                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
-                radius, tik_reg, tol, max_iter, |_, _| {},
+            let params = qsm_core::bgremove::ResharpParams {
+                radius: args.radius.unwrap_or(d.radius),
+                tik_reg: args.tik_reg.unwrap_or(d.tik_reg),
+                tol: args.tol.unwrap_or(d.tol),
+                max_iter: args.max_iter.unwrap_or(d.max_iter),
+            };
+            let (lf, em) = qsm_core::bgremove::resharp(
+                &field_nifti.data, &mask, &grid, &params, |_, _| {},
             );
             (c, (lf, field_nifti), em)
         }
@@ -122,23 +124,22 @@ pub fn execute(cmd: BgremoveCommand) -> crate::Result<()> {
             let (mask, _) = load_mask(&args.mask)?;
             let (nx, ny, nz) = phase_nifti.dims;
             let (vsx, vsy, vsz) = phase_nifti.voxel_size;
-            info!("Background removal (HARPERELLA, {}x{}x{})", nx, ny, nz);
+            let grid = qsm_core::Grid::new(nx, ny, nz, vsx, vsy, vsz);
+            info!("Background removal (HARPERELLA, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::pipeline::HarperellaParams::default();
-            let radius = args.radius.unwrap_or(d.radius);
-            let max_iter = args.max_iter.unwrap_or(d.max_iter);
-            let tol = args.tol.unwrap_or(d.tol);
-            let (lf, em) = qsm_core::pipeline::harperella_with_progress(
-                &phase_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
-                radius, max_iter, tol, |_, _| {},
+            let params = qsm_core::pipeline::HarperellaParams {
+                radius: args.radius.unwrap_or(d.radius),
+                max_iter: args.max_iter.unwrap_or(d.max_iter),
+                tol: args.tol.unwrap_or(d.tol),
+            };
+            let (lf, em) = qsm_core::pipeline::harperella(
+                &phase_nifti.data, &mask, &grid, &params, |_, _| {},
             );
 
             let common = BgremoveCommonArgs {
-                input: args.input,
-                mask: args.mask,
-                output: args.output,
-                b0_direction: vec![0.0, 0.0, 1.0],
-                output_mask: args.output_mask,
+                input: args.input, mask: args.mask, output: args.output,
+                b0_direction: vec![0.0, 0.0, 1.0], output_mask: args.output_mask,
             };
             (common, (lf, phase_nifti), em)
         }
@@ -147,23 +148,22 @@ pub fn execute(cmd: BgremoveCommand) -> crate::Result<()> {
             let (mask, _) = load_mask(&args.mask)?;
             let (nx, ny, nz) = phase_nifti.dims;
             let (vsx, vsy, vsz) = phase_nifti.voxel_size;
-            info!("Background removal (iHARPERELLA, {}x{}x{})", nx, ny, nz);
+            let grid = qsm_core::Grid::new(nx, ny, nz, vsx, vsy, vsz);
+            info!("Background removal (iHARPERELLA, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::pipeline::HarperellaParams::default();
-            let radius = args.radius.unwrap_or(d.radius);
-            let max_iter = args.max_iter.unwrap_or(d.max_iter);
-            let tol = args.tol.unwrap_or(d.tol);
-            let (lf, em) = qsm_core::pipeline::iharperella_with_progress(
-                &phase_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz,
-                radius, max_iter, tol, |_, _| {},
+            let params = qsm_core::pipeline::HarperellaParams {
+                radius: args.radius.unwrap_or(d.radius),
+                max_iter: args.max_iter.unwrap_or(d.max_iter),
+                tol: args.tol.unwrap_or(d.tol),
+            };
+            let (lf, em) = qsm_core::pipeline::iharperella(
+                &phase_nifti.data, &mask, &grid, &params, |_, _| {},
             );
 
             let common = BgremoveCommonArgs {
-                input: args.input,
-                mask: args.mask,
-                output: args.output,
-                b0_direction: vec![0.0, 0.0, 1.0],
-                output_mask: args.output_mask,
+                input: args.input, mask: args.mask, output: args.output,
+                b0_direction: vec![0.0, 0.0, 1.0], output_mask: args.output_mask,
             };
             (common, (lf, phase_nifti), em)
         }

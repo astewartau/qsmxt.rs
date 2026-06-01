@@ -8,20 +8,21 @@ pub fn execute(cmd: InvertCommand) -> crate::Result<()> {
             let c = args.common;
             let field_nifti = load_nifti(&c.input)?;
             let (mask, _) = load_mask(&c.mask)?;
-            let (nx, ny, nz) = field_nifti.dims;
-            let (vsx, vsy, vsz) = field_nifti.voxel_size;
+            let grid = super::common::nifti_grid(&field_nifti);
             let bdir = (c.b0_direction[0], c.b0_direction[1], c.b0_direction[2]);
-            info!("Dipole inversion (RTS, {}x{}x{})", nx, ny, nz);
+            info!("Dipole inversion (RTS, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::inversion::RtsParams::default();
+            let params = qsm_core::inversion::RtsParams {
+                delta: args.delta.unwrap_or(d.delta),
+                mu: args.mu.unwrap_or(d.mu),
+                rho: args.rho.unwrap_or(d.rho),
+                tol: args.tol.unwrap_or(d.tol),
+                max_iter: args.max_iter.unwrap_or(d.max_iter),
+                lsmr_iter: args.lsmr_iter.unwrap_or(d.lsmr_iter),
+            };
             let chi = qsm_core::inversion::rts(
-                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz, bdir,
-                args.delta.unwrap_or(d.delta),
-                args.mu.unwrap_or(d.mu),
-                args.rho.unwrap_or(d.rho),
-                args.tol.unwrap_or(d.tol),
-                args.max_iter.unwrap_or(d.max_iter),
-                args.lsmr_iter.unwrap_or(d.lsmr_iter),
+                &field_nifti.data, &mask, &grid, bdir, &params, |_, _| {},
             );
             (c, (chi, field_nifti))
         }
@@ -29,18 +30,19 @@ pub fn execute(cmd: InvertCommand) -> crate::Result<()> {
             let c = args.common;
             let field_nifti = load_nifti(&c.input)?;
             let (mask, _) = load_mask(&c.mask)?;
-            let (nx, ny, nz) = field_nifti.dims;
-            let (vsx, vsy, vsz) = field_nifti.voxel_size;
+            let grid = super::common::nifti_grid(&field_nifti);
             let bdir = (c.b0_direction[0], c.b0_direction[1], c.b0_direction[2]);
-            info!("Dipole inversion (TV, {}x{}x{})", nx, ny, nz);
+            info!("Dipole inversion (TV, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::inversion::TvParams::default();
+            let params = qsm_core::inversion::TvParams {
+                lambda: args.lambda.unwrap_or(d.lambda),
+                rho: args.rho.unwrap_or(d.rho),
+                tol: args.tol.unwrap_or(d.tol),
+                max_iter: args.max_iter.unwrap_or(d.max_iter),
+            };
             let chi = qsm_core::inversion::tv_admm(
-                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz, bdir,
-                args.lambda.unwrap_or(d.lambda),
-                args.rho.unwrap_or(d.rho),
-                args.tol.unwrap_or(d.tol),
-                args.max_iter.unwrap_or(d.max_iter),
+                &field_nifti.data, &mask, &grid, bdir, &params, |_, _| {},
             );
             (c, (chi, field_nifti))
         }
@@ -48,15 +50,13 @@ pub fn execute(cmd: InvertCommand) -> crate::Result<()> {
             let c = args.common;
             let field_nifti = load_nifti(&c.input)?;
             let (mask, _) = load_mask(&c.mask)?;
-            let (nx, ny, nz) = field_nifti.dims;
-            let (vsx, vsy, vsz) = field_nifti.voxel_size;
+            let grid = super::common::nifti_grid(&field_nifti);
             let bdir = (c.b0_direction[0], c.b0_direction[1], c.b0_direction[2]);
-            info!("Dipole inversion (TKD, {}x{}x{})", nx, ny, nz);
+            info!("Dipole inversion (TKD, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::inversion::TkdParams::default();
             let chi = qsm_core::inversion::tkd(
-                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz, bdir,
-                args.threshold.unwrap_or(d.threshold),
+                &field_nifti.data, &mask, &grid, bdir, args.threshold.unwrap_or(d.threshold),
             );
             (c, (chi, field_nifti))
         }
@@ -64,15 +64,13 @@ pub fn execute(cmd: InvertCommand) -> crate::Result<()> {
             let c = args.common;
             let field_nifti = load_nifti(&c.input)?;
             let (mask, _) = load_mask(&c.mask)?;
-            let (nx, ny, nz) = field_nifti.dims;
-            let (vsx, vsy, vsz) = field_nifti.voxel_size;
+            let grid = super::common::nifti_grid(&field_nifti);
             let bdir = (c.b0_direction[0], c.b0_direction[1], c.b0_direction[2]);
-            info!("Dipole inversion (TSVD, {}x{}x{})", nx, ny, nz);
+            info!("Dipole inversion (TSVD, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::inversion::TkdParams::default();
             let chi = qsm_core::inversion::tsvd(
-                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz, bdir,
-                args.threshold.unwrap_or(d.threshold),
+                &field_nifti.data, &mask, &grid, bdir, args.threshold.unwrap_or(d.threshold),
             );
             (c, (chi, field_nifti))
         }
@@ -80,16 +78,17 @@ pub fn execute(cmd: InvertCommand) -> crate::Result<()> {
             let c = args.common;
             let field_nifti = load_nifti(&c.input)?;
             let (mask, _) = load_mask(&c.mask)?;
-            let (nx, ny, nz) = field_nifti.dims;
-            let (vsx, vsy, vsz) = field_nifti.voxel_size;
+            let grid = super::common::nifti_grid(&field_nifti);
             let bdir = (c.b0_direction[0], c.b0_direction[1], c.b0_direction[2]);
-            info!("Dipole inversion (iLSQR, {}x{}x{})", nx, ny, nz);
+            info!("Dipole inversion (iLSQR, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::inversion::IlsqrParams::default();
+            let params = qsm_core::inversion::IlsqrParams {
+                tol: args.tol.unwrap_or(d.tol),
+                max_iter: args.max_iter.unwrap_or(d.max_iter),
+            };
             let chi = qsm_core::inversion::ilsqr_simple(
-                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz, bdir,
-                args.tol.unwrap_or(d.tol),
-                args.max_iter.unwrap_or(d.max_iter),
+                &field_nifti.data, &mask, &grid, bdir, &params,
             );
             (c, (chi, field_nifti))
         }
@@ -97,15 +96,17 @@ pub fn execute(cmd: InvertCommand) -> crate::Result<()> {
             let c = args.common;
             let field_nifti = load_nifti(&c.input)?;
             let (mask, _) = load_mask(&c.mask)?;
-            let (nx, ny, nz) = field_nifti.dims;
-            let (vsx, vsy, vsz) = field_nifti.voxel_size;
+            let grid = super::common::nifti_grid(&field_nifti);
             let bdir = (c.b0_direction[0], c.b0_direction[1], c.b0_direction[2]);
-            info!("Dipole inversion (Tikhonov, {}x{}x{})", nx, ny, nz);
+            info!("Dipole inversion (Tikhonov, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::inversion::TikhonovParams::default();
+            let params = qsm_core::inversion::TikhonovParams {
+                lambda: args.lambda.unwrap_or(d.lambda),
+                ..d
+            };
             let chi = qsm_core::inversion::tikhonov(
-                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz, bdir,
-                args.lambda.unwrap_or(d.lambda), d.reg,
+                &field_nifti.data, &mask, &grid, bdir, &params,
             );
             (c, (chi, field_nifti))
         }
@@ -113,19 +114,20 @@ pub fn execute(cmd: InvertCommand) -> crate::Result<()> {
             let c = args.common;
             let field_nifti = load_nifti(&c.input)?;
             let (mask, _) = load_mask(&c.mask)?;
-            let (nx, ny, nz) = field_nifti.dims;
-            let (vsx, vsy, vsz) = field_nifti.voxel_size;
+            let grid = super::common::nifti_grid(&field_nifti);
             let bdir = (c.b0_direction[0], c.b0_direction[1], c.b0_direction[2]);
-            info!("Dipole inversion (NLTV, {}x{}x{})", nx, ny, nz);
+            info!("Dipole inversion (NLTV, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::inversion::NltvParams::default();
+            let params = qsm_core::inversion::NltvParams {
+                lambda: args.lambda.unwrap_or(d.lambda),
+                mu: args.mu.unwrap_or(d.mu),
+                tol: args.tol.unwrap_or(d.tol),
+                max_iter: args.max_iter.unwrap_or(d.max_iter),
+                newton_iter: args.newton_iter.unwrap_or(d.newton_iter),
+            };
             let chi = qsm_core::inversion::nltv(
-                &field_nifti.data, &mask, nx, ny, nz, vsx, vsy, vsz, bdir,
-                args.lambda.unwrap_or(d.lambda),
-                args.mu.unwrap_or(d.mu),
-                args.tol.unwrap_or(d.tol),
-                args.max_iter.unwrap_or(d.max_iter),
-                args.newton_iter.unwrap_or(d.newton_iter),
+                &field_nifti.data, &mask, &grid, bdir, &params, |_, _| {},
             );
             (c, (chi, field_nifti))
         }
@@ -133,10 +135,9 @@ pub fn execute(cmd: InvertCommand) -> crate::Result<()> {
             let c = args.common;
             let field_nifti = load_nifti(&c.input)?;
             let (mask, _) = load_mask(&c.mask)?;
-            let (nx, ny, nz) = field_nifti.dims;
-            let (vsx, vsy, vsz) = field_nifti.voxel_size;
+            let grid = super::common::nifti_grid(&field_nifti);
             let bdir = (c.b0_direction[0], c.b0_direction[1], c.b0_direction[2]);
-            info!("Dipole inversion (MEDI, {}x{}x{})", nx, ny, nz);
+            info!("Dipole inversion (MEDI, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::inversion::MediParams::default();
             let n_voxels = field_nifti.data.len();
@@ -147,19 +148,20 @@ pub fn execute(cmd: InvertCommand) -> crate::Result<()> {
                 warn!("No --magnitude provided for MEDI; using uniform magnitude (results may be suboptimal)");
                 (vec![1.0f64; n_voxels], vec![1.0f64; n_voxels])
             };
+            let params = qsm_core::inversion::MediParams {
+                lambda: args.lambda.unwrap_or(d.lambda),
+                merit: args.merit.unwrap_or(d.merit),
+                smv: args.smv || d.smv,
+                smv_radius: args.smv_radius.unwrap_or(d.smv_radius),
+                data_weighting: args.data_weighting.unwrap_or(d.data_weighting),
+                percentage: args.percentage.unwrap_or(d.percentage),
+                cg_tol: args.cg_tol.unwrap_or(d.cg_tol),
+                cg_max_iter: args.cg_max_iter.unwrap_or(d.cg_max_iter),
+                max_iter: args.max_iter.unwrap_or(d.max_iter),
+                tol: args.tol.unwrap_or(d.tol),
+            };
             let chi = qsm_core::inversion::medi_l1(
-                &field_nifti.data, &n_std, &magnitude, &mask,
-                nx, ny, nz, vsx, vsy, vsz,
-                args.lambda.unwrap_or(d.lambda), bdir,
-                args.merit.unwrap_or(d.merit),
-                args.smv || d.smv,
-                args.smv_radius.unwrap_or(d.smv_radius),
-                args.data_weighting.unwrap_or(d.data_weighting),
-                args.percentage.unwrap_or(d.percentage),
-                args.cg_tol.unwrap_or(d.cg_tol),
-                args.cg_max_iter.unwrap_or(d.cg_max_iter),
-                args.max_iter.unwrap_or(d.max_iter),
-                args.tol.unwrap_or(d.tol),
+                &field_nifti.data, &n_std, &magnitude, &mask, &grid, bdir, &params, |_, _| {},
             );
             (c, (chi, field_nifti))
         }
@@ -167,10 +169,9 @@ pub fn execute(cmd: InvertCommand) -> crate::Result<()> {
             let c = args.common;
             let field_nifti = load_nifti(&c.input)?;
             let (mask, _) = load_mask(&c.mask)?;
-            let (nx, ny, nz) = field_nifti.dims;
-            let (vsx, vsy, vsz) = field_nifti.voxel_size;
+            let grid = super::common::nifti_grid(&field_nifti);
             let bdir = (c.b0_direction[0], c.b0_direction[1], c.b0_direction[2]);
-            info!("Dipole inversion (TGV, {}x{}x{})", nx, ny, nz);
+            info!("Dipole inversion (TGV, {}x{}x{})", grid.nx(), grid.ny(), grid.nz());
 
             let d = qsm_core::inversion::TgvParams::default();
             let phase_f32: Vec<f32> = field_nifti.data.iter().map(|&v| v as f32).collect();
@@ -186,8 +187,7 @@ pub fn execute(cmd: InvertCommand) -> crate::Result<()> {
             };
             let b0_f32 = (bdir.0 as f32, bdir.1 as f32, bdir.2 as f32);
             let chi_f32 = qsm_core::inversion::tgv_qsm(
-                &phase_f32, &mask, nx, ny, nz,
-                vsx as f32, vsy as f32, vsz as f32, &params, b0_f32,
+                &phase_f32, &mask, &grid, &params, b0_f32, |_, _| {},
             );
             let chi: Vec<f64> = chi_f32.iter().map(|&v| v as f64).collect();
             (c, (chi, field_nifti))

@@ -4,16 +4,15 @@ use crate::cli::HomogeneityArgs;
 
 pub fn execute(args: HomogeneityArgs) -> crate::Result<()> {
     let nifti = load_nifti(&args.input)?;
-    let (nx, ny, nz) = nifti.dims;
-    let (vsx, vsy, vsz) = nifti.voxel_size;
+    let grid = super::common::nifti_grid(&nifti);
 
     info!(
         "Applying inhomogeneity correction to {} ({}x{}x{}, sigma={:.1}mm)",
-        args.input.display(), nx, ny, nz, args.sigma
+        args.input.display(), grid.nx(), grid.ny(), grid.nz(), args.sigma
     );
 
     let corrected = qsm_core::utils::makehomogeneous(
-        &nifti.data, nx, ny, nz, vsx, vsy, vsz, args.sigma, args.nbox,
+        &nifti.data, &grid, args.sigma, args.nbox,
     );
 
     save_nifti(&args.output, &corrected, &nifti)?;

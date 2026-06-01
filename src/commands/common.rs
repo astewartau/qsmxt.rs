@@ -4,6 +4,13 @@ use std::path::Path;
 use qsm_core::nifti_io::{self, NiftiData};
 use crate::error::QsmxtError;
 
+/// Create a Grid from NIfTI metadata.
+pub fn nifti_grid(nifti: &NiftiData) -> qsm_core::Grid {
+    let (nx, ny, nz) = nifti.dims;
+    let (vsx, vsy, vsz) = nifti.voxel_size;
+    qsm_core::Grid::new(nx, ny, nz, vsx, vsy, vsz)
+}
+
 /// Load a NIfTI file with error mapping.
 pub fn load_nifti(path: &Path) -> crate::Result<NiftiData> {
     nifti_io::read_nifti_file(path)
@@ -34,12 +41,12 @@ pub fn run_mask_operation(
     input: &Path,
     output: &Path,
     op_name: &str,
-    op: impl FnOnce(&[u8], usize, usize, usize) -> Vec<u8>,
+    op: impl FnOnce(&[u8], &qsm_core::Grid) -> Vec<u8>,
 ) -> crate::Result<()> {
     let (mask, nifti) = load_mask(input)?;
-    let (nx, ny, nz) = nifti.dims;
-    log::info!("{} ({}x{}x{})", op_name, nx, ny, nz);
-    let result = op(&mask, nx, ny, nz);
+    let grid = nifti_grid(&nifti);
+    log::info!("{} ({}x{}x{})", op_name, grid.nx(), grid.ny(), grid.nz());
+    let result = op(&mask, &grid);
     save_mask(output, &result, &nifti)?;
     log::info!("{} saved to {}", op_name, output.display());
     Ok(())
@@ -76,8 +83,9 @@ pub fn compute_r2star(
         }
     }
 
+    let grid = nifti_grid(&magnitudes[0]);
     let (r2star_map, _s0_map) = qsm_core::utils::r2star_arlo(
-        &interleaved, &mask, echo_times, nx, ny, nz,
+        &interleaved, &mask, echo_times, &grid,
     );
 
     let reference = magnitudes.swap_remove(0);
