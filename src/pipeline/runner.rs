@@ -770,7 +770,7 @@ fn stage_qsmart(
     progress("QSMART: SDF stage 1");
     let sdf_params1 = qsm_core::bgremove::SdfParams {
         sigma1: qsmart_defaults.sdf_sigma1_stage1, sigma2: qsmart_defaults.sdf_sigma2_stage1,
-        spatial_radius: ctx.config.inversion.qsmart.sdf_spatial_radius as i32,
+        spatial_radius: ctx.config.inversion.qsmart.sdf_spatial_radius,
         lower_lim: qsmart_defaults.sdf_lower_lim, curv_constant: qsmart_defaults.sdf_curv_constant, use_curvature: true,
     };
     let lfs1 = qsm_core::bgremove::sdf::sdf(
@@ -792,7 +792,7 @@ fn stage_qsmart(
     progress("QSMART: SDF stage 2");
     let sdf_params2 = qsm_core::bgremove::SdfParams {
         sigma1: qsmart_defaults.sdf_sigma1_stage2, sigma2: qsmart_defaults.sdf_sigma2_stage2,
-        spatial_radius: ctx.config.inversion.qsmart.sdf_spatial_radius as i32,
+        spatial_radius: ctx.config.inversion.qsmart.sdf_spatial_radius,
         lower_lim: qsmart_defaults.sdf_lower_lim, curv_constant: qsmart_defaults.sdf_curv_constant, use_curvature: true,
     };
     let lfs2 = qsm_core::bgremove::sdf::sdf(
