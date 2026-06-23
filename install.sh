@@ -66,5 +66,16 @@ fi
 
 chmod +x "${INSTALL_DIR}/qsmxt"
 echo "Installed qsmxt ${TAG} to ${INSTALL_DIR}/qsmxt"
+
+# Install bundled dcm2niix (present for x86_64-linux/macOS; ARM builds rely on PATH)
+if [ -f "${TMPDIR}/dcm2niix" ]; then
+    QSMXT_BIN="${HOME}/.qsmxt/bin"
+    mkdir -p "$QSMXT_BIN"
+    mv "${TMPDIR}/dcm2niix" "${QSMXT_BIN}/dcm2niix"
+    chmod +x "${QSMXT_BIN}/dcm2niix"
+    [ -f "${TMPDIR}/dcm2niix.LICENSE" ] && mv "${TMPDIR}/dcm2niix.LICENSE" "${QSMXT_BIN}/dcm2niix.LICENSE"
+    echo "Installed bundled dcm2niix to ${QSMXT_BIN}/dcm2niix"
+fi
+
 echo ""
 echo "Run 'qsmxt --version' to verify, or 'qsmxt tui' to get started."

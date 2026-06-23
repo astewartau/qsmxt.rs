@@ -215,6 +215,26 @@ pub fn build_run_args(app: &App) -> crate::Result<RunArgs> {
             qsmart_ilsqr_max_iter: parse_optional_usize(&ps.qsmart_ilsqr_max_iter),
             qsmart_vasc_sphere_radius: ps.qsmart_vasc_sphere_radius.trim().parse::<i32>().ok(),
             qsmart_sdf_spatial_radius: ps.qsmart_sdf_spatial_radius.trim().parse::<i32>().ok(),
+            qsmart_inversion: if ps.qsm_algorithm == 9 {
+                [
+                    crate::cli::QsmAlgorithmArg::Ilsqr, crate::cli::QsmAlgorithmArg::Rts,
+                    crate::cli::QsmAlgorithmArg::Tv, crate::cli::QsmAlgorithmArg::Tkd,
+                    crate::cli::QsmAlgorithmArg::Tsvd, crate::cli::QsmAlgorithmArg::Tikhonov,
+                    crate::cli::QsmAlgorithmArg::Nltv, crate::cli::QsmAlgorithmArg::Medi,
+                ].get(ps.qsmart_inversion).copied()
+            } else {
+                None
+            },
+            qsmart_sdf_sigma1_stage1: parse_optional_f64(&ps.qsmart_sdf_sigma1_stage1),
+            qsmart_sdf_sigma2_stage1: parse_optional_f64(&ps.qsmart_sdf_sigma2_stage1),
+            qsmart_sdf_sigma1_stage2: parse_optional_f64(&ps.qsmart_sdf_sigma1_stage2),
+            qsmart_sdf_sigma2_stage2: parse_optional_f64(&ps.qsmart_sdf_sigma2_stage2),
+            qsmart_sdf_lower_lim: parse_optional_f64(&ps.qsmart_sdf_lower_lim),
+            qsmart_sdf_curv_constant: parse_optional_f64(&ps.qsmart_sdf_curv_constant),
+            qsmart_frangi_scale_min: parse_optional_f64(&ps.qsmart_frangi_scale_min),
+            qsmart_frangi_scale_max: parse_optional_f64(&ps.qsmart_frangi_scale_max),
+            qsmart_frangi_scale_ratio: parse_optional_f64(&ps.qsmart_frangi_scale_ratio),
+            qsmart_frangi_c: parse_optional_f64(&ps.qsmart_frangi_c),
         },
         vsharp_params: crate::cli::VsharpParamArgs {
             vsharp_threshold: parse_optional_f64(&ps.vsharp_threshold),
@@ -500,6 +520,22 @@ pub fn config_from_app(app: &App) -> PipelineConfig {
     // QSMART
     set_f64!(config.inversion.qsmart.ilsqr_tol, ps.qsmart_ilsqr_tol);
     set_usize!(config.inversion.qsmart.ilsqr_max_iter, ps.qsmart_ilsqr_max_iter);
+    let qsmart_inv_algorithms = [
+        QsmAlgorithm::Ilsqr, QsmAlgorithm::Rts, QsmAlgorithm::Tv, QsmAlgorithm::Tkd,
+        QsmAlgorithm::Tsvd, QsmAlgorithm::Tikhonov, QsmAlgorithm::Nltv, QsmAlgorithm::Medi,
+    ];
+    config.inversion.qsmart.inversion =
+        qsmart_inv_algorithms.get(ps.qsmart_inversion).copied().unwrap_or(QsmAlgorithm::Ilsqr);
+    set_f64!(config.inversion.qsmart.sdf_sigma1_stage1, ps.qsmart_sdf_sigma1_stage1);
+    set_f64!(config.inversion.qsmart.sdf_sigma2_stage1, ps.qsmart_sdf_sigma2_stage1);
+    set_f64!(config.inversion.qsmart.sdf_sigma1_stage2, ps.qsmart_sdf_sigma1_stage2);
+    set_f64!(config.inversion.qsmart.sdf_sigma2_stage2, ps.qsmart_sdf_sigma2_stage2);
+    set_f64!(config.inversion.qsmart.sdf_lower_lim, ps.qsmart_sdf_lower_lim);
+    set_f64!(config.inversion.qsmart.sdf_curv_constant, ps.qsmart_sdf_curv_constant);
+    set_f64!(config.inversion.qsmart.frangi_scale_min, ps.qsmart_frangi_scale_min);
+    set_f64!(config.inversion.qsmart.frangi_scale_max, ps.qsmart_frangi_scale_max);
+    set_f64!(config.inversion.qsmart.frangi_scale_ratio, ps.qsmart_frangi_scale_ratio);
+    set_f64!(config.inversion.qsmart.frangi_c, ps.qsmart_frangi_c);
 
     // BG removal
     set_f64!(config.bg_removal.vsharp.threshold, ps.vsharp_threshold);

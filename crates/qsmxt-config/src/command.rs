@@ -148,10 +148,23 @@ pub fn generate_command(config: &PipelineConfig) -> String {
             emit_f64(&mut parts, "--tgv-tol", config.inversion.tgv.tol, d.inversion.tgv.tol);
         }
         QsmAlgorithm::Qsmart => {
-            emit_f64(&mut parts, "--qsmart-ilsqr-tol", config.inversion.qsmart.ilsqr_tol, d.inversion.qsmart.ilsqr_tol);
-            emit_usize(&mut parts, "--qsmart-ilsqr-max-iter", config.inversion.qsmart.ilsqr_max_iter, d.inversion.qsmart.ilsqr_max_iter);
-            emit_i32(&mut parts, "--qsmart-vasc-sphere-radius", config.inversion.qsmart.vasc_sphere_radius, d.inversion.qsmart.vasc_sphere_radius);
-            emit_i32(&mut parts, "--qsmart-sdf-spatial-radius", config.inversion.qsmart.sdf_spatial_radius, d.inversion.qsmart.sdf_spatial_radius);
+            let q = &config.inversion.qsmart;
+            let dq = &d.inversion.qsmart;
+            emit_enum(&mut parts, "--qsmart-inversion", &q.inversion, &dq.inversion);
+            emit_f64(&mut parts, "--qsmart-ilsqr-tol", q.ilsqr_tol, dq.ilsqr_tol);
+            emit_usize(&mut parts, "--qsmart-ilsqr-max-iter", q.ilsqr_max_iter, dq.ilsqr_max_iter);
+            emit_i32(&mut parts, "--qsmart-vasc-sphere-radius", q.vasc_sphere_radius, dq.vasc_sphere_radius);
+            emit_i32(&mut parts, "--qsmart-sdf-spatial-radius", q.sdf_spatial_radius, dq.sdf_spatial_radius);
+            emit_f64(&mut parts, "--qsmart-sdf-sigma1-stage1", q.sdf_sigma1_stage1, dq.sdf_sigma1_stage1);
+            emit_f64(&mut parts, "--qsmart-sdf-sigma2-stage1", q.sdf_sigma2_stage1, dq.sdf_sigma2_stage1);
+            emit_f64(&mut parts, "--qsmart-sdf-sigma1-stage2", q.sdf_sigma1_stage2, dq.sdf_sigma1_stage2);
+            emit_f64(&mut parts, "--qsmart-sdf-sigma2-stage2", q.sdf_sigma2_stage2, dq.sdf_sigma2_stage2);
+            emit_f64(&mut parts, "--qsmart-sdf-lower-lim", q.sdf_lower_lim, dq.sdf_lower_lim);
+            emit_f64(&mut parts, "--qsmart-sdf-curv-constant", q.sdf_curv_constant, dq.sdf_curv_constant);
+            emit_f64(&mut parts, "--qsmart-frangi-scale-min", q.frangi_scale_min, dq.frangi_scale_min);
+            emit_f64(&mut parts, "--qsmart-frangi-scale-max", q.frangi_scale_max, dq.frangi_scale_max);
+            emit_f64(&mut parts, "--qsmart-frangi-scale-ratio", q.frangi_scale_ratio, dq.frangi_scale_ratio);
+            emit_f64(&mut parts, "--qsmart-frangi-c", q.frangi_c, dq.frangi_c);
         }
     }
 
@@ -331,6 +344,75 @@ mod tests {
         c.inversion.qsmart.vasc_sphere_radius = 10;
         let cmd = generate_command(&c);
         assert!(cmd.contains("--qsmart-vasc-sphere-radius 10"));
+    }
+
+    #[test]
+    fn test_qsmart_all_params_emitted() {
+        let mut c = PipelineConfig::default();
+        c.inversion.algorithm = QsmAlgorithm::Qsmart;
+        c.inversion.qsmart.inversion = QsmAlgorithm::Tv;
+        c.inversion.qsmart.sdf_sigma1_stage1 = 11.0;
+        c.inversion.qsmart.sdf_sigma2_stage1 = 12.0;
+        c.inversion.qsmart.sdf_sigma1_stage2 = 13.0;
+        c.inversion.qsmart.sdf_sigma2_stage2 = 14.0;
+        c.inversion.qsmart.sdf_lower_lim = 0.5;
+        c.inversion.qsmart.sdf_curv_constant = 600.0;
+        c.inversion.qsmart.frangi_scale_min = 1.5;
+        c.inversion.qsmart.frangi_scale_max = 7.0;
+        c.inversion.qsmart.frangi_scale_ratio = 1.0;
+        c.inversion.qsmart.frangi_c = 400.0;
+        let cmd = generate_command(&c);
+        for flag in [
+            "--qsmart-inversion tv",
+            "--qsmart-sdf-sigma1-stage1 11",
+            "--qsmart-sdf-sigma2-stage1 12",
+            "--qsmart-sdf-sigma1-stage2 13",
+            "--qsmart-sdf-sigma2-stage2 14",
+            "--qsmart-sdf-lower-lim 0.5",
+            "--qsmart-sdf-curv-constant 600",
+            "--qsmart-frangi-scale-min 1.5",
+            "--qsmart-frangi-scale-max 7",
+            "--qsmart-frangi-scale-ratio 1",
+            "--qsmart-frangi-c 400",
+        ] {
+            assert!(cmd.contains(flag), "missing `{}` in: {}", flag, cmd);
+        }
+    }
+
+    /// Mirrors the WASM command path: the TOML that qsmbly's ConfigBridge emits must
+    /// parse (matching serde key names) and produce the QSMART flags.
+    #[test]
+    fn test_qsmart_toml_from_configbridge_generates_flags() {
+        let toml = r#"
+[inversion]
+algorithm = "qsmart"
+
+[inversion.qsmart]
+inversion = "rts"
+ilsqr_tol = 0.01
+ilsqr_max_iter = 50
+vasc_sphere_radius = 8
+sdf_spatial_radius = 8
+sdf_sigma1_stage1 = 11.0
+sdf_sigma2_stage1 = 12.0
+sdf_sigma1_stage2 = 13.0
+sdf_sigma2_stage2 = 14.0
+sdf_lower_lim = 0.45
+sdf_curv_constant = 600.0
+frangi_scale_min = 1.5
+frangi_scale_max = 7.0
+frangi_scale_ratio = 1.0
+frangi_c = 400.0
+"#;
+        let config = PipelineConfig::from_toml(toml).expect("ConfigBridge TOML must parse");
+        let cmd = generate_command(&config);
+        for flag in [
+            "--qsm-algorithm qsmart", "--qsmart-inversion rts",
+            "--qsmart-sdf-sigma1-stage1 11", "--qsmart-sdf-lower-lim 0.45",
+            "--qsmart-frangi-scale-min 1.5", "--qsmart-frangi-c 400",
+        ] {
+            assert!(cmd.contains(flag), "missing `{}` in: {}", flag, cmd);
+        }
     }
 
     #[test]

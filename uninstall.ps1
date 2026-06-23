@@ -14,6 +14,15 @@ if (-not (Test-Path $binary)) {
 Remove-Item -Force $binary
 Write-Host "Removed $binary"
 
+# Remove bundled dcm2niix if present
+$dcm = Join-Path $installDir "dcm2niix.exe"
+if (Test-Path $dcm) {
+    Remove-Item -Force $dcm
+    $dcmLicense = Join-Path $installDir "dcm2niix.LICENSE"
+    if (Test-Path $dcmLicense) { Remove-Item -Force $dcmLicense }
+    Write-Host "Removed bundled dcm2niix from $installDir"
+}
+
 # Remove install dir if empty
 if ((Get-ChildItem $installDir -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0) {
     Remove-Item -Recurse -Force "$env:USERPROFILE\.qsmxt"

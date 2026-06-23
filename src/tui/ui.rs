@@ -972,6 +972,31 @@ fn draw_dicom_series_section(
         }
     }
 
+    // dcm2niix availability indicator (uses the cached resolution)
+    lines.push(Line::from(""));
+    match ds.dcm2niix_path() {
+        Some(path) => {
+            let is_bundled = crate::dicom::convert::qsmxt_bin_dir()
+                .map(|dir| path.starts_with(&dir))
+                .unwrap_or(false);
+            let (label, color) = if is_bundled {
+                (
+                    format!("  dcm2niix: bundled {}", crate::dicom::convert::DCM2NIIX_BUNDLED_VERSION),
+                    Color::Green,
+                )
+            } else {
+                (format!("  dcm2niix: {}", path.display()), Color::Green)
+            };
+            lines.push(Line::from(Span::styled(label, Style::default().fg(color))));
+        }
+        None => {
+            lines.push(Line::from(Span::styled(
+                "  dcm2niix not found — DICOM conversion unavailable (reinstall qsmxt or install dcm2niix)",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )));
+        }
+    }
+
     // Convert button
     lines.push(Line::from(""));
     let convert_focused = !in_io && ds.focus == super::app::DicomFocus::ConvertButton;
@@ -1114,6 +1139,10 @@ fn draw_pipeline_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
                 ])
             }
             PipelineRow::Separator => Line::from(""),
+            PipelineRow::Note { text } => Line::from(Span::styled(
+                format!("  {}", text),
+                Style::default().fg(Color::Yellow),
+            )),
             PipelineRow::MaskSectionHeader { section } => {
                 Line::from(Span::styled(
                     format!("  ── Mask {} ──", section + 1),

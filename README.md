@@ -48,6 +48,12 @@ irm https://raw.githubusercontent.com/astewartau/qsmxt.rs/main/uninstall.ps1 | i
 
 Download the latest binary for your platform from the [Releases](https://github.com/astewartau/qsmxt.rs/releases) page.
 
+### Bundled dcm2niix
+
+DICOM → BIDS conversion uses [dcm2niix](https://github.com/rordenlab/dcm2niix) (BSD-2-Clause). A pinned prebuilt copy is bundled in the release archives and installed to `~/.qsmxt/bin` by the install scripts (and kept in sync by `qsmxt update`), so no separate install is needed on **x86_64 Linux, macOS, and x86_64 Windows**.
+
+dcm2niix does not publish prebuilt binaries for **ARM Linux (aarch64)** or **ARM Windows**, so those platforms are not bundled — install `dcm2niix` yourself and ensure it is on your `PATH`. At runtime qsmxt resolves dcm2niix in this order: `$QSMXT_DCM2NIIX` → `~/.qsmxt/bin` → next to the `qsmxt` binary → `PATH`.
+
 ### From source
 
 Requires Rust (edition 2021+).

@@ -68,8 +68,8 @@ const CITE_TIKHONOV: Citation = Citation {
 };
 
 const CITE_NLTV: Citation = Citation {
-    key: "kames2018",
-    text: "Kames, C., Wiggermann, V., Rauscher, A. (2018). \"Rapid two-step dipole inversion for susceptibility mapping with sparsity priors.\" *NeuroImage*, 167:276-283. https://doi.org/10.1016/j.neuroimage.2017.11.018",
+    key: "milovic2018",
+    text: "Milovic, C., Bilgic, B., Zhao, B., Acosta-Cabronero, J., Tejos, C. (2018). \"Fast nonlinear susceptibility inversion with variational regularization.\" *Magnetic Resonance in Medicine*, 80(2):814-821. https://doi.org/10.1002/mrm.27073",
 };
 
 const CITE_MEDI: Citation = Citation {
@@ -181,54 +181,22 @@ pub fn generate_methods_for(config: &PipelineConfig, tool: &str) -> String {
                 add_citation(&mut citations, &CITE_TGV);
             }
             QsmAlgorithm::Qsmart => {
-                sentences.push("QSM was computed using QSMART (Yaghmaie et al., 2021), a two-stage approach using spatially dependent filtering for background field removal, TKD inversion, and Frangi vesselness-based tissue/vasculature separation.".to_string());
+                // QSMART consumes a pre-computed total field, so the field-mapping
+                // stage (phase offset, unwrapping, B0 estimation) still runs and must
+                // be described.
+                describe_field_mapping(config, &mut sentences, &mut citations);
+                let (inv_name, inv_cite) = inversion_name_cite(config.inversion.qsmart.inversion);
+                sentences.push(format!(
+                    "QSM was computed using QSMART (Yaghmaie et al., 2021), a two-stage approach using \
+                     spatially dependent filtering for background field removal, {} dipole inversion ({}), \
+                     and Frangi vesselness-based tissue/vasculature separation.",
+                    inv_name, cite_inline(inv_cite),
+                ));
                 add_citation(&mut citations, &CITE_QSMART);
+                add_citation(&mut citations, inv_cite);
             }
             _ => {
-                // Phase offset removal and/or bipolar correction
-                match (config.field_mapping.phase_offset_removal, config.field_mapping.bipolar_correction) {
-                    (true, true) => {
-                        sentences.push("Phase offset removal (Eckstein et al., 2018) and bipolar gradient correction (Eckstein, 2021) were applied.".to_string());
-                        add_citation(&mut citations, &CITE_MCPC3DS);
-                        add_citation(&mut citations, &CITE_BIPOLAR);
-                    }
-                    (true, false) => {
-                        sentences.push("Phase offset removal was performed using the HIP method (Eckstein et al., 2018).".to_string());
-                        add_citation(&mut citations, &CITE_MCPC3DS);
-                    }
-                    (false, true) => {
-                        sentences.push("Bipolar gradient correction (Eckstein, 2021) was applied to remove readout-induced phase artefacts.".to_string());
-                        add_citation(&mut citations, &CITE_BIPOLAR);
-                    }
-                    (false, false) => {}
-                }
-
-                // Unwrapping
-                {
-                    let alg = &config.field_mapping.unwrapping_algorithm;
-                    match alg {
-                        UnwrappingAlgorithm::Romeo => {
-                            let mode = if config.field_mapping.romeo.individual { "individual per-echo" } else { "template-based temporal" };
-                            sentences.push(format!("Phase unwrapping was performed using ROMEO ({} mode) (Dymerska et al., 2021).", mode));
-                            add_citation(&mut citations, &CITE_ROMEO);
-                        }
-                        UnwrappingAlgorithm::Laplacian => {
-                            sentences.push("Phase unwrapping was performed using the Laplacian method (Schofield & Zhu, 2003).".to_string());
-                            add_citation(&mut citations, &CITE_LAPLACIAN_UNWRAP);
-                        }
-                    }
-                }
-
-                // B0 estimation
-                match config.field_mapping.b0_estimation {
-                    B0Estimation::WeightedAvg => {
-                        let wt = format!("{}", config.field_mapping.b0_weight_type);
-                        sentences.push(format!("The B0 field map was estimated using weighted averaging ({} weighting).", wt));
-                    }
-                    B0Estimation::LinearFit => {
-                        sentences.push("The B0 field map was estimated using magnitude-weighted linear fit of phase vs echo time.".to_string());
-                    }
-                }
+                describe_field_mapping(config, &mut sentences, &mut citations);
 
                 // Background removal
                 {
@@ -248,17 +216,7 @@ pub fn generate_methods_for(config: &PipelineConfig, tool: &str) -> String {
                 }
 
                 // Dipole inversion
-                let (name, cite) = match config.inversion.algorithm {
-                    QsmAlgorithm::Rts => ("RTS (Rapid Two-Step)", &CITE_RTS),
-                    QsmAlgorithm::Tv => ("Total Variation (TV-ADMM)", &CITE_TV),
-                    QsmAlgorithm::Tkd => ("TKD (Thresholded K-space Division)", &CITE_TKD),
-                    QsmAlgorithm::Tsvd => ("TSVD (Truncated Singular Value Decomposition)", &CITE_TKD),
-                    QsmAlgorithm::Tikhonov => ("Tikhonov regularization", &CITE_TIKHONOV),
-                    QsmAlgorithm::Nltv => ("NLTV (Nonlinear Total Variation)", &CITE_NLTV),
-                    QsmAlgorithm::Medi => ("MEDI (Morphology Enabled Dipole Inversion)", &CITE_MEDI),
-                    QsmAlgorithm::Ilsqr => ("iLSQR", &CITE_ILSQR),
-                    QsmAlgorithm::Tgv | QsmAlgorithm::Qsmart => unreachable!(),
-                };
+                let (name, cite) = inversion_name_cite(config.inversion.algorithm);
                 sentences.push(format!("Dipole inversion was performed using {} ({}).", name, cite_inline(cite)));
                 add_citation(&mut citations, cite);
             }
@@ -308,6 +266,53 @@ pub fn generate_methods_for(config: &PipelineConfig, tool: &str) -> String {
     }
 
     out
+}
+
+/// Describe the field-mapping stage: phase offset / bipolar correction, phase
+/// unwrapping, and B0 estimation. Shared by the standard pipeline and QSMART
+/// (which consumes a pre-computed total field, so these steps still run).
+fn describe_field_mapping(config: &PipelineConfig, sentences: &mut Vec<String>, citations: &mut Vec<&Citation>) {
+    // Phase offset removal and/or bipolar correction
+    match (config.field_mapping.phase_offset_removal, config.field_mapping.bipolar_correction) {
+        (true, true) => {
+            sentences.push("Phase offset removal (Eckstein et al., 2018) and bipolar gradient correction (Eckstein, 2021) were applied.".to_string());
+            add_citation(citations, &CITE_MCPC3DS);
+            add_citation(citations, &CITE_BIPOLAR);
+        }
+        (true, false) => {
+            sentences.push("Phase offset removal was performed using the HIP method (Eckstein et al., 2018).".to_string());
+            add_citation(citations, &CITE_MCPC3DS);
+        }
+        (false, true) => {
+            sentences.push("Bipolar gradient correction (Eckstein, 2021) was applied to remove readout-induced phase artefacts.".to_string());
+            add_citation(citations, &CITE_BIPOLAR);
+        }
+        (false, false) => {}
+    }
+
+    // Unwrapping
+    match config.field_mapping.unwrapping_algorithm {
+        UnwrappingAlgorithm::Romeo => {
+            let mode = if config.field_mapping.romeo.individual { "individual per-echo" } else { "template-based temporal" };
+            sentences.push(format!("Phase unwrapping was performed using ROMEO ({} mode) (Dymerska et al., 2021).", mode));
+            add_citation(citations, &CITE_ROMEO);
+        }
+        UnwrappingAlgorithm::Laplacian => {
+            sentences.push("Phase unwrapping was performed using the Laplacian method (Schofield & Zhu, 2003).".to_string());
+            add_citation(citations, &CITE_LAPLACIAN_UNWRAP);
+        }
+    }
+
+    // B0 estimation
+    match config.field_mapping.b0_estimation {
+        B0Estimation::WeightedAvg => {
+            let wt = format!("{}", config.field_mapping.b0_weight_type);
+            sentences.push(format!("The B0 field map was estimated using weighted averaging ({} weighting).", wt));
+        }
+        B0Estimation::LinearFit => {
+            sentences.push("The B0 field map was estimated using magnitude-weighted linear fit of phase vs echo time.".to_string());
+        }
+    }
 }
 
 fn describe_masking(config: &PipelineConfig, sentences: &mut Vec<String>, citations: &mut Vec<&Citation>) {
@@ -427,6 +432,24 @@ fn describe_masking(config: &PipelineConfig, sentences: &mut Vec<String>, citati
     }
 }
 
+/// Display name + citation for a dipole inversion algorithm. Shared by the
+/// standard pipeline's inversion sentence and QSMART's inner inversion.
+/// Tgv/Qsmart are not valid dipole inversions; they fall back to iLSQR
+/// defensively (not reached in practice).
+fn inversion_name_cite(alg: QsmAlgorithm) -> (&'static str, &'static Citation) {
+    match alg {
+        QsmAlgorithm::Rts => ("RTS (Rapid Two-Step)", &CITE_RTS),
+        QsmAlgorithm::Tv => ("Total Variation (TV-ADMM)", &CITE_TV),
+        QsmAlgorithm::Tkd => ("TKD (Thresholded K-space Division)", &CITE_TKD),
+        QsmAlgorithm::Tsvd => ("TSVD (Truncated Singular Value Decomposition)", &CITE_TKD),
+        QsmAlgorithm::Tikhonov => ("Tikhonov regularization", &CITE_TIKHONOV),
+        QsmAlgorithm::Nltv => ("NLTV (Nonlinear Total Variation)", &CITE_NLTV),
+        QsmAlgorithm::Medi => ("MEDI (Morphology Enabled Dipole Inversion)", &CITE_MEDI),
+        QsmAlgorithm::Ilsqr => ("iLSQR", &CITE_ILSQR),
+        QsmAlgorithm::Tgv | QsmAlgorithm::Qsmart => ("iLSQR", &CITE_ILSQR),
+    }
+}
+
 fn cite_inline(cite: &Citation) -> &'static str {
     match cite.key {
         "wu2012" => "Wu et al., 2012",
@@ -439,6 +462,7 @@ fn cite_inline(cite: &Citation) -> &'static str {
         "shmueli2009" => "Shmueli et al., 2009",
         "bilgic2014l2" => "Bilgic et al., 2014",
         "liu2011medi" => "Liu et al., 2011",
+        "milovic2018" => "Milovic et al., 2018",
         "li2015" => "Li et al., 2015",
         "sun2014" => "Sun & Wilman, 2014",
         "li2014" => "Li et al., 2014",
@@ -498,8 +522,37 @@ mod tests {
     fn test_qsmart_methods() {
         let mut config = PipelineConfig::default();
         config.inversion.algorithm = QsmAlgorithm::Qsmart;
+        // Default inner inversion is iLSQR — methods must say so (not the old hardcoded "TKD").
         let out = generate_methods(&config);
         assert!(out.contains("QSMART"));
+        assert!(out.contains("iLSQR"), "QSMART methods should name the default inner inversion (iLSQR): {}", out);
+        assert!(!out.contains("TKD inversion"), "QSMART methods must not hardcode TKD: {}", out);
+
+        // Swapping the inner inversion must be reflected.
+        config.inversion.qsmart.inversion = QsmAlgorithm::Tikhonov;
+        let out = generate_methods(&config);
+        assert!(out.contains("Tikhonov"), "QSMART methods should reflect the selected inner inversion: {}", out);
+    }
+
+    #[test]
+    fn test_qsmart_methods_describe_field_mapping() {
+        // QSMART runs the field-mapping stage upstream, so its methods must describe
+        // unwrapping, B0 estimation, and phase offset removal (not just QSMART).
+        let mut config = PipelineConfig::default();
+        config.inversion.algorithm = QsmAlgorithm::Qsmart;
+        let out = generate_methods(&config);
+        assert!(out.contains("ROMEO"), "QSMART methods should describe unwrapping: {}", out);
+        assert!(out.contains("B0 field map"), "QSMART methods should describe B0 estimation: {}", out);
+        assert!(out.contains("Phase offset removal"), "QSMART methods should describe phase offset removal: {}", out);
+    }
+
+    #[test]
+    fn test_nltv_cites_milovic_not_rts() {
+        let mut config = PipelineConfig::default();
+        config.inversion.algorithm = QsmAlgorithm::Nltv;
+        let out = generate_methods(&config);
+        assert!(out.contains("Milovic"), "NLTV must cite Milovic et al. 2018: {}", out);
+        assert!(!out.contains("Rapid two-step"), "NLTV must not cite the RTS paper: {}", out);
     }
 
     #[test]

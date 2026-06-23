@@ -58,6 +58,10 @@ pub struct DicomConvertState {
     scan_receiver: Option<mpsc::Receiver<Result<dicom::DicomSession, String>>>,
     scan_progress: Arc<AtomicUsize>,
     convert_receiver: Option<mpsc::Receiver<dicom::convert::ConvertMessage>>,
+    /// Cached dcm2niix resolution for the availability indicator. `None` until
+    /// first checked; the inner `Option` is the resolved path (or `None` if not
+    /// found). The convert action re-checks live, so this is display-only.
+    dcm2niix_resolved: Option<Option<std::path::PathBuf>>,
 }
 
 impl Default for DicomConvertState {
@@ -77,11 +81,25 @@ impl Default for DicomConvertState {
             scan_receiver: None,
             scan_progress: Arc::new(AtomicUsize::new(0)),
             convert_receiver: None,
+            dcm2niix_resolved: None,
         }
     }
 }
 
 impl DicomConvertState {
+    /// Resolve dcm2niix once for the availability indicator, caching the result.
+    /// Cheap on repeat calls (no PATH subprocess spawn after the first check).
+    pub fn ensure_dcm2niix_checked(&mut self) {
+        if self.dcm2niix_resolved.is_none() {
+            self.dcm2niix_resolved = Some(dicom::convert::find_dcm2niix());
+        }
+    }
+
+    /// Cached dcm2niix path for display (`None` if not found or not yet checked).
+    pub fn dcm2niix_path(&self) -> Option<&std::path::PathBuf> {
+        self.dcm2niix_resolved.as_ref().and_then(|o| o.as_ref())
+    }
+
     /// Kick off a background scan if the directory changed. Non-blocking.
     /// Also polls for completion of any in-progress scan.
     pub fn maybe_rescan(&mut self) {
@@ -826,6 +844,8 @@ pub enum PipelineRow {
     },
     /// Section separator (blank line, not focusable)
     Separator,
+    /// Informational hint line (styled, not focusable)
+    Note { text: &'static str },
     /// Section header "── Mask N ──" (not focusable)
     MaskSectionHeader { section: usize },
     /// "── OR ──" separator between sections (not focusable)
@@ -996,6 +1016,17 @@ pub struct PipelineFormState {
     pub qsmart_ilsqr_max_iter: String,
     pub qsmart_vasc_sphere_radius: String,
     pub qsmart_sdf_spatial_radius: String,
+    pub qsmart_inversion: usize,
+    pub qsmart_sdf_sigma1_stage1: String,
+    pub qsmart_sdf_sigma2_stage1: String,
+    pub qsmart_sdf_sigma1_stage2: String,
+    pub qsmart_sdf_sigma2_stage2: String,
+    pub qsmart_sdf_lower_lim: String,
+    pub qsmart_sdf_curv_constant: String,
+    pub qsmart_frangi_scale_min: String,
+    pub qsmart_frangi_scale_max: String,
+    pub qsmart_frangi_scale_ratio: String,
+    pub qsmart_frangi_c: String,
 
     // BET
     pub bet_fractional_intensity: String,
@@ -1114,6 +1145,17 @@ impl Default for PipelineFormState {
             qsmart_ilsqr_max_iter: format!("{}", qsm_core::utils::QsmartParams::default().ilsqr_max_iter),
             qsmart_vasc_sphere_radius: format!("{}", qsm_core::utils::QsmartParams::default().vasc_sphere_radius),
             qsmart_sdf_spatial_radius: format!("{}", qsm_core::utils::QsmartParams::default().sdf_spatial_radius),
+            qsmart_inversion: 0, // ilsqr (default)
+            qsmart_sdf_sigma1_stage1: format!("{}", qsm_core::utils::QsmartParams::default().sdf_sigma1_stage1),
+            qsmart_sdf_sigma2_stage1: format!("{}", qsm_core::utils::QsmartParams::default().sdf_sigma2_stage1),
+            qsmart_sdf_sigma1_stage2: format!("{}", qsm_core::utils::QsmartParams::default().sdf_sigma1_stage2),
+            qsmart_sdf_sigma2_stage2: format!("{}", qsm_core::utils::QsmartParams::default().sdf_sigma2_stage2),
+            qsmart_sdf_lower_lim: format!("{}", qsm_core::utils::QsmartParams::default().sdf_lower_lim),
+            qsmart_sdf_curv_constant: format!("{}", qsm_core::utils::QsmartParams::default().sdf_curv_constant),
+            qsmart_frangi_scale_min: format!("{}", qsm_core::utils::QsmartParams::default().frangi_scale_range[0]),
+            qsmart_frangi_scale_max: format!("{}", qsm_core::utils::QsmartParams::default().frangi_scale_range[1]),
+            qsmart_frangi_scale_ratio: format!("{}", qsm_core::utils::QsmartParams::default().frangi_scale_ratio),
+            qsmart_frangi_c: format!("{}", qsm_core::utils::QsmartParams::default().frangi_c),
             bet_fractional_intensity: format!("{}", bet.fractional_intensity),
             bet_smoothness: format!("{}", bet.smoothness),
             bet_gradient_threshold: format!("{}", bet.gradient_threshold),
@@ -1135,6 +1177,18 @@ impl Default for PipelineFormState {
 }
 
 pub const QSM_ALGO_OPTIONS: &[&str] = &["rts", "tv", "tkd", "tsvd", "tgv", "tikhonov", "nltv", "medi", "ilsqr", "qsmart"];
+// QSMART's inner dipole inversion (excludes the two end-to-end algorithms tgv/qsmart).
+pub const QSMART_INV_OPTIONS: &[&str] = &["ilsqr", "rts", "tv", "tkd", "tsvd", "tikhonov", "nltv", "medi"];
+const QSMART_INV_HELP: &[&str] = &[
+    "iLSQR (default) — QSMART's original inner inversion",
+    "Rapid Two-Step (RTS)",
+    "Total Variation ADMM (TV)",
+    "Truncated K-space Division (TKD)",
+    "Truncated SVD (TSVD)",
+    "Tikhonov L2 regularization",
+    "Nonlinear Total Variation (NLTV)",
+    "Morphology Enabled Dipole Inversion (MEDI)",
+];
 pub const UNWRAP_OPTIONS: &[&str] = &["romeo", "laplacian"];
 pub const BF_OPTIONS: &[&str] = &["vsharp", "pdf", "lbv", "ismv", "sharp", "resharp", "harperella", "iharperella"];
 pub const B0_ESTIMATION_OPTIONS: &[&str] = &["weighted-avg", "linear-fit"];
@@ -1380,10 +1434,76 @@ impl PipelineFormState {
                 rows.push(PipelineRow::Param { label: "  Max Iter", field: "ilsqr_max_iter", help: "Maximum iterations" });
             }
             9 => { // QSMART
-                rows.push(PipelineRow::Param { label: "  iLSQR Tol", field: "qsmart_ilsqr_tol", help: "iLSQR convergence tolerance" });
-                rows.push(PipelineRow::Param { label: "  iLSQR Max Iter", field: "qsmart_ilsqr_max_iter", help: "Maximum iLSQR iterations per stage" });
-                rows.push(PipelineRow::Param { label: "  Vasc Radius", field: "qsmart_vasc_sphere_radius", help: "Sphere radius for vasculature detection" });
-                rows.push(PipelineRow::Param { label: "  SDF Radius", field: "qsmart_sdf_spatial_radius", help: "SDF spatial filtering radius" });
+                rows.push(PipelineRow::Note {
+                    text: "⚠ QSMART needs a tight BET brain mask — loose masks cause streaking (set mask below)",
+                });
+                rows.push(PipelineRow::AlgoSelect {
+                    label: "  Inner Inversion", field: "qsmart_inversion",
+                    options: QSMART_INV_OPTIONS, help: QSMART_INV_HELP,
+                });
+                // Params for the selected inner inversion. QSMART_INV_OPTIONS order:
+                // 0 ilsqr, 1 rts, 2 tv, 3 tkd, 4 tsvd, 5 tikhonov, 6 nltv, 7 medi.
+                // Non-iLSQR algorithms reuse the shared inversion params (config.inversion.<algo>),
+                // which run_qsmart applies to both QSMART stages.
+                match self.qsmart_inversion {
+                    0 => { // iLSQR (uses QSMART's own tol/max_iter)
+                        rows.push(PipelineRow::Param { label: "  iLSQR Tol", field: "qsmart_ilsqr_tol", help: "iLSQR convergence tolerance" });
+                        rows.push(PipelineRow::Param { label: "  iLSQR Max Iter", field: "qsmart_ilsqr_max_iter", help: "Maximum iLSQR iterations per stage" });
+                    }
+                    1 => { // RTS
+                        rows.push(PipelineRow::Param { label: "  Delta", field: "rts_delta", help: "Threshold for ill-conditioned k-space region" });
+                        rows.push(PipelineRow::Param { label: "  Mu", field: "rts_mu", help: "Regularization parameter for well-conditioned region" });
+                        rows.push(PipelineRow::Param { label: "  Rho", field: "rts_rho", help: "ADMM penalty parameter" });
+                        rows.push(PipelineRow::Param { label: "  Tolerance", field: "rts_tol", help: "Convergence tolerance (relative change)" });
+                        rows.push(PipelineRow::Param { label: "  Max Iter", field: "rts_max_iter", help: "Maximum ADMM iterations" });
+                        rows.push(PipelineRow::Param { label: "  LSMR Iter", field: "rts_lsmr_iter", help: "LSMR iterations for step 1 (well-conditioned solve)" });
+                    }
+                    2 => { // TV
+                        rows.push(PipelineRow::Param { label: "  Lambda", field: "tv_lambda", help: "L1 regularization weight (smaller = smoother)" });
+                        rows.push(PipelineRow::Param { label: "  Rho", field: "tv_rho", help: "ADMM penalty parameter (typically 100×lambda)" });
+                        rows.push(PipelineRow::Param { label: "  Tolerance", field: "tv_tol", help: "Convergence tolerance" });
+                        rows.push(PipelineRow::Param { label: "  Max Iter", field: "tv_max_iter", help: "Maximum ADMM iterations" });
+                    }
+                    3 => { // TKD
+                        rows.push(PipelineRow::Param { label: "  Threshold", field: "tkd_threshold", help: "Truncation threshold for k-space division (0.1-0.2)" });
+                    }
+                    4 => { // TSVD
+                        rows.push(PipelineRow::Param { label: "  Threshold", field: "tsvd_threshold", help: "Truncation threshold for SVD (0.1-0.2)" });
+                    }
+                    5 => { // Tikhonov
+                        rows.push(PipelineRow::Param { label: "  Lambda", field: "tikhonov_lambda", help: "L2 regularization weight" });
+                    }
+                    6 => { // NLTV
+                        rows.push(PipelineRow::Param { label: "  Lambda", field: "nltv_lambda", help: "Regularization parameter" });
+                        rows.push(PipelineRow::Param { label: "  Mu", field: "nltv_mu", help: "Penalty parameter" });
+                        rows.push(PipelineRow::Param { label: "  Tolerance", field: "nltv_tol", help: "Convergence tolerance" });
+                        rows.push(PipelineRow::Param { label: "  Max Iter", field: "nltv_max_iter", help: "Maximum ADMM iterations" });
+                        rows.push(PipelineRow::Param { label: "  Newton Iter", field: "nltv_newton_iter", help: "Newton iterations for weight update" });
+                    }
+                    7 => { // MEDI (QSMART already removes background, so SMV mode is omitted)
+                        rows.push(PipelineRow::Param { label: "  Lambda", field: "medi_lambda", help: "Regularization weight" });
+                        rows.push(PipelineRow::Param { label: "  Percentage", field: "medi_percentage", help: "Fraction of voxels considered edges (0.0-1.0)" });
+                        rows.push(PipelineRow::Param { label: "  Max Iter", field: "medi_max_iter", help: "Maximum outer iterations" });
+                        rows.push(PipelineRow::Param { label: "  CG Max Iter", field: "medi_cg_max_iter", help: "Maximum conjugate gradient iterations" });
+                        rows.push(PipelineRow::Param { label: "  CG Tolerance", field: "medi_cg_tol", help: "CG convergence tolerance" });
+                        rows.push(PipelineRow::Param { label: "  Tolerance", field: "medi_tol", help: "Outer convergence tolerance" });
+                    }
+                    _ => {}
+                }
+                // SDF background-removal parameters
+                rows.push(PipelineRow::Param { label: "  SDF Sigma1 (s1)", field: "qsmart_sdf_sigma1_stage1", help: "Stage 1 SDF kernel sigma 1 (voxels)" });
+                rows.push(PipelineRow::Param { label: "  SDF Sigma2 (s1)", field: "qsmart_sdf_sigma2_stage1", help: "Stage 1 SDF kernel sigma 2 (voxels)" });
+                rows.push(PipelineRow::Param { label: "  SDF Sigma1 (s2)", field: "qsmart_sdf_sigma1_stage2", help: "Stage 2 SDF kernel sigma 1 (voxels)" });
+                rows.push(PipelineRow::Param { label: "  SDF Sigma2 (s2)", field: "qsmart_sdf_sigma2_stage2", help: "Stage 2 SDF kernel sigma 2 (voxels)" });
+                rows.push(PipelineRow::Param { label: "  SDF Radius", field: "qsmart_sdf_spatial_radius", help: "SDF spatial filtering radius (voxels)" });
+                rows.push(PipelineRow::Param { label: "  SDF Lower Lim", field: "qsmart_sdf_lower_lim", help: "SDF proximity lower limit" });
+                rows.push(PipelineRow::Param { label: "  SDF Curv Const", field: "qsmart_sdf_curv_constant", help: "SDF curvature constant" });
+                // Vasculature detection (Frangi) — radii in mm, auto-scaled to voxels
+                rows.push(PipelineRow::Param { label: "  Vasc Radius (mm)", field: "qsmart_vasc_sphere_radius", help: "Bottom-hat sphere radius for vasculature detection (mm)" });
+                rows.push(PipelineRow::Param { label: "  Frangi Min (mm)", field: "qsmart_frangi_scale_min", help: "Frangi minimum vessel radius (mm)" });
+                rows.push(PipelineRow::Param { label: "  Frangi Max (mm)", field: "qsmart_frangi_scale_max", help: "Frangi maximum vessel radius (mm)" });
+                rows.push(PipelineRow::Param { label: "  Frangi Step (mm)", field: "qsmart_frangi_scale_ratio", help: "Frangi scale step (mm)" });
+                rows.push(PipelineRow::Param { label: "  Frangi C", field: "qsmart_frangi_c", help: "Frangi C noise threshold" });
             }
             _ => {}
         }
@@ -1418,6 +1538,9 @@ impl PipelineFormState {
         "harperella_radius", "harperella_max_iter", "harperella_tol",
         "iharperella_radius", "iharperella_max_iter", "iharperella_tol",
         "qsmart_ilsqr_tol", "qsmart_ilsqr_max_iter", "qsmart_vasc_sphere_radius", "qsmart_sdf_spatial_radius",
+        "qsmart_sdf_sigma1_stage1", "qsmart_sdf_sigma2_stage1", "qsmart_sdf_sigma1_stage2", "qsmart_sdf_sigma2_stage2",
+        "qsmart_sdf_lower_lim", "qsmart_sdf_curv_constant",
+        "qsmart_frangi_scale_min", "qsmart_frangi_scale_max", "qsmart_frangi_scale_ratio", "qsmart_frangi_c",
         "bet_fractional_intensity", "bet_smoothness", "bet_gradient_threshold", "bet_iterations", "bet_subdivisions",
     ];
 
@@ -1478,6 +1601,16 @@ impl PipelineFormState {
             "qsmart_ilsqr_max_iter" => &self.qsmart_ilsqr_max_iter,
             "qsmart_vasc_sphere_radius" => &self.qsmart_vasc_sphere_radius,
             "qsmart_sdf_spatial_radius" => &self.qsmart_sdf_spatial_radius,
+            "qsmart_sdf_sigma1_stage1" => &self.qsmart_sdf_sigma1_stage1,
+            "qsmart_sdf_sigma2_stage1" => &self.qsmart_sdf_sigma2_stage1,
+            "qsmart_sdf_sigma1_stage2" => &self.qsmart_sdf_sigma1_stage2,
+            "qsmart_sdf_sigma2_stage2" => &self.qsmart_sdf_sigma2_stage2,
+            "qsmart_sdf_lower_lim" => &self.qsmart_sdf_lower_lim,
+            "qsmart_sdf_curv_constant" => &self.qsmart_sdf_curv_constant,
+            "qsmart_frangi_scale_min" => &self.qsmart_frangi_scale_min,
+            "qsmart_frangi_scale_max" => &self.qsmart_frangi_scale_max,
+            "qsmart_frangi_scale_ratio" => &self.qsmart_frangi_scale_ratio,
+            "qsmart_frangi_c" => &self.qsmart_frangi_c,
             "bet_fractional_intensity" => &self.bet_fractional_intensity,
             "bet_smoothness" => &self.bet_smoothness,
             "bet_gradient_threshold" => &self.bet_gradient_threshold,
@@ -1544,6 +1677,16 @@ impl PipelineFormState {
             "qsmart_ilsqr_max_iter" => Some(&mut self.qsmart_ilsqr_max_iter),
             "qsmart_vasc_sphere_radius" => Some(&mut self.qsmart_vasc_sphere_radius),
             "qsmart_sdf_spatial_radius" => Some(&mut self.qsmart_sdf_spatial_radius),
+            "qsmart_sdf_sigma1_stage1" => Some(&mut self.qsmart_sdf_sigma1_stage1),
+            "qsmart_sdf_sigma2_stage1" => Some(&mut self.qsmart_sdf_sigma2_stage1),
+            "qsmart_sdf_sigma1_stage2" => Some(&mut self.qsmart_sdf_sigma1_stage2),
+            "qsmart_sdf_sigma2_stage2" => Some(&mut self.qsmart_sdf_sigma2_stage2),
+            "qsmart_sdf_lower_lim" => Some(&mut self.qsmart_sdf_lower_lim),
+            "qsmart_sdf_curv_constant" => Some(&mut self.qsmart_sdf_curv_constant),
+            "qsmart_frangi_scale_min" => Some(&mut self.qsmart_frangi_scale_min),
+            "qsmart_frangi_scale_max" => Some(&mut self.qsmart_frangi_scale_max),
+            "qsmart_frangi_scale_ratio" => Some(&mut self.qsmart_frangi_scale_ratio),
+            "qsmart_frangi_c" => Some(&mut self.qsmart_frangi_c),
             "bet_fractional_intensity" => Some(&mut self.bet_fractional_intensity),
             "bet_smoothness" => Some(&mut self.bet_smoothness),
             "bet_gradient_threshold" => Some(&mut self.bet_gradient_threshold),
@@ -1557,6 +1700,7 @@ impl PipelineFormState {
     pub fn get_select(&self, field: &str) -> usize {
         match field {
             "qsm_algorithm" => self.qsm_algorithm,
+            "qsmart_inversion" => self.qsmart_inversion,
             "unwrapping_algorithm" => self.unwrapping_algorithm,
             "bf_algorithm" => self.bf_algorithm,
             "qsm_reference" => self.qsm_reference,
@@ -1571,6 +1715,7 @@ impl PipelineFormState {
     pub fn set_select(&mut self, field: &str, val: usize) {
         match field {
             "qsm_algorithm" => self.qsm_algorithm = val,
+            "qsmart_inversion" => self.qsmart_inversion = val,
             "unwrapping_algorithm" => self.unwrapping_algorithm = val,
             "bf_algorithm" => self.bf_algorithm = val,
             "qsm_reference" => self.qsm_reference = val,
@@ -1817,7 +1962,7 @@ impl PipelineFormState {
         self.visible_rows()
             .iter()
             .enumerate()
-            .filter(|(_, r)| !matches!(r, PipelineRow::Separator | PipelineRow::MaskSectionHeader { .. } | PipelineRow::MaskOrSeparator))
+            .filter(|(_, r)| !matches!(r, PipelineRow::Separator | PipelineRow::Note { .. } | PipelineRow::MaskSectionHeader { .. } | PipelineRow::MaskOrSeparator))
             .map(|(i, _)| i)
             .collect()
     }
@@ -2714,7 +2859,11 @@ impl App {
         }
 
         if dicom::convert::find_dcm2niix().is_none() {
-            self.error_message = Some("dcm2niix not found in PATH. Please install it.".to_string());
+            self.error_message = Some(
+                "dcm2niix not found (no bundled copy in ~/.qsmxt/bin and not on PATH). \
+                 Reinstall qsmxt or install dcm2niix."
+                    .to_string(),
+            );
             return;
         }
 
