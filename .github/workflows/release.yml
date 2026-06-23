@@ -6,6 +6,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Pinned dcm2niix release bundled into the archives. Keep in sync with
+  # DCM2NIIX_BUNDLED_VERSION in src/dicom/convert.rs.
+  DCM2NIIX_VERSION: v1.0.20260416
 
 permissions:
   contents: write
@@ -47,18 +50,25 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            dcm2niix_asset: lnx
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
+            dcm2niix_asset: none
           - target: x86_64-apple-darwin
             os: macos-latest
+            dcm2niix_asset: mac
           - target: aarch64-apple-darwin
             os: macos-latest
+            dcm2niix_asset: mac
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
+            dcm2niix_asset: lnx
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+            dcm2niix_asset: win
           - target: aarch64-pc-windows-msvc
             os: windows-latest
+            dcm2niix_asset: none
     steps:
       - uses: actions/checkout@v4
 
@@ -94,11 +104,43 @@ jobs:
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
-      - name: Package binary (Unix)
-        if: runner.os != 'Windows'
+      # dcm2niix ships prebuilt binaries only for x86_64-linux (lnx), macOS
+      # universal2 (mac) and x86_64-windows (win). ARM Linux/Windows targets
+      # (dcm2niix_asset == 'none') ship without a bundled copy and fall back to
+      # PATH at runtime. The glibc 'lnx' build is bundled for the musl target too
+      # (works on glibc hosts; PATH fallback covers pure-musl/Alpine).
+      - name: Bundle dcm2niix (Unix)
+        if: runner.os != 'Windows' && matrix.dcm2niix_asset != 'none'
+        shell: bash
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../qsmxt-${{ github.ref_name }}-${{ matrix.target }}.tar.gz qsmxt
+          curl -fsSL "https://github.com/rordenlab/dcm2niix/releases/download/${DCM2NIIX_VERSION}/dcm2niix_${{ matrix.dcm2niix_asset }}.zip" -o dcm2niix.zip
+          unzip -o dcm2niix.zip dcm2niix
+          chmod +x dcm2niix
+          rm dcm2niix.zip
+          curl -fsSL "https://raw.githubusercontent.com/rordenlab/dcm2niix/${DCM2NIIX_VERSION}/license.txt" -o dcm2niix.LICENSE || true
+          cd ../../..
+
+      - name: Bundle dcm2niix (Windows)
+        if: runner.os == 'Windows' && matrix.dcm2niix_asset != 'none'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          curl -fsSL "https://github.com/rordenlab/dcm2niix/releases/download/${DCM2NIIX_VERSION}/dcm2niix_${{ matrix.dcm2niix_asset }}.zip" -o dcm2niix.zip
+          7z x -y dcm2niix.zip dcm2niix.exe
+          rm dcm2niix.zip
+          curl -fsSL "https://raw.githubusercontent.com/rordenlab/dcm2niix/${DCM2NIIX_VERSION}/license.txt" -o dcm2niix.LICENSE || true
+          cd ../../..
+
+      - name: Package binary (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          FILES="qsmxt"
+          [ -f dcm2niix ] && FILES="$FILES dcm2niix"
+          [ -f dcm2niix.LICENSE ] && FILES="$FILES dcm2niix.LICENSE"
+          tar czf ../../../qsmxt-${{ github.ref_name }}-${{ matrix.target }}.tar.gz $FILES
           cd ../../..
 
       - name: Package binary (Windows)
@@ -106,7 +148,10 @@ jobs:
         shell: bash
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../qsmxt-${{ github.ref_name }}-${{ matrix.target }}.zip qsmxt.exe
+          FILES="qsmxt.exe"
+          [ -f dcm2niix.exe ] && FILES="$FILES dcm2niix.exe"
+          [ -f dcm2niix.LICENSE ] && FILES="$FILES dcm2niix.LICENSE"
+          7z a ../../../qsmxt-${{ github.ref_name }}-${{ matrix.target }}.zip $FILES
           cd ../../..
 
       - name: Upload release asset

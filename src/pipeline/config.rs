@@ -15,22 +15,27 @@ pub fn load_config(path: &Path) -> crate::Result<PipelineConfig> {
 }
 
 /// Apply CLI overrides onto a config.
+/// Map a CLI dipole-inversion algorithm argument to the config enum.
+fn qsm_algorithm_arg_to_config(a: cli::QsmAlgorithmArg) -> QsmAlgorithm {
+    match a {
+        cli::QsmAlgorithmArg::Rts => QsmAlgorithm::Rts,
+        cli::QsmAlgorithmArg::Tv => QsmAlgorithm::Tv,
+        cli::QsmAlgorithmArg::Tkd => QsmAlgorithm::Tkd,
+        cli::QsmAlgorithmArg::Tgv => QsmAlgorithm::Tgv,
+        cli::QsmAlgorithmArg::Tikhonov => QsmAlgorithm::Tikhonov,
+        cli::QsmAlgorithmArg::Nltv => QsmAlgorithm::Nltv,
+        cli::QsmAlgorithmArg::Tsvd => QsmAlgorithm::Tsvd,
+        cli::QsmAlgorithmArg::Medi => QsmAlgorithm::Medi,
+        cli::QsmAlgorithmArg::Ilsqr => QsmAlgorithm::Ilsqr,
+        cli::QsmAlgorithmArg::Qsmart => QsmAlgorithm::Qsmart,
+    }
+}
+
 /// Maps flat CLI flags to nested config fields.
 pub fn apply_run_overrides(config: &mut PipelineConfig, args: &cli::RunArgs) {
         // ── Inversion algorithm ──
         if let Some(a) = args.qsm_algorithm {
-            config.inversion.algorithm = match a {
-                cli::QsmAlgorithmArg::Rts => QsmAlgorithm::Rts,
-                cli::QsmAlgorithmArg::Tv => QsmAlgorithm::Tv,
-                cli::QsmAlgorithmArg::Tkd => QsmAlgorithm::Tkd,
-                cli::QsmAlgorithmArg::Tgv => QsmAlgorithm::Tgv,
-                cli::QsmAlgorithmArg::Tikhonov => QsmAlgorithm::Tikhonov,
-                cli::QsmAlgorithmArg::Nltv => QsmAlgorithm::Nltv,
-                cli::QsmAlgorithmArg::Tsvd => QsmAlgorithm::Tsvd,
-                cli::QsmAlgorithmArg::Medi => QsmAlgorithm::Medi,
-                cli::QsmAlgorithmArg::Ilsqr => QsmAlgorithm::Ilsqr,
-                cli::QsmAlgorithmArg::Qsmart => QsmAlgorithm::Qsmart,
-            };
+            config.inversion.algorithm = qsm_algorithm_arg_to_config(a);
         }
 
         // ── Unwrapping ──
@@ -142,6 +147,17 @@ pub fn apply_run_overrides(config: &mut PipelineConfig, args: &cli::RunArgs) {
         if let Some(v) = args.qsmart_params.qsmart_ilsqr_max_iter { config.inversion.qsmart.ilsqr_max_iter = v; }
         if let Some(v) = args.qsmart_params.qsmart_vasc_sphere_radius { config.inversion.qsmart.vasc_sphere_radius = v; }
         if let Some(v) = args.qsmart_params.qsmart_sdf_spatial_radius { config.inversion.qsmart.sdf_spatial_radius = v; }
+        if let Some(a) = args.qsmart_params.qsmart_inversion { config.inversion.qsmart.inversion = qsm_algorithm_arg_to_config(a); }
+        if let Some(v) = args.qsmart_params.qsmart_sdf_sigma1_stage1 { config.inversion.qsmart.sdf_sigma1_stage1 = v; }
+        if let Some(v) = args.qsmart_params.qsmart_sdf_sigma2_stage1 { config.inversion.qsmart.sdf_sigma2_stage1 = v; }
+        if let Some(v) = args.qsmart_params.qsmart_sdf_sigma1_stage2 { config.inversion.qsmart.sdf_sigma1_stage2 = v; }
+        if let Some(v) = args.qsmart_params.qsmart_sdf_sigma2_stage2 { config.inversion.qsmart.sdf_sigma2_stage2 = v; }
+        if let Some(v) = args.qsmart_params.qsmart_sdf_lower_lim { config.inversion.qsmart.sdf_lower_lim = v; }
+        if let Some(v) = args.qsmart_params.qsmart_sdf_curv_constant { config.inversion.qsmart.sdf_curv_constant = v; }
+        if let Some(v) = args.qsmart_params.qsmart_frangi_scale_min { config.inversion.qsmart.frangi_scale_min = v; }
+        if let Some(v) = args.qsmart_params.qsmart_frangi_scale_max { config.inversion.qsmart.frangi_scale_max = v; }
+        if let Some(v) = args.qsmart_params.qsmart_frangi_scale_ratio { config.inversion.qsmart.frangi_scale_ratio = v; }
+        if let Some(v) = args.qsmart_params.qsmart_frangi_c { config.inversion.qsmart.frangi_c = v; }
 
         // ── Background removal params ──
         if let Some(v) = args.vsharp_params.vsharp_threshold { config.bg_removal.vsharp.threshold = v; }
@@ -226,4 +242,111 @@ pub fn apply_run_overrides(config: &mut PipelineConfig, args: &cli::RunArgs) {
             }
             if !new_sections.is_empty() { config.masking.sections = new_sections; }
         }
+
+        // QSMART has no internal mask erosion (unlike V-SHARP), so a loose threshold
+        // mask leaks non-brain phase into the global dipole inversion and produces
+        // streaking. Default QSMART to a BET mask when masking is untouched; otherwise
+        // warn if the user-chosen mask isn't BET-based.
+        if config.inversion.algorithm == QsmAlgorithm::Qsmart {
+            let untouched = args.mask_preset.is_none()
+                && args.mask_sections_cli.is_none()
+                && config.masking.sections == default_mask_sections();
+            if untouched {
+                log::info!("QSMART: defaulting to BET brain mask (override with --mask)");
+                config.masking.sections = qsmart_default_mask_sections();
+            } else if !config.masking.sections.iter().all(|s| matches!(s.generator, MaskOp::Bet { .. })) {
+                log::warn!(
+                    "QSMART needs a tight brain mask; the configured mask is not BET-based and \
+                     may cause streaking artifacts. Consider --mask-preset bet or \
+                     --mask magnitude,bet:0.5,erode:2."
+                );
+            }
+        }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// A generated QSMART command (all params) must parse back through the CLI and
+    /// round-trip the QSMART config values via apply_run_overrides.
+    #[test]
+    fn qsmart_generated_command_roundtrips() {
+        let mut config = PipelineConfig::default();
+        config.inversion.algorithm = QsmAlgorithm::Qsmart;
+        config.inversion.qsmart.inversion = QsmAlgorithm::Tv;
+        config.inversion.qsmart.sdf_sigma1_stage1 = 11.0;
+        config.inversion.qsmart.sdf_lower_lim = 0.45;
+        config.inversion.qsmart.frangi_scale_min = 1.5;
+        config.inversion.qsmart.frangi_scale_max = 7.0;
+        config.inversion.qsmart.frangi_scale_ratio = 1.0;
+        config.inversion.qsmart.frangi_c = 333.0;
+
+        let cmd = generate_command(&config);
+        // Tokens after `qsmxt run <bids_dir>`.
+        let argv: Vec<String> = cmd.split_whitespace().map(|s| s.to_string()).collect();
+        let cli = cli::Cli::try_parse_from(&argv)
+            .unwrap_or_else(|e| panic!("generated command did not parse: {}\ncmd: {}", e, cmd));
+
+        let run_args = match cli.command {
+            cli::Command::Run(a) => a,
+            _ => panic!("expected Run subcommand"),
+        };
+        let mut rebuilt = PipelineConfig::default();
+        apply_run_overrides(&mut rebuilt, &run_args);
+
+        assert_eq!(rebuilt.inversion.algorithm, QsmAlgorithm::Qsmart);
+        assert_eq!(rebuilt.inversion.qsmart.inversion, QsmAlgorithm::Tv);
+        assert_eq!(rebuilt.inversion.qsmart.sdf_sigma1_stage1, 11.0);
+        assert_eq!(rebuilt.inversion.qsmart.sdf_lower_lim, 0.45);
+        assert_eq!(rebuilt.inversion.qsmart.frangi_scale_min, 1.5);
+        assert_eq!(rebuilt.inversion.qsmart.frangi_scale_max, 7.0);
+        assert_eq!(rebuilt.inversion.qsmart.frangi_scale_ratio, 1.0);
+        assert_eq!(rebuilt.inversion.qsmart.frangi_c, 333.0);
+    }
+
+    fn config_from_cli(argv: &[&str]) -> PipelineConfig {
+        let cli = cli::Cli::try_parse_from(argv).expect("parse");
+        let run_args = match cli.command {
+            cli::Command::Run(a) => a,
+            _ => panic!("expected Run subcommand"),
+        };
+        let mut config = PipelineConfig::default();
+        apply_run_overrides(&mut config, &run_args);
+        config
+    }
+
+    #[test]
+    fn qsmart_defaults_to_bet_mask() {
+        let c = config_from_cli(&["qsmxt", "run", "<bids>", "--qsm-algorithm", "qsmart"]);
+        assert_eq!(c.masking.sections, qsmart_default_mask_sections());
+        assert_ne!(c.masking.sections, default_mask_sections());
+    }
+
+    #[test]
+    fn qsmart_respects_explicit_mask() {
+        let c = config_from_cli(&[
+            "qsmxt", "run", "<bids>", "--qsm-algorithm", "qsmart",
+            "--mask", "phase-quality,threshold:otsu",
+        ]);
+        assert_ne!(c.masking.sections, qsmart_default_mask_sections());
+    }
+
+    #[test]
+    fn qsmart_respects_mask_preset() {
+        // robust-threshold preset is an explicit choice; don't override it with BET.
+        let c = config_from_cli(&[
+            "qsmxt", "run", "<bids>", "--qsm-algorithm", "qsmart",
+            "--mask-preset", "robust-threshold",
+        ]);
+        assert_ne!(c.masking.sections, qsmart_default_mask_sections());
+        assert_eq!(c.masking.sections, default_mask_sections());
+    }
+
+    #[test]
+    fn non_qsmart_keeps_default_mask() {
+        let c = config_from_cli(&["qsmxt", "run", "<bids>", "--qsm-algorithm", "rts"]);
+        assert_eq!(c.masking.sections, default_mask_sections());
+    }
 }

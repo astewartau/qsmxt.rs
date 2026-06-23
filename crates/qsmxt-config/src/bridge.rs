@@ -24,6 +24,22 @@ use qsm_core::pipeline::{
 use crate::config::PipelineConfig;
 use crate::enums::*;
 
+/// Map a qsmxt-config dipole inversion algorithm to its qsm-core equivalent.
+fn map_alg(alg: QsmAlgorithm) -> PInvAlg {
+    match alg {
+        QsmAlgorithm::Rts => PInvAlg::Rts,
+        QsmAlgorithm::Tv => PInvAlg::Tv,
+        QsmAlgorithm::Tkd => PInvAlg::Tkd,
+        QsmAlgorithm::Tsvd => PInvAlg::Tsvd,
+        QsmAlgorithm::Tgv => PInvAlg::Tgv,
+        QsmAlgorithm::Tikhonov => PInvAlg::Tikhonov,
+        QsmAlgorithm::Nltv => PInvAlg::Nltv,
+        QsmAlgorithm::Medi => PInvAlg::Medi,
+        QsmAlgorithm::Ilsqr => PInvAlg::Ilsqr,
+        QsmAlgorithm::Qsmart => PInvAlg::Qsmart,
+    }
+}
+
 /// Convert a PipelineConfig to qsm-core pipeline stage configs.
 pub fn to_pipeline_stages(cfg: &PipelineConfig) -> (
     PFieldMapping,
@@ -107,18 +123,7 @@ pub fn to_pipeline_stages(cfg: &PipelineConfig) -> (
     };
 
     let inversion = PInversion {
-        algorithm: match cfg.inversion.algorithm {
-            QsmAlgorithm::Rts => PInvAlg::Rts,
-            QsmAlgorithm::Tv => PInvAlg::Tv,
-            QsmAlgorithm::Tkd => PInvAlg::Tkd,
-            QsmAlgorithm::Tsvd => PInvAlg::Tsvd,
-            QsmAlgorithm::Tgv => PInvAlg::Tgv,
-            QsmAlgorithm::Tikhonov => PInvAlg::Tikhonov,
-            QsmAlgorithm::Nltv => PInvAlg::Nltv,
-            QsmAlgorithm::Medi => PInvAlg::Medi,
-            QsmAlgorithm::Ilsqr => PInvAlg::Ilsqr,
-            QsmAlgorithm::Qsmart => PInvAlg::Qsmart,
-        },
+        algorithm: map_alg(cfg.inversion.algorithm),
         tkd: qsm_core::inversion::TkdParams { threshold: cfg.inversion.tkd.threshold },
         tsvd: qsm_core::inversion::TkdParams { threshold: cfg.inversion.tsvd.threshold },
         tikhonov: qsm_core::inversion::TikhonovParams {
@@ -162,7 +167,26 @@ pub fn to_pipeline_stages(cfg: &PipelineConfig) -> (
             tol: cfg.inversion.tgv.tol as f32,
             ..Default::default()
         },
-        qsmart: qsm_core::utils::QsmartParams::default(),
+        qsmart: qsm_core::utils::QsmartParams {
+            ilsqr_tol: cfg.inversion.qsmart.ilsqr_tol,
+            ilsqr_max_iter: cfg.inversion.qsmart.ilsqr_max_iter,
+            // NOTE: vasc_sphere_radius and frangi scales are in mm here; the qsmxt
+            // runner converts them to voxels using the dataset voxel size.
+            vasc_sphere_radius: cfg.inversion.qsmart.vasc_sphere_radius,
+            sdf_spatial_radius: cfg.inversion.qsmart.sdf_spatial_radius,
+            inversion: map_alg(cfg.inversion.qsmart.inversion),
+            sdf_sigma1_stage1: cfg.inversion.qsmart.sdf_sigma1_stage1,
+            sdf_sigma2_stage1: cfg.inversion.qsmart.sdf_sigma2_stage1,
+            sdf_sigma1_stage2: cfg.inversion.qsmart.sdf_sigma1_stage2,
+            sdf_sigma2_stage2: cfg.inversion.qsmart.sdf_sigma2_stage2,
+            sdf_lower_lim: cfg.inversion.qsmart.sdf_lower_lim,
+            sdf_curv_constant: cfg.inversion.qsmart.sdf_curv_constant,
+            frangi_scale_range: [cfg.inversion.qsmart.frangi_scale_min, cfg.inversion.qsmart.frangi_scale_max],
+            frangi_scale_ratio: cfg.inversion.qsmart.frangi_scale_ratio,
+            frangi_c: cfg.inversion.qsmart.frangi_c,
+            // ppm and b0_dir keep qsm-core defaults
+            ..Default::default()
+        },
     };
 
     let reference = match cfg.qsm.reference {
@@ -220,5 +244,34 @@ fn convert_mask_op(op: &crate::masking::MaskOp) -> PMaskOp {
         crate::masking::MaskOp::Close { radius } => PMaskOp::Close { radius: *radius },
         crate::masking::MaskOp::FillHoles { max_size } => PMaskOp::FillHoles { max_size: *max_size },
         crate::masking::MaskOp::GaussianSmooth { sigma_mm } => PMaskOp::GaussianSmooth { sigma_mm: *sigma_mm },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qsmart_config_propagates_to_core_params() {
+        // Previously the bridge punted with QsmartParams::default(), dropping config.
+        let mut cfg = PipelineConfig::default();
+        cfg.inversion.qsmart.ilsqr_tol = 0.005;
+        cfg.inversion.qsmart.ilsqr_max_iter = 99;
+        cfg.inversion.qsmart.vasc_sphere_radius = 5;
+        cfg.inversion.qsmart.sdf_spatial_radius = 6;
+        cfg.inversion.qsmart.inversion = QsmAlgorithm::Tkd;
+
+        let (_, _, inv, _) = to_pipeline_stages(&cfg);
+        assert_eq!(inv.qsmart.ilsqr_tol, 0.005);
+        assert_eq!(inv.qsmart.ilsqr_max_iter, 99);
+        assert_eq!(inv.qsmart.vasc_sphere_radius, 5);
+        assert_eq!(inv.qsmart.sdf_spatial_radius, 6);
+        assert_eq!(inv.qsmart.inversion, PInvAlg::Tkd);
+    }
+
+    #[test]
+    fn qsmart_inversion_defaults_to_ilsqr() {
+        let (_, _, inv, _) = to_pipeline_stages(&PipelineConfig::default());
+        assert_eq!(inv.qsmart.inversion, PInvAlg::Ilsqr);
     }
 }

@@ -213,6 +213,7 @@ fn downstream_steps(step_name: &str) -> &'static [&'static str] {
             "resample",
             "scale_phase",
             "inhomog",
+            "magnitude",
             "mask",
             "swi",
             "t2star_r2star",
@@ -220,11 +221,13 @@ fn downstream_steps(step_name: &str) -> &'static [&'static str] {
             "bgremove",
             "invert",
             "tgv",
+            "qsmart",
             "reference",
         ],
         "resample" => &[
             "scale_phase",
             "inhomog",
+            "magnitude",
             "mask",
             "swi",
             "t2star_r2star",
@@ -232,6 +235,7 @@ fn downstream_steps(step_name: &str) -> &'static [&'static str] {
             "bgremove",
             "invert",
             "tgv",
+            "qsmart",
             "reference",
         ],
         "scale_phase" => &[
@@ -241,15 +245,26 @@ fn downstream_steps(step_name: &str) -> &'static [&'static str] {
             "bgremove",
             "invert",
             "tgv",
+            "qsmart",
             "reference",
         ],
         "inhomog" => &[
+            "magnitude",
             "mask",
             "swi",
             "unwrap",
             "bgremove",
             "invert",
             "tgv",
+            "qsmart",
+            "reference",
+        ],
+        // Combined magnitude feeds masking, SWI, MEDI weighting, and QSMART vasculature.
+        "magnitude" => &[
+            "mask",
+            "swi",
+            "invert",
+            "qsmart",
             "reference",
         ],
         "mask" => &[
@@ -259,13 +274,14 @@ fn downstream_steps(step_name: &str) -> &'static [&'static str] {
             "bgremove",
             "invert",
             "tgv",
+            "qsmart",
             "reference",
         ],
         "swi" => &[],
         "t2star_r2star" => &[],
-        "unwrap" => &["bgremove", "invert", "reference"],
+        "unwrap" => &["bgremove", "invert", "tgv", "qsmart", "reference"],
         "bgremove" => &["invert", "reference"],
-        "invert" | "tgv" => &["reference"],
+        "invert" | "tgv" | "qsmart" => &["reference"],
         "reference" => &[],
         _ => &[],
     }
@@ -388,6 +404,52 @@ mod tests {
         assert!(!state.completed_steps.contains_key("mask"));
         assert!(!state.completed_steps.contains_key("unwrap"));
         assert!(!state.completed_steps.contains_key("bgremove"));
+    }
+
+    #[test]
+    fn test_invalidate_qsmart_cascades_to_reference() {
+        // Regression: changing a QSMART param must re-reference the final map.
+        let config = PipelineConfig::default();
+        let key = AcquisitionKey {
+            subject: "01".to_string(),
+            session: None,
+            acquisition: None,
+            reconstruction: None,
+            inversion: None,
+            run: None,
+            suffix: "MEGRE".to_string(),
+        };
+        let mut state = PipelineState::new(&config, &key);
+        state.mark_completed("qsmart", vec![], None);
+        state.mark_completed("reference", vec![], None);
+
+        state.invalidate("qsmart");
+        assert!(!state.completed_steps.contains_key("qsmart"));
+        assert!(!state.completed_steps.contains_key("reference"),
+            "reference must be invalidated when qsmart changes");
+    }
+
+    #[test]
+    fn test_qsmart_invalidated_by_upstream_steps() {
+        // QSMART reads the mask, the field (unwrap) and the magnitude, so a change to
+        // any of them — or anything further upstream — must re-run it.
+        let config = PipelineConfig::default();
+        let key = AcquisitionKey {
+            subject: "01".to_string(),
+            session: None,
+            acquisition: None,
+            reconstruction: None,
+            inversion: None,
+            run: None,
+            suffix: "MEGRE".to_string(),
+        };
+        for upstream in ["load", "scale_phase", "magnitude", "mask", "unwrap"] {
+            let mut state = PipelineState::new(&config, &key);
+            state.mark_completed("qsmart", vec![], None);
+            state.invalidate(upstream);
+            assert!(!state.completed_steps.contains_key("qsmart"),
+                "changing '{}' must invalidate qsmart", upstream);
+        }
     }
 
     #[test]

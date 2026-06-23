@@ -724,93 +724,71 @@ fn stage_qsmart(
 ) -> crate::Result<()> {
     let chi_raw_path = ctx.output.chi_raw_path(&ctx.run.key);
     let qsmart_params = serde_json::json!({
+        "inversion": format!("{}", ctx.config.inversion.qsmart.inversion),
         "sdf_spatial_radius": ctx.config.inversion.qsmart.sdf_spatial_radius,
         "vasc_sphere_radius": ctx.config.inversion.qsmart.vasc_sphere_radius,
         "ilsqr_tol": ctx.config.inversion.qsmart.ilsqr_tol,
         "ilsqr_max_iter": ctx.config.inversion.qsmart.ilsqr_max_iter,
+        "sdf_sigma1_stage1": ctx.config.inversion.qsmart.sdf_sigma1_stage1,
+        "sdf_sigma2_stage1": ctx.config.inversion.qsmart.sdf_sigma2_stage1,
+        "sdf_sigma1_stage2": ctx.config.inversion.qsmart.sdf_sigma1_stage2,
+        "sdf_sigma2_stage2": ctx.config.inversion.qsmart.sdf_sigma2_stage2,
+        "sdf_lower_lim": ctx.config.inversion.qsmart.sdf_lower_lim,
+        "sdf_curv_constant": ctx.config.inversion.qsmart.sdf_curv_constant,
+        "frangi_scale_min": ctx.config.inversion.qsmart.frangi_scale_min,
+        "frangi_scale_max": ctx.config.inversion.qsmart.frangi_scale_max,
+        "frangi_scale_ratio": ctx.config.inversion.qsmart.frangi_scale_ratio,
+        "frangi_c": ctx.config.inversion.qsmart.frangi_c,
     });
     if ctx.is_cached_with_params("qsmart", Some("qsmart"), &qsmart_params) {
         log::info!("Skipping qsmart (cached)");
         return Ok(());
     }
     let t = Instant::now();
-    let bdir = ctx.meta.b0_direction;
     log::info!(
-        "QSMART (iLSQR tol={:.0e}, max_iter={}, vasc_radius={}, sdf_radius={})",
+        "QSMART (inversion={}, ilsqr tol={:.0e}, max_iter={}, vasc_radius={}, sdf_radius={})",
+        ctx.config.inversion.qsmart.inversion,
         ctx.config.inversion.qsmart.ilsqr_tol, ctx.config.inversion.qsmart.ilsqr_max_iter,
         ctx.config.inversion.qsmart.vasc_sphere_radius, ctx.config.inversion.qsmart.sdf_spatial_radius,
     );
     progress("QSMART reconstruction");
     let field_ppm = load_volume(field_path)?;
     let mask = load_mask(mask_path)?;
-    let (nx, ny, nz) = ctx.meta.dims;
-    let (vsx, vsy, vsz) = ctx.meta.voxel_size;
-    let grid = qsm_core::Grid::new(nx, ny, nz, vsx, vsy, vsz);
-    let qsmart_defaults = qsm_core::utils::QsmartParams::default();
 
-    // Step 1: Vasculature detection
-    progress("QSMART: vasculature detection");
+    // Delegate the full two-stage QSMART reconstruction to qsm-core. The inner
+    // dipole inversion (default iLSQR) is selected via config.inversion.qsmart.inversion.
+    let (_, _, mut inv_config, _) = crate::pipeline::config::to_pipeline_stages(ctx.config);
+    let scan_meta = crate::pipeline::config::to_scan_metadata(
+        ctx.meta.dims, ctx.meta.voxel_size, &ctx.meta.echo_times,
+        ctx.meta.field_strength, ctx.meta.b0_direction,
+    );
+
+    // The vasculature sphere radius and Frangi vessel scales are configured in mm
+    // (matching qsmbly); convert to voxels using the dataset voxel size before running.
+    {
+        let (vsx, vsy, vsz) = ctx.meta.voxel_size;
+        let avg = (vsx + vsy + vsz) / 3.0;
+        let q = &mut inv_config.qsmart;
+        q.vasc_sphere_radius = (((q.vasc_sphere_radius as f64) / avg).round() as i32).max(2);
+        q.frangi_scale_range = [q.frangi_scale_range[0] / avg, q.frangi_scale_range[1] / avg];
+        q.frangi_scale_ratio = (q.frangi_scale_ratio / avg).max(0.1);
+    }
+
+    // Combined magnitude drives vasculature detection (and MEDI edge weighting if used).
     let mag_combined_path = ctx.output.magnitude_path(&ctx.run.key);
-    let magnitude = if mag_combined_path.exists() { load_volume(&mag_combined_path)? } else { vec![1.0f64; grid.n_total()] };
-    let vasc_params = qsm_core::utils::VasculatureParams {
-        sphere_radius: ctx.config.inversion.qsmart.vasc_sphere_radius,
-        frangi_scale_range: qsmart_defaults.frangi_scale_range,
-        frangi_scale_ratio: qsmart_defaults.frangi_scale_ratio,
-        frangi_c: qsmart_defaults.frangi_c,
+    let magnitude: Option<Vec<f64>> = if mag_combined_path.exists() {
+        Some(load_volume(&mag_combined_path)?)
+    } else {
+        None
     };
-    let vasc_mask = qsm_core::utils::generate_vasculature_mask(
-        &magnitude, &mask, &grid, &vasc_params, |_, _| {},
-    );
-    drop(magnitude);
-    let mask_f64: Vec<f64> = mask.iter().map(|&m| m as f64).collect();
-    let w1 = qsm_core::utils::compute_weighted_mask_stage1(&mask_f64, &vasc_mask);
-    let w2 = qsm_core::utils::compute_weighted_mask_stage2(&mask_f64, &vasc_mask, &vasc_mask);
 
-    // SDF stage 1
-    progress("QSMART: SDF stage 1");
-    let sdf_params1 = qsm_core::bgremove::SdfParams {
-        sigma1: qsmart_defaults.sdf_sigma1_stage1, sigma2: qsmart_defaults.sdf_sigma2_stage1,
-        spatial_radius: ctx.config.inversion.qsmart.sdf_spatial_radius,
-        lower_lim: qsmart_defaults.sdf_lower_lim, curv_constant: qsmart_defaults.sdf_curv_constant, use_curvature: true,
-    };
-    let lfs1 = qsm_core::bgremove::sdf::sdf(
-        &field_ppm, &w1, &vasc_mask, &grid, &sdf_params1, |_, _| {},
-    );
-
-    // iLSQR stage 1
-    progress("QSMART: iLSQR stage 1");
-    let ilsqr_params = qsm_core::inversion::IlsqrParams {
-        tol: ctx.config.inversion.qsmart.ilsqr_tol,
-        max_iter: ctx.config.inversion.qsmart.ilsqr_max_iter,
-    };
-    let (mut ilsqr1_prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "iLSQR-1");
-    let (_, _, _, chi1) = qsm_core::inversion::ilsqr(
-        &lfs1, &mask, &grid, bdir, &ilsqr_params, &mut *ilsqr1_prog,
-    );
-
-    // SDF stage 2
-    progress("QSMART: SDF stage 2");
-    let sdf_params2 = qsm_core::bgremove::SdfParams {
-        sigma1: qsmart_defaults.sdf_sigma1_stage2, sigma2: qsmart_defaults.sdf_sigma2_stage2,
-        spatial_radius: ctx.config.inversion.qsmart.sdf_spatial_radius,
-        lower_lim: qsmart_defaults.sdf_lower_lim, curv_constant: qsmart_defaults.sdf_curv_constant, use_curvature: true,
-    };
-    let lfs2 = qsm_core::bgremove::sdf::sdf(
-        &field_ppm, &w2, &vasc_mask, &grid, &sdf_params2, |_, _| {},
-    );
-
-    // iLSQR stage 2
-    progress("QSMART: iLSQR stage 2");
-    let (mut ilsqr2_prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "iLSQR-2");
-    let (_, _, _, chi2) = qsm_core::inversion::ilsqr(
-        &lfs2, &mask, &grid, bdir, &ilsqr_params, &mut *ilsqr2_prog,
-    );
-
-    // Combine
-    progress("QSMART: combining stages");
-    let chi = qsm_core::utils::adjust_offset(
-        &vasc_mask, &lfs1, &chi1, &chi2, &grid, bdir, qsmart_defaults.ppm,
-    );
+    let (mut prog, _) = iter_progress_bar(&ctx.run.key.to_string(), "QSMART");
+    // Reference with None here: stage_qsmart writes the unreferenced chi to chi_raw,
+    // and the separate reference stage applies the chosen referencing.
+    let chi = qsm_core::pipeline::run_qsmart(
+        &field_ppm, &mask, magnitude.as_deref(), &scan_meta, &inv_config,
+        qsm_core::pipeline::QsmReference::None, &mut *prog,
+    ).map_err(|e| QsmxtError::Config(format!("qsmart: {}", e)))?;
 
     save_volume(&chi_raw_path, &chi, ctx.meta)?;
     ctx.complete_step("qsmart", Some("qsmart"), qsmart_params, &[mask_path, field_path], vec![chi_raw_path], t)?;

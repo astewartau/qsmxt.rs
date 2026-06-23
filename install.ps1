@@ -42,6 +42,17 @@ if (-not (Test-Path $installDir)) {
 }
 Copy-Item -Path (Join-Path $tmpDir "qsmxt.exe") -Destination (Join-Path $installDir "qsmxt.exe") -Force
 
+# Install bundled dcm2niix (present for x86_64 Windows; ARM builds rely on PATH)
+$dcm = Join-Path $tmpDir "dcm2niix.exe"
+if (Test-Path $dcm) {
+    Copy-Item -Path $dcm -Destination (Join-Path $installDir "dcm2niix.exe") -Force
+    $dcmLicense = Join-Path $tmpDir "dcm2niix.LICENSE"
+    if (Test-Path $dcmLicense) {
+        Copy-Item -Path $dcmLicense -Destination (Join-Path $installDir "dcm2niix.LICENSE") -Force
+    }
+    Write-Host "Installed bundled dcm2niix to $installDir\dcm2niix.exe"
+}
+
 # Clean up
 Remove-Item -Force $tmpZip
 Remove-Item -Recurse -Force $tmpDir

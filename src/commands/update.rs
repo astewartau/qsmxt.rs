@@ -215,8 +215,55 @@ fn install_release(tag: &str) -> crate::Result<()> {
         }
     }
 
+    // Install the bundled dcm2niix (if present in the archive) into ~/.qsmxt/bin,
+    // mirroring the install scripts so `find_dcm2niix()` picks it up.
+    install_bundled_dcm2niix(tmp.path());
+
     println!("Updated qsmxt to {} at {}", tag, dest.display());
     Ok(())
+}
+
+/// Copies the extracted dcm2niix (if any) into the qsmxt bin dir (`~/.qsmxt/bin`).
+/// Best-effort: a missing dcm2niix (e.g. on ARM targets) or copy failure only
+/// produces a warning, since the binary update itself already succeeded.
+fn install_bundled_dcm2niix(extract_dir: &std::path::Path) {
+    #[cfg(target_os = "windows")]
+    let dcm_name = "dcm2niix.exe";
+    #[cfg(not(target_os = "windows"))]
+    let dcm_name = "dcm2niix";
+
+    let src = extract_dir.join(dcm_name);
+    if !src.exists() {
+        return; // no bundled dcm2niix for this target
+    }
+
+    let Some(bin_dir) = crate::dicom::convert::qsmxt_bin_dir() else {
+        eprintln!("Warning: could not determine ~/.qsmxt/bin; skipping bundled dcm2niix install");
+        return;
+    };
+
+    if let Err(e) = std::fs::create_dir_all(&bin_dir) {
+        eprintln!("Warning: failed to create {}: {}", bin_dir.display(), e);
+        return;
+    }
+
+    let dest = bin_dir.join(dcm_name);
+    if let Err(e) = std::fs::copy(&src, &dest) {
+        eprintln!("Warning: failed to install bundled dcm2niix to {}: {}", dest.display(), e);
+        return;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&dest) {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() | 0o111);
+            let _ = std::fs::set_permissions(&dest, perms);
+        }
+    }
+
+    println!("Installed bundled dcm2niix to {}", dest.display());
 }
 
 pub fn execute(args: UpdateArgs) -> crate::Result<()> {

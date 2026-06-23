@@ -93,8 +93,26 @@ impl Default for TgvConfig {
 pub struct QsmartConfig {
     pub ilsqr_tol: f64,
     pub ilsqr_max_iter: usize,
+    /// Bottom-hat sphere radius for vasculature detection, in mm (converted to voxels at run time)
     pub vasc_sphere_radius: i32,
     pub sdf_spatial_radius: i32,
+    /// Inner dipole inversion algorithm used for both QSMART stages
+    pub inversion: QsmAlgorithm,
+    // SDF kernel sigmas (voxels)
+    pub sdf_sigma1_stage1: f64,
+    pub sdf_sigma2_stage1: f64,
+    pub sdf_sigma1_stage2: f64,
+    pub sdf_sigma2_stage2: f64,
+    /// SDF proximity lower limit
+    pub sdf_lower_lim: f64,
+    /// SDF curvature constant
+    pub sdf_curv_constant: f64,
+    // Frangi vesselness, vessel radii in mm (converted to voxels at run time)
+    pub frangi_scale_min: f64,
+    pub frangi_scale_max: f64,
+    pub frangi_scale_ratio: f64,
+    /// Frangi C noise threshold (unitless)
+    pub frangi_c: f64,
 }
 impl Default for QsmartConfig {
     fn default() -> Self {
@@ -102,6 +120,17 @@ impl Default for QsmartConfig {
         Self {
             ilsqr_tol: p.ilsqr_tol, ilsqr_max_iter: p.ilsqr_max_iter,
             vasc_sphere_radius: p.vasc_sphere_radius, sdf_spatial_radius: p.sdf_spatial_radius,
+            inversion: QsmAlgorithm::Ilsqr,
+            sdf_sigma1_stage1: p.sdf_sigma1_stage1,
+            sdf_sigma2_stage1: p.sdf_sigma2_stage1,
+            sdf_sigma1_stage2: p.sdf_sigma1_stage2,
+            sdf_sigma2_stage2: p.sdf_sigma2_stage2,
+            sdf_lower_lim: p.sdf_lower_lim,
+            sdf_curv_constant: p.sdf_curv_constant,
+            frangi_scale_min: p.frangi_scale_range[0],
+            frangi_scale_max: p.frangi_scale_range[1],
+            frangi_scale_ratio: p.frangi_scale_ratio,
+            frangi_c: p.frangi_c,
         }
     }
 }

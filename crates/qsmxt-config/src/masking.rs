@@ -98,6 +98,17 @@ pub fn default_mask_sections() -> Vec<MaskSection> {
     }]
 }
 
+/// QSMART has no internal mask erosion (unlike V-SHARP), so it needs a tight
+/// brain mask — a loose threshold mask leaks non-brain phase into the global
+/// dipole inversion and produces streaking. Default QSMART to BET-on-magnitude.
+pub fn qsmart_default_mask_sections() -> Vec<MaskSection> {
+    vec![MaskSection {
+        input: MaskingInput::Magnitude,
+        generator: MaskOp::Bet { fractional_intensity: 0.5 },
+        refinements: vec![MaskOp::Erode { iterations: 2 }],
+    }]
+}
+
 pub fn parse_mask_op(s: &str) -> crate::Result<MaskOp> {
     let parts: Vec<&str> = s.splitn(3, ':').collect();
     match parts[0] {

@@ -12,8 +12,67 @@ pub enum ConvertMessage {
     Done { bids_dir: PathBuf },
 }
 
-/// Check if dcm2niix is available on PATH.
+/// dcm2niix version bundled with release builds (see .github/workflows/release.yml).
+/// Kept in sync with the `DCM2NIIX_VERSION` pin in the release workflow.
+pub const DCM2NIIX_BUNDLED_VERSION: &str = "v1.0.20260416";
+
+/// Bare executable name for the current platform.
+fn dcm2niix_exe_name() -> &'static str {
+    if cfg!(target_os = "windows") { "dcm2niix.exe" } else { "dcm2niix" }
+}
+
+/// Directory where the bundled dcm2niix is installed (`~/.qsmxt/bin`).
+/// Matches the install scripts and `qsmxt update`.
+pub fn qsmxt_bin_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join(".qsmxt").join("bin"))
+}
+
+/// Resolve the dcm2niix executable, preferring the bundled copy over PATH.
+///
+/// Resolution order:
+/// 1. `QSMXT_DCM2NIIX` env override (explicit path)
+/// 2. bundled copy in `~/.qsmxt/bin`
+/// 3. sibling of the current executable
+/// 4. PATH (`which`/`where`)
+///
+/// Returns `None` if dcm2niix cannot be found anywhere.
 pub fn find_dcm2niix() -> Option<PathBuf> {
+    let exe = dcm2niix_exe_name();
+
+    // 1. Explicit override.
+    if let Some(p) = std::env::var_os("QSMXT_DCM2NIIX") {
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    // 2. Bundled copy in ~/.qsmxt/bin.
+    if let Some(dir) = qsmxt_bin_dir() {
+        let candidate = dir.join(exe);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    // 3. Sibling of the current executable.
+    if let Ok(cur) = std::env::current_exe() {
+        if let Some(parent) = cur.parent() {
+            let candidate = parent.join(exe);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    // 4. PATH lookup.
+    find_dcm2niix_on_path()
+}
+
+/// Look up dcm2niix on PATH via `which` (Unix) or `where` (Windows).
+fn find_dcm2niix_on_path() -> Option<PathBuf> {
     let output = Command::new("which").arg("dcm2niix").output().ok()?;
     if output.status.success() {
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -153,6 +212,19 @@ pub fn convert_session_streaming(
     output_dir: &Path,
     tx: &mpsc::Sender<ConvertMessage>,
 ) {
+    let dcm2niix = match find_dcm2niix() {
+        Some(p) => p,
+        None => {
+            let _ = tx.send(ConvertMessage::Error(
+                "dcm2niix not found: no bundled copy in ~/.qsmxt/bin and not on PATH. \
+                 Reinstall qsmxt or install dcm2niix manually."
+                    .to_string(),
+            ));
+            let _ = tx.send(ConvertMessage::Done { bids_dir: output_dir.to_path_buf() });
+            return;
+        }
+    };
+
     if let Err(e) = fs::create_dir_all(output_dir) {
         let _ = tx.send(ConvertMessage::Error(format!("Failed to create output directory: {}", e)));
         let _ = tx.send(ConvertMessage::Done { bids_dir: output_dir.to_path_buf() });
@@ -160,6 +232,7 @@ pub fn convert_session_streaming(
     }
 
     let _ = tx.send(ConvertMessage::Log(format!("Output BIDS directory: {}", output_dir.display())));
+    let _ = tx.send(ConvertMessage::Log(format!("Using dcm2niix: {}", dcm2niix.display())));
 
     for subject in &session.subjects {
         let sub_label = &subject.patient_id;
@@ -193,6 +266,7 @@ pub fn convert_session_streaming(
                     };
 
                     let result = convert_series(
+                        &dcm2niix,
                         series,
                         sub_label,
                         ses_label.as_deref(),
@@ -221,7 +295,9 @@ struct SeriesConvertResult {
     errors: Vec<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn convert_series(
+    dcm2niix: &Path,
     series: &super::DicomSeries,
     sub_label: &str,
     ses_label: Option<&str>,
@@ -277,7 +353,7 @@ fn convert_series(
 
     // Run dcm2niix with a temp filename — we'll rename outputs ourselves
     let temp_base = "temp_output";
-    let dcm2niix_result = Command::new("dcm2niix")
+    let dcm2niix_result = Command::new(dcm2niix)
         .args(["-o", &temp_dir.to_string_lossy()])
         .args(["-f", temp_base])
         .args(["-z", "y"])
@@ -337,7 +413,7 @@ fn convert_series(
             let json_path = nii_to_json_path(nii_path);
             let _ = fs::remove_file(&json_path);
 
-            let rerun = Command::new("dcm2niix")
+            let rerun = Command::new(dcm2niix)
                 .args(["-o", &temp_dir.to_string_lossy()])
                 .args(["-f", temp_base])
                 .args(["-z", "y"])
@@ -443,6 +519,107 @@ fn convert_series(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate process-wide environment variables.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn test_dcm2niix_exe_name() {
+        let name = dcm2niix_exe_name();
+        if cfg!(target_os = "windows") {
+            assert_eq!(name, "dcm2niix.exe");
+        } else {
+            assert_eq!(name, "dcm2niix");
+        }
+    }
+
+    #[test]
+    fn test_qsmxt_bin_dir_ends_with_qsmxt_bin() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let prev_userprofile = std::env::var_os("USERPROFILE");
+        std::env::set_var("HOME", "/tmp/fake-home");
+        std::env::remove_var("USERPROFILE");
+
+        let dir = qsmxt_bin_dir().expect("bin dir");
+        assert_eq!(dir, PathBuf::from("/tmp/fake-home/.qsmxt/bin"));
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        if let Some(v) = prev_userprofile {
+            std::env::set_var("USERPROFILE", v);
+        }
+    }
+
+    #[test]
+    fn test_find_dcm2niix_env_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // Point the override at a file that exists (this test binary itself).
+        let real_file = std::env::current_exe().expect("current exe");
+        let prev = std::env::var_os("QSMXT_DCM2NIIX");
+        std::env::set_var("QSMXT_DCM2NIIX", &real_file);
+
+        assert_eq!(find_dcm2niix(), Some(real_file));
+
+        match prev {
+            Some(v) => std::env::set_var("QSMXT_DCM2NIIX", v),
+            None => std::env::remove_var("QSMXT_DCM2NIIX"),
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn test_find_dcm2niix_prefers_bundled_in_home() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let prev_userprofile = std::env::var_os("USERPROFILE");
+        let prev_override = std::env::var_os("QSMXT_DCM2NIIX");
+        std::env::remove_var("QSMXT_DCM2NIIX");
+
+        // Fake HOME with a bundled dcm2niix at ~/.qsmxt/bin/dcm2niix.
+        let home = tempfile::tempdir().expect("temp home");
+        let bin = home.path().join(".qsmxt").join("bin");
+        std::fs::create_dir_all(&bin).expect("mkdir bin");
+        let bundled = bin.join("dcm2niix");
+        std::fs::write(&bundled, b"#!/bin/sh\n").expect("write stub");
+        std::env::set_var("HOME", home.path());
+        std::env::remove_var("USERPROFILE");
+
+        // Resolver must return the bundled copy (step 2), ahead of any PATH copy.
+        assert_eq!(find_dcm2niix(), Some(bundled));
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        if let Some(v) = prev_userprofile {
+            std::env::set_var("USERPROFILE", v);
+        }
+        if let Some(v) = prev_override {
+            std::env::set_var("QSMXT_DCM2NIIX", v);
+        }
+    }
+
+    #[test]
+    fn test_find_dcm2niix_env_override_nonexistent_is_ignored() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev = std::env::var_os("QSMXT_DCM2NIIX");
+        std::env::set_var("QSMXT_DCM2NIIX", "/nonexistent/path/to/dcm2niix");
+
+        // A bogus override must not be returned; resolution falls through.
+        assert_ne!(
+            find_dcm2niix(),
+            Some(PathBuf::from("/nonexistent/path/to/dcm2niix"))
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("QSMXT_DCM2NIIX", v),
+            None => std::env::remove_var("QSMXT_DCM2NIIX"),
+        }
+    }
 
     #[test]
     fn test_parse_dcm2niix_suffixes() {

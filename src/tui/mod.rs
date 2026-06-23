@@ -40,6 +40,8 @@ pub fn run_tui() -> crate::Result<()> {
     loop {
         // Always poll for background DICOM scan/convert completion
         app.dicom_state.poll_scan();
+        // Resolve dcm2niix once for the availability indicator (cached).
+        app.dicom_state.ensure_dcm2niix_checked();
         if let Some(bids_dir) = app.dicom_state.poll_convert() {
             if app.dicom_state.convert_status == app::ConvertStatus::Done {
                 app.form.bids_dir = bids_dir.to_string_lossy().to_string();

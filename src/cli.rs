@@ -235,6 +235,39 @@ pub struct QsmartParamArgs {
     /// QSMART SDF spatial radius
     #[arg(long)]
     pub qsmart_sdf_spatial_radius: Option<i32>,
+    /// QSMART inner dipole inversion algorithm (default: ilsqr)
+    #[arg(long)]
+    pub qsmart_inversion: Option<QsmAlgorithmArg>,
+    /// QSMART SDF sigma1, stage 1 (voxels)
+    #[arg(long)]
+    pub qsmart_sdf_sigma1_stage1: Option<f64>,
+    /// QSMART SDF sigma2, stage 1 (voxels)
+    #[arg(long)]
+    pub qsmart_sdf_sigma2_stage1: Option<f64>,
+    /// QSMART SDF sigma1, stage 2 (voxels)
+    #[arg(long)]
+    pub qsmart_sdf_sigma1_stage2: Option<f64>,
+    /// QSMART SDF sigma2, stage 2 (voxels)
+    #[arg(long)]
+    pub qsmart_sdf_sigma2_stage2: Option<f64>,
+    /// QSMART SDF proximity lower limit
+    #[arg(long)]
+    pub qsmart_sdf_lower_lim: Option<f64>,
+    /// QSMART SDF curvature constant
+    #[arg(long)]
+    pub qsmart_sdf_curv_constant: Option<f64>,
+    /// QSMART Frangi min vessel radius (mm)
+    #[arg(long)]
+    pub qsmart_frangi_scale_min: Option<f64>,
+    /// QSMART Frangi max vessel radius (mm)
+    #[arg(long)]
+    pub qsmart_frangi_scale_max: Option<f64>,
+    /// QSMART Frangi scale step (mm)
+    #[arg(long)]
+    pub qsmart_frangi_scale_ratio: Option<f64>,
+    /// QSMART Frangi C noise threshold
+    #[arg(long)]
+    pub qsmart_frangi_c: Option<f64>,
 }
 
 #[derive(Args, Debug, Default, Clone)]
