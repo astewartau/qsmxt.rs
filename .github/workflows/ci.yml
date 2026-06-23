@@ -31,6 +31,11 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      # Fails if a qsm-core *Params field isn't represented in its qsmxt-config
+      # *Config wrapper (drift guard). See crates/qsmxt-config/tests/param_coverage.rs.
+      - name: Param coverage (qsmxt-config vs qsm-core)
+        run: cargo test -p qsmxt-config --features introspection --test param_coverage
+
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest

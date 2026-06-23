@@ -160,3 +160,24 @@ jobs:
           files: |
             qsmxt-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
             qsmxt-${{ github.ref_name }}-${{ matrix.target }}.zip
+
+  # Tell qsmbly (astewartau/qsm-wasm) a new qsmxt-config tag exists so it can
+  # open a PR bumping its pin. Requires a QSMBLY_DISPATCH_TOKEN secret: a
+  # fine-grained PAT with Contents+Actions write on astewartau/qsm-wasm
+  # (the default GITHUB_TOKEN cannot trigger workflows in another repo).
+  notify-qsmbly:
+    name: Notify qsmbly of new qsmxt-config
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch pin-bump event
+        env:
+          GH_TOKEN: ${{ secrets.QSMBLY_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "QSMBLY_DISPATCH_TOKEN not set — skipping qsmbly notification." >&2
+            exit 0
+          fi
+          gh api repos/astewartau/qsm-wasm/dispatches \
+            -f event_type=qsmxt-config-release \
+            -f "client_payload[version]=${GITHUB_REF_NAME}"
