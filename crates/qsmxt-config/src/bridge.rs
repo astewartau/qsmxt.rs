@@ -70,13 +70,16 @@ pub fn to_pipeline_stages(cfg: &PipelineConfig) -> (
             individual: cfg.field_mapping.romeo.individual,
             correct_global: cfg.field_mapping.romeo.correct_global,
             template: cfg.field_mapping.romeo.template,
+            phase_coherence: cfg.field_mapping.romeo.phase_coherence,
             phase_gradient_coherence: cfg.field_mapping.romeo.phase_gradient_coherence,
+            phase_linearity: cfg.field_mapping.romeo.phase_linearity,
             mag_coherence: cfg.field_mapping.romeo.mag_coherence,
             mag_weight: cfg.field_mapping.romeo.mag_weight,
+            mag_weight2: cfg.field_mapping.romeo.mag_weight2,
             ..Default::default()
         },
         linear_fit_params: qsm_core::utils::LinearFitParams {
-            estimate_offset: true,
+            estimate_offset: cfg.field_mapping.linear_fit.estimate_offset,
             reliability_threshold_percentile: cfg.field_mapping.linear_fit.reliability_threshold_percentile,
         },
     };
@@ -128,7 +131,11 @@ pub fn to_pipeline_stages(cfg: &PipelineConfig) -> (
         tsvd: qsm_core::inversion::TkdParams { threshold: cfg.inversion.tsvd.threshold },
         tikhonov: qsm_core::inversion::TikhonovParams {
             lambda: cfg.inversion.tikhonov.lambda,
-            ..Default::default()
+            reg: match cfg.inversion.tikhonov.reg {
+                crate::config::TikhonovReg::Identity => qsm_core::inversion::Regularization::Identity,
+                crate::config::TikhonovReg::Gradient => qsm_core::inversion::Regularization::Gradient,
+                crate::config::TikhonovReg::Laplacian => qsm_core::inversion::Regularization::Laplacian,
+            },
         },
         tv: qsm_core::inversion::TvParams {
             lambda: cfg.inversion.tv.lambda, rho: cfg.inversion.tv.rho,
@@ -146,14 +153,15 @@ pub fn to_pipeline_stages(cfg: &PipelineConfig) -> (
         },
         medi: qsm_core::inversion::MediParams {
             lambda: cfg.inversion.medi.lambda,
+            merit: cfg.inversion.medi.merit,
             smv: cfg.inversion.medi.smv,
             smv_radius: cfg.inversion.medi.smv_radius,
+            data_weighting: cfg.inversion.medi.data_weighting,
             percentage: cfg.inversion.medi.percentage,
             cg_tol: cfg.inversion.medi.cg_tol,
             cg_max_iter: cfg.inversion.medi.cg_max_iter,
             max_iter: cfg.inversion.medi.max_iter,
             tol: cfg.inversion.medi.tol,
-            ..Default::default()
         },
         ilsqr: qsm_core::inversion::IlsqrParams {
             tol: cfg.inversion.ilsqr.tol, max_iter: cfg.inversion.ilsqr.max_iter,

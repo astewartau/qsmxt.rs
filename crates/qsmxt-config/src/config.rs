@@ -30,13 +30,12 @@ param_config!(TvConfig from qsm_core::inversion::TvParams {
     lambda: f64, rho: f64, tol: f64, max_iter: usize
 });
 param_config!(TkdConfig from qsm_core::inversion::TkdParams { threshold: f64 });
-param_config!(TikhonovConfig from qsm_core::inversion::TikhonovParams { lambda: f64 });
 param_config!(NltvConfig from qsm_core::inversion::NltvParams {
     lambda: f64, mu: f64, tol: f64, max_iter: usize, newton_iter: usize
 });
 param_config!(MediConfig from qsm_core::inversion::MediParams {
-    lambda: f64, max_iter: usize, cg_max_iter: usize, cg_tol: f64, tol: f64,
-    percentage: f64, smv_radius: f64, smv: bool
+    lambda: f64, merit: bool, smv: bool, smv_radius: f64, data_weighting: i32,
+    percentage: f64, cg_tol: f64, cg_max_iter: usize, max_iter: usize, tol: f64
 });
 param_config!(IlsqrConfig from qsm_core::inversion::IlsqrParams { tol: f64, max_iter: usize });
 param_config!(VsharpConfig from qsm_core::bgremove::VsharpParams {
@@ -62,8 +61,46 @@ param_config!(HomogeneityConfig from qsm_core::utils::HomogeneityParams {
     sigma_mm: f64, nbox: usize
 });
 param_config!(LinearFitConfig from qsm_core::utils::LinearFitParams {
-    reliability_threshold_percentile: f64
+    estimate_offset: bool, reliability_threshold_percentile: f64
 });
+
+// Tikhonov regularization operator (mirrors qsm_core::inversion::Regularization)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TikhonovReg { Identity, Gradient, Laplacian }
+
+// Tikhonov config (special: carries the regularization operator enum)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TikhonovConfig {
+    pub lambda: f64,
+    pub reg: TikhonovReg,
+}
+impl Default for TikhonovConfig {
+    fn default() -> Self {
+        let p = qsm_core::inversion::TikhonovParams::default();
+        Self {
+            lambda: p.lambda,
+            reg: match p.reg {
+                qsm_core::inversion::Regularization::Identity => TikhonovReg::Identity,
+                qsm_core::inversion::Regularization::Gradient => TikhonovReg::Gradient,
+                qsm_core::inversion::Regularization::Laplacian => TikhonovReg::Laplacian,
+            },
+        }
+    }
+}
+
+// MCPC-3D-S phase-offset smoothing sigma (voxels)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Mcpc3dsConfig {
+    pub sigma: [f64; 3],
+}
+impl Default for Mcpc3dsConfig {
+    fn default() -> Self {
+        Self { sigma: qsm_core::utils::PhaseOffsetParams::default().sigma }
+    }
+}
 
 // TGV needs special handling (f32→f64 conversion)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -78,11 +115,14 @@ pub struct TgvConfig {
 }
 impl Default for TgvConfig {
     fn default() -> Self {
+        // Widen f32→f64 via the canonical decimal so e.g. 0.001f32 stays "0.001"
+        // rather than the noisy exact double 0.0010000000474974513.
+        let widen = |x: f32| x.to_string().parse::<f64>().unwrap_or(x as f64);
         let p = qsm_core::inversion::TgvParams::default();
         Self {
             iterations: p.iterations, erosions: p.erosions,
-            alpha0: p.alpha0 as f64, alpha1: p.alpha1 as f64,
-            step_size: p.step_size as f64, tol: p.tol as f64,
+            alpha0: widen(p.alpha0), alpha1: widen(p.alpha1),
+            step_size: widen(p.step_size), tol: widen(p.tol),
         }
     }
 }
@@ -142,9 +182,12 @@ pub struct RomeoConfig {
     pub individual: bool,
     pub correct_global: bool,
     pub template: usize,
+    pub phase_coherence: bool,
     pub phase_gradient_coherence: bool,
+    pub phase_linearity: bool,
     pub mag_coherence: bool,
     pub mag_weight: bool,
+    pub mag_weight2: bool,
 }
 impl Default for RomeoConfig {
     fn default() -> Self {
@@ -153,9 +196,12 @@ impl Default for RomeoConfig {
             individual: true,       // qsmxt default (matches Julia qsm_romeo_B0)
             correct_global: true,   // qsmxt default
             template: p.template,
+            phase_coherence: p.phase_coherence,
             phase_gradient_coherence: p.phase_gradient_coherence,
+            phase_linearity: p.phase_linearity,
             mag_coherence: p.mag_coherence,
             mag_weight: p.mag_weight,
+            mag_weight2: p.mag_weight2,
         }
     }
 }
