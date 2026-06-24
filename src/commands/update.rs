@@ -171,36 +171,78 @@ fn install_release(tag: &str) -> crate::Result<()> {
         )));
     }
 
-    // Install — try direct move first, fall back to sudo on Unix
-    let moved = std::fs::rename(&extracted, &dest);
-    if moved.is_err() {
-        // rename can fail across filesystems or due to permissions; try copy
-        if std::fs::copy(&extracted, &dest).is_err() {
-            #[cfg(not(target_os = "windows"))]
-            {
-                println!("Installing to {} (requires sudo)...", dir.display());
-                let status = Command::new("sudo")
-                    .args(["cp"])
-                    .arg(&extracted)
-                    .arg(&dest)
-                    .status()
-                    .map_err(|e| {
-                        QsmxtError::Update(format!("Failed to install with sudo: {}", e))
-                    })?;
+    // Install the new binary.
+    //
+    // We can't write over `dest` in place: when qsmxt is updating itself,
+    // `dest` is the currently-running executable, and truncating/copying over
+    // it fails with ETXTBSY ("Text file busy"). Instead we stage the new binary
+    // in the *destination directory* (so it lands on the same filesystem) and
+    // then `rename` it into place. rename(2) is atomic and is permitted even
+    // while the old binary is still running — the running process keeps the old
+    // inode and the path is repointed at the new file.
+    let staged = dir.join(format!(".{}.new", bin_name));
+    let _ = std::fs::remove_file(&staged); // discard any leftover from a prior run
 
-                if !status.success() {
-                    return Err(QsmxtError::Update(
-                        "Failed to install binary (sudo cp failed)".to_string(),
-                    ));
-                }
+    // Stage next to `dest`, falling back to sudo when the directory isn't
+    // writable by the current user. std::fs::copy preserves the file mode, so
+    // the staged binary keeps its executable bit.
+    if std::fs::copy(&extracted, &staged).is_err() {
+        #[cfg(not(target_os = "windows"))]
+        {
+            println!("Installing to {} (requires sudo)...", dir.display());
+            let status = Command::new("sudo")
+                .args(["cp", "-f"])
+                .arg(&extracted)
+                .arg(&staged)
+                .status()
+                .map_err(|e| {
+                    QsmxtError::Update(format!("Failed to install with sudo: {}", e))
+                })?;
+
+            if !status.success() {
+                return Err(QsmxtError::Update(
+                    "Failed to stage binary (sudo cp failed)".to_string(),
+                ));
             }
-            #[cfg(target_os = "windows")]
-            {
-                return Err(QsmxtError::Update(format!(
-                    "Failed to copy binary to {}",
-                    dest.display()
-                )));
+        }
+        #[cfg(target_os = "windows")]
+        {
+            return Err(QsmxtError::Update(format!(
+                "Failed to stage binary in {}",
+                dir.display()
+            )));
+        }
+    }
+
+    // Atomically swap the staged binary into place. A plain rename only needs
+    // write permission on the directory, so it succeeds even when `dest` is
+    // owned by root from a prior sudo install; otherwise fall back to `sudo mv`.
+    if std::fs::rename(&staged, &dest).is_err() {
+        #[cfg(not(target_os = "windows"))]
+        {
+            let status = Command::new("sudo")
+                .args(["mv", "-f"])
+                .arg(&staged)
+                .arg(&dest)
+                .status()
+                .map_err(|e| {
+                    QsmxtError::Update(format!("Failed to install with sudo: {}", e))
+                })?;
+
+            if !status.success() {
+                let _ = Command::new("sudo").args(["rm", "-f"]).arg(&staged).status();
+                return Err(QsmxtError::Update(
+                    "Failed to install binary (sudo mv failed)".to_string(),
+                ));
             }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::fs::remove_file(&staged);
+            return Err(QsmxtError::Update(format!(
+                "Failed to install binary to {}",
+                dest.display()
+            )));
         }
     }
 
