@@ -380,4 +380,72 @@ impl PipelineConfig {
     pub fn to_json(&self) -> crate::Result<String> {
         serde_json::to_string(self).map_err(|e| crate::error::ConfigError::Serialize(format!("{}", e)))
     }
+
+    /// Like [`to_toml`](Self::to_toml), but prunes the `inversion` and `bg_removal`
+    /// tables down to the selected algorithm only (keeping `algorithm` + its one
+    /// sub-table). The result still round-trips through [`from_toml`](Self::from_toml):
+    /// the omitted algorithms simply fall back to their `#[serde(default)]` values.
+    /// Useful for a compact, human-facing config that drops every unselected
+    /// algorithm's parameters.
+    pub fn to_toml_selected(&self) -> crate::Result<String> {
+        let mut value = toml::Value::try_from(self)
+            .map_err(|e| crate::error::ConfigError::Serialize(format!("{}", e)))?;
+        if let toml::Value::Table(root) = &mut value {
+            prune_to_selected_algorithm(root, "inversion");
+            prune_to_selected_algorithm(root, "bg_removal");
+        }
+        toml::to_string_pretty(&value)
+            .map_err(|e| crate::error::ConfigError::Serialize(format!("{}", e)))
+    }
+}
+
+/// In `root[section]`, drop every nested algorithm table except the one whose key
+/// matches that section's `algorithm` value. Keeps `algorithm` and any non-table keys.
+/// No-op if the section or its `algorithm` field is absent.
+fn prune_to_selected_algorithm(root: &mut toml::value::Table, section: &str) {
+    let Some(toml::Value::Table(sub)) = root.get_mut(section) else { return };
+    let Some(selected) = sub.get("algorithm").and_then(|v| v.as_str()).map(str::to_owned) else { return };
+    let to_remove: Vec<String> = sub
+        .iter()
+        .filter(|(k, v)| k.as_str() != "algorithm" && v.is_table() && k.as_str() != selected)
+        .map(|(k, _)| k.clone())
+        .collect();
+    for k in &to_remove {
+        sub.remove(k);
+    }
+}
+
+#[cfg(test)]
+mod selected_toml_tests {
+    use super::*;
+    use crate::enums::{BfAlgorithm, QsmAlgorithm};
+
+    #[test]
+    fn to_toml_selected_prunes_and_roundtrips() {
+        let mut c = PipelineConfig::default();
+        c.inversion.algorithm = QsmAlgorithm::Rts;
+        c.inversion.rts.delta = 0.22; // non-default, must survive
+        c.bg_removal.algorithm = BfAlgorithm::Vsharp;
+        c.bg_removal.vsharp.threshold = 0.05; // non-default, must survive
+
+        let toml = c.to_toml_selected().unwrap();
+
+        // Only the selected algorithm tables remain.
+        assert!(toml.contains("[inversion.rts]"), "selected inversion kept");
+        assert!(!toml.contains("[inversion.tkd]"), "unselected inversion pruned");
+        assert!(!toml.contains("[inversion.medi]"), "unselected inversion pruned");
+        assert!(toml.contains("[bg_removal.vsharp]"), "selected bg kept");
+        assert!(!toml.contains("[bg_removal.pdf]"), "unselected bg pruned");
+        // Non-algorithm sections are untouched.
+        assert!(toml.contains("[masking]"));
+
+        // Round-trips like any qsmxt config: selected values preserved, omitted = defaults.
+        let loaded = PipelineConfig::from_toml(&toml).unwrap();
+        assert_eq!(loaded.inversion.algorithm, QsmAlgorithm::Rts);
+        assert_eq!(loaded.inversion.rts.delta, 0.22);
+        assert_eq!(loaded.bg_removal.vsharp.threshold, 0.05);
+        // Pruned algorithms came back as their defaults.
+        assert_eq!(loaded.inversion.tkd, super::TkdConfig::default());
+        assert_eq!(loaded.bg_removal.pdf, super::PdfConfig::default());
+    }
 }
