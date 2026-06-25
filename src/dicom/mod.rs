@@ -428,28 +428,37 @@ fn read_enhanced_dicom_frames(path: &Path) -> Vec<DicomFileInfo> {
 fn auto_label_series(image_type: &[String], description: &str) -> SeriesType {
     let desc_lower = description.to_lowercase();
 
-    // Check ImageType values
+    // Phase / real / imaginary are unambiguous reconstructions — honor ImageType first.
     for val in image_type {
         match val.as_str() {
             "P" | "PHASE" => return SeriesType::Phase,
-            "M" | "MAG" | "MAGNITUDE" => return SeriesType::Magnitude,
             "REAL" => return SeriesType::Real,
             "IMAGINARY" => return SeriesType::Imaginary,
             _ => {}
         }
     }
 
-    // Check description for hints
+    // A magnitude image that is clearly a T1 structural (MPRAGE/MP2RAGE/T1w) should
+    // be labeled T1w, not a generic GRE magnitude — check this BEFORE the magnitude
+    // marker, since structurals carry an "M" ImageType too.
     if desc_lower.contains("t1") && (desc_lower.contains("mprage") || desc_lower.contains("mp2rage") || desc_lower.contains("t1w")) {
         return SeriesType::T1w;
     }
+
+    // Magnitude marker
+    for val in image_type {
+        if matches!(val.as_str(), "M" | "MAG" | "MAGNITUDE") {
+            return SeriesType::Magnitude;
+        }
+    }
+
+    // Description-based fallbacks
     if desc_lower.contains("phase") || desc_lower.ends_with("_ph") {
         return SeriesType::Phase;
     }
     if desc_lower.contains("mag") {
         return SeriesType::Magnitude;
     }
-
     // Default to magnitude for GRE-looking sequences
     if desc_lower.contains("gre") || desc_lower.contains("swi") || desc_lower.contains("qsm") {
         return SeriesType::Magnitude;
@@ -809,16 +818,36 @@ mod tests {
 
     #[test]
     fn test_no_split_on_odd_frame() {
-        // A magnitude structural with one odd T1w-by-description frame stays ONE series.
-        let mag = ["ORIGINAL", "PRIMARY", "M_FFE", "M", "FFE"];
-        let odd = ["ORIGINAL", "PRIMARY", "FFE"]; // no M/P → desc says t1w
-        let mut files: Vec<DicomFileInfo> = (0..5).map(|i| dcm("U2", "3D T1W_1mmiso", &mag, i)).collect();
-        files.push(dcm("U2", "3D T1W_1mmiso", &odd, 99));
+        // A magnitude series with one odd non-data frame (no M/P, no useful hint →
+        // Extra) must NOT split — only 1 data type (Magnitude) is present.
+        let mag = ["ORIGINAL", "PRIMARY", "M", "ND"];
+        let odd = ["DERIVED", "SECONDARY"]; // no M/P, desc has no hint → Extra
+        let mut files: Vec<DicomFileInfo> = (0..5).map(|i| dcm("U2", "phantom_scan", &mag, i)).collect();
+        files.push(dcm("U2", "phantom_scan", &odd, 99));
         let mut times = HashMap::new();
         let series = split_uid_into_series("U2", &files, &mut times);
         assert_eq!(series.len(), 1, "a single odd frame must not spawn a separate series");
         assert_eq!(series[0].num_files, 6);
         assert_eq!(series[0].series_uid, "U2", "single-type UID keeps its plain id");
+    }
+
+    #[test]
+    fn test_t1_structural_is_t1w_not_magnitude() {
+        // Structurals carry an "M" ImageType but must be T1w, not generic magnitude.
+        assert_eq!(
+            auto_label_series(&["ORIGINAL".into(), "PRIMARY".into(), "M".into(), "NORM".into(), "DIS3D".into()], "t1_mprage_sag_p2"),
+            SeriesType::T1w);
+        assert_eq!(
+            auto_label_series(&["ORIGINAL".into(), "PRIMARY".into(), "M_FFE".into(), "M".into(), "FFE".into()], "3D T1W_1mmiso_CS2.5_TFE157"),
+            SeriesType::T1w);
+        // A real GRE/QSM magnitude with "M" stays Magnitude.
+        assert_eq!(
+            auto_label_series(&["ORIGINAL".into(), "PRIMARY".into(), "M".into(), "ND".into()], "gre_qsm_5echoes"),
+            SeriesType::Magnitude);
+        // Phase still wins regardless of description.
+        assert_eq!(
+            auto_label_series(&["ORIGINAL".into(), "PRIMARY".into(), "P".into(), "ND".into()], "gre_qsm_5echoes"),
+            SeriesType::Phase);
     }
 
     #[test]
