@@ -56,7 +56,7 @@ impl SeriesType {
 }
 
 /// Metadata extracted from a single DICOM file.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct DicomFileInfo {
     path: PathBuf,
     patient_id: String,
@@ -458,6 +458,80 @@ fn auto_label_series(image_type: &[String], description: &str) -> SeriesType {
     SeriesType::Extra
 }
 
+/// Turn one SeriesInstanceUID's files into one or more `DicomSeries`.
+///
+/// Most scanners (Siemens) give magnitude and phase separate UIDs, so a UID maps
+/// to one series. But Philips (and some GE) pack multiple reconstructions —
+/// magnitude AND phase — under a SINGLE UID; those must be split so phase isn't
+/// silently treated as magnitude. We split only when a UID genuinely holds 2+
+/// data reconstructions (mag/phase/real/imag), so a lone odd frame (e.g. one
+/// T1w-by-description file in a magnitude structural) does NOT spawn a stray series.
+/// When split, each series gets a disambiguated id (`<uid>#<Type>`) so downstream
+/// maps keyed on `series_uid` don't collide; single-type UIDs keep the plain UID.
+fn split_uid_into_series(
+    uid: &str,
+    file_group: &[DicomFileInfo],
+    uid_times: &mut HashMap<String, f64>,
+) -> Vec<DicomSeries> {
+    // Bucket files by their individual ImageType classification (preserves order).
+    let mut by_type: Vec<(SeriesType, Vec<&DicomFileInfo>)> = Vec::new();
+    for f in file_group {
+        let t = auto_label_series(&f.image_type, &f.series_description);
+        match by_type.iter_mut().find(|(bt, _)| *bt == t) {
+            Some((_, files)) => files.push(f),
+            None => by_type.push((t, vec![f])),
+        }
+    }
+
+    let is_data = |t: &SeriesType| {
+        matches!(t, SeriesType::Magnitude | SeriesType::Phase | SeriesType::Real | SeriesType::Imaginary)
+    };
+    let split = by_type.iter().filter(|(t, _)| is_data(t)).count() >= 2;
+
+    // Either one series per type (split) or the whole UID as one, typed from the
+    // first file (preserving the original single-series behavior).
+    let groups: Vec<(SeriesType, Vec<&DicomFileInfo>)> = if split {
+        by_type
+    } else {
+        let st = auto_label_series(&file_group[0].image_type, &file_group[0].series_description);
+        vec![(st, file_group.iter().collect())]
+    };
+
+    let mut out = Vec::with_capacity(groups.len());
+    for (series_type, files) in &groups {
+        let first = files[0];
+        let coil_type = classify_coil_string(&first.coil_string);
+        let normalized_desc = normalize_series_description(&first.series_description);
+        let series_uid = if split {
+            format!("{}#{}", uid, series_type.label())
+        } else {
+            uid.to_string()
+        };
+
+        let mut times: Vec<f64> = files.iter().filter_map(|f| f.acquisition_time).collect();
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        if let Some(&median) = times.get(times.len() / 2) {
+            uid_times.insert(series_uid.clone(), median);
+        }
+
+        out.push(DicomSeries {
+            series_uid,
+            description: normalized_desc,
+            protocol_name: first.protocol_name.clone(),
+            series_number: first.series_number,
+            image_type: first.image_type.clone(),
+            echo_time: first.echo_time,
+            magnetic_field_strength: first.magnetic_field_strength,
+            num_files: files.len(),
+            series_type: *series_type,
+            files: files.iter().map(|f| f.path.clone()).collect(),
+            manufacturer: first.manufacturer.clone(),
+            coil_type,
+        });
+    }
+    out
+}
+
 // ─── Temporal clustering and run detection ───
 
 /// Group SeriesInstanceUIDs into runs using temporal clustering.
@@ -609,36 +683,7 @@ pub fn scan_dicom_directory(dir: &Path, progress: Arc<AtomicUsize>) -> Result<Di
             let mut uid_times: HashMap<String, f64> = HashMap::new();
 
             for (uid, file_group) in series_map {
-                let first = &file_group[0];
-                let series_type = auto_label_series(&first.image_type, &first.series_description);
-                let coil_type = classify_coil_string(&first.coil_string);
-
-                // Normalize series description (strip _RR suffixes)
-                let normalized_desc = normalize_series_description(&first.series_description);
-
-                // Compute median acquisition time for this UID
-                let mut times: Vec<f64> = file_group.iter()
-                    .filter_map(|f| f.acquisition_time)
-                    .collect();
-                times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                if let Some(&median) = times.get(times.len() / 2) {
-                    uid_times.insert(uid.clone(), median);
-                }
-
-                all_series.push(DicomSeries {
-                    series_uid: uid.clone(),
-                    description: normalized_desc,
-                    protocol_name: first.protocol_name.clone(),
-                    series_number: first.series_number,
-                    image_type: first.image_type.clone(),
-                    echo_time: first.echo_time,
-                    magnetic_field_strength: first.magnetic_field_strength,
-                    num_files: file_group.len(),
-                    series_type,
-                    files: file_group.iter().map(|f| f.path.clone()).collect(),
-                    manufacturer: first.manufacturer.clone(),
-                    coil_type,
-                });
+                all_series.extend(split_uid_into_series(uid, file_group, &mut uid_times));
             }
 
             // Sort by series number
@@ -733,6 +778,48 @@ fn walk_dir(dir: &Path, results: &mut Vec<DicomFileInfo>, progress: &AtomicUsize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dcm(uid: &str, desc: &str, image_type: &[&str], idx: usize) -> DicomFileInfo {
+        DicomFileInfo {
+            series_instance_uid: uid.to_string(),
+            series_description: desc.to_string(),
+            image_type: image_type.iter().map(|s| s.to_string()).collect(),
+            path: std::path::PathBuf::from(format!("{uid}_{idx}.dcm")),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_split_philips_mag_phase_one_uid() {
+        // Philips packs magnitude + phase under ONE SeriesInstanceUID — must split.
+        let mag = ["ORIGINAL", "PRIMARY", "M_FFE", "M", "FFE"];
+        let pha = ["ORIGINAL", "PRIMARY", "PHASE MAP", "P", "FFE"];
+        let files: Vec<DicomFileInfo> = (0..3).map(|i| dcm("U1", "QSM 6e", &mag, i))
+            .chain((0..3).map(|i| dcm("U1", "QSM 6e", &pha, i + 100)))
+            .collect();
+        let mut times = HashMap::new();
+        let series = split_uid_into_series("U1", &files, &mut times);
+        assert_eq!(series.len(), 2, "mag+phase under one UID must split into 2 series");
+        let mag_s = series.iter().find(|s| s.series_type == SeriesType::Magnitude).unwrap();
+        let pha_s = series.iter().find(|s| s.series_type == SeriesType::Phase).unwrap();
+        assert_eq!(mag_s.num_files, 3);
+        assert_eq!(pha_s.num_files, 3);
+        assert_ne!(mag_s.series_uid, pha_s.series_uid, "split series need distinct ids");
+    }
+
+    #[test]
+    fn test_no_split_on_odd_frame() {
+        // A magnitude structural with one odd T1w-by-description frame stays ONE series.
+        let mag = ["ORIGINAL", "PRIMARY", "M_FFE", "M", "FFE"];
+        let odd = ["ORIGINAL", "PRIMARY", "FFE"]; // no M/P → desc says t1w
+        let mut files: Vec<DicomFileInfo> = (0..5).map(|i| dcm("U2", "3D T1W_1mmiso", &mag, i)).collect();
+        files.push(dcm("U2", "3D T1W_1mmiso", &odd, 99));
+        let mut times = HashMap::new();
+        let series = split_uid_into_series("U2", &files, &mut times);
+        assert_eq!(series.len(), 1, "a single odd frame must not spawn a separate series");
+        assert_eq!(series[0].num_files, 6);
+        assert_eq!(series[0].series_uid, "U2", "single-type UID keeps its plain id");
+    }
 
     #[test]
     fn test_normalize_series_description() {
