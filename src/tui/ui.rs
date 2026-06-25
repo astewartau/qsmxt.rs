@@ -533,25 +533,22 @@ fn draw_input_tab(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         let offset = io_field_count + 2; // blank + header
         match app.dicom_state.focus {
             super::app::DicomFocus::Series(i) => {
-                // Count acq headers before series i
+                // Mirror the unique-series render layout: an acq header line whenever
+                // the acquisition name changes, then one line per unique series.
                 if let Some(ref session) = app.dicom_state.session {
                     let mut line_offset = offset;
-                    let mut current_flat = 0usize;
+                    let mut current_acq: Option<String> = None;
                     let mut found = None;
-                    'outer: for subject in &session.subjects {
-                        for study in &subject.studies {
-                            for acq in &study.acquisitions {
-                                line_offset += 1; // acq header
-                                for _series in &acq.series {
-                                    if current_flat == i {
-                                        found = Some(line_offset);
-                                        break 'outer;
-                                    }
-                                    line_offset += 1;
-                                    current_flat += 1;
-                                }
-                            }
+                    for (current_flat, g) in session.unique_series().iter().enumerate() {
+                        if current_acq.as_deref() != Some(g.acq_name.as_str()) {
+                            current_acq = Some(g.acq_name.clone());
+                            line_offset += 1; // acq header
                         }
+                        if current_flat == i {
+                            found = Some(line_offset);
+                            break;
+                        }
+                        line_offset += 1;
                     }
                     found
                 } else {
@@ -903,73 +900,78 @@ fn draw_dicom_series_section(
         Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
     )));
 
-    let mut flat_idx = 0;
-    for subject in &session.subjects {
-        for study in &subject.studies {
-            for acq in &study.acquisitions {
-                let run_label = if acq.run_number > 1 {
-                    format!(" (run {})", acq.run_number)
-                } else {
-                    String::new()
-                };
-                lines.push(Line::from(Span::styled(
-                    format!("  acq-{}{} ({} series)", acq.name, run_label, acq.series.len()),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-                )));
+    // One row per UNIQUE series (shared across subjects), not per per-subject instance.
+    let groups = session.unique_series();
+    let mut acq_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for g in &groups {
+        *acq_counts.entry(g.acq_name.as_str()).or_default() += 1;
+    }
 
-                for series in &acq.series {
-                    let series_focused = !in_io && ds.focus == super::app::DicomFocus::Series(flat_idx);
-                    let type_label = series.series_type.label();
-                    let echo_info = series.echo_time
-                        .map(|et| format!(" TE={:.1}ms", et))
-                        .unwrap_or_default();
-
-                    let style = if series_focused {
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::Gray)
-                    };
-
-                    let type_style = match series.series_type {
-                        crate::dicom::SeriesType::Skip => Style::default().fg(Color::DarkGray),
-                        crate::dicom::SeriesType::Phase => Style::default().fg(Color::Cyan),
-                        crate::dicom::SeriesType::Magnitude => Style::default().fg(Color::Green),
-                        crate::dicom::SeriesType::T1w => Style::default().fg(Color::Magenta),
-                        _ => Style::default().fg(Color::White),
-                    };
-
-                    let line = if series_focused {
-                        Line::from(vec![
-                            Span::styled(
-                                format!("    {:30}", format!("{}{}", series.description, echo_info)),
-                                style,
-                            ),
-                            Span::styled("< ", Style::default().fg(Color::DarkGray)),
-                            Span::styled(type_label, type_style.add_modifier(Modifier::BOLD)),
-                            Span::styled(" >", Style::default().fg(Color::DarkGray)),
-                            Span::styled(
-                                format!("  ({} files)", series.num_files),
-                                Style::default().fg(Color::DarkGray),
-                            ),
-                        ])
-                    } else {
-                        Line::from(vec![
-                            Span::styled(
-                                format!("    {:30}", format!("{}{}", series.description, echo_info)),
-                                style,
-                            ),
-                            Span::styled(format!("[{}]", type_label), type_style),
-                            Span::styled(
-                                format!("  ({} files)", series.num_files),
-                                Style::default().fg(Color::DarkGray),
-                            ),
-                        ])
-                    };
-                    lines.push(line);
-                    flat_idx += 1;
-                }
-            }
+    let mut current_acq: Option<&str> = None;
+    for (flat_idx, g) in groups.iter().enumerate() {
+        if current_acq != Some(g.acq_name.as_str()) {
+            current_acq = Some(g.acq_name.as_str());
+            let run_label = if g.run_number > 1 {
+                format!(" (run {})", g.run_number)
+            } else {
+                String::new()
+            };
+            let count = acq_counts.get(g.acq_name.as_str()).copied().unwrap_or(0);
+            lines.push(Line::from(Span::styled(
+                format!("  acq-{}{} ({} series)", g.acq_name, run_label, count),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            )));
         }
+
+        let series = session.series_ref(&g.refs[0]);
+        let n_subjects = g.refs.len();
+        let series_focused = !in_io && ds.focus == super::app::DicomFocus::Series(flat_idx);
+        let type_label = series.series_type.label();
+        let echo_info = series.echo_time
+            .map(|et| format!(" TE={:.1}ms", et))
+            .unwrap_or_default();
+        let files_label = if n_subjects > 1 {
+            format!("  ({} files × {} subjects)", series.num_files, n_subjects)
+        } else {
+            format!("  ({} files)", series.num_files)
+        };
+
+        let style = if series_focused {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+
+        let type_style = match series.series_type {
+            crate::dicom::SeriesType::Skip => Style::default().fg(Color::DarkGray),
+            crate::dicom::SeriesType::Phase => Style::default().fg(Color::Cyan),
+            crate::dicom::SeriesType::Magnitude => Style::default().fg(Color::Green),
+            crate::dicom::SeriesType::T1w => Style::default().fg(Color::Magenta),
+            _ => Style::default().fg(Color::White),
+        };
+
+        let line = if series_focused {
+            Line::from(vec![
+                Span::styled(
+                    format!("    {:30}", format!("{}{}", series.description, echo_info)),
+                    style,
+                ),
+                Span::styled("< ", Style::default().fg(Color::DarkGray)),
+                Span::styled(type_label, type_style.add_modifier(Modifier::BOLD)),
+                Span::styled(" >", Style::default().fg(Color::DarkGray)),
+                Span::styled(files_label, Style::default().fg(Color::DarkGray)),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled(
+                    format!("    {:30}", format!("{}{}", series.description, echo_info)),
+                    style,
+                ),
+                Span::styled(format!("[{}]", type_label), type_style),
+                Span::styled(files_label, Style::default().fg(Color::DarkGray)),
+            ])
+        };
+        lines.push(line);
     }
 
     // dcm2niix availability indicator (uses the cached resolution)

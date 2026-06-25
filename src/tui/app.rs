@@ -218,7 +218,8 @@ impl DicomConvertState {
     }
 
     pub fn focus_next(&mut self) {
-        let series_count = self.session.as_ref().map(|s| s.total_series()).unwrap_or(0);
+        // Navigation is over UNIQUE series (one row per series identity), not per-subject instances.
+        let series_count = self.session.as_ref().map(|s| s.unique_series_count()).unwrap_or(0);
         match self.focus {
             DicomFocus::Series(i) => {
                 if i + 1 < series_count {
@@ -236,7 +237,7 @@ impl DicomConvertState {
             DicomFocus::Series(0) => {} // at top of series, handle_dicom_tab_key goes to IO
             DicomFocus::Series(i) => self.focus = DicomFocus::Series(i - 1),
             DicomFocus::ConvertButton => {
-                let series_count = self.session.as_ref().map(|s| s.total_series()).unwrap_or(0);
+                let series_count = self.session.as_ref().map(|s| s.unique_series_count()).unwrap_or(0);
                 if series_count > 0 {
                     self.focus = DicomFocus::Series(series_count - 1);
                 }
@@ -2803,42 +2804,15 @@ impl App {
             }
             KeyCode::Down | KeyCode::Char('j') => self.dicom_state.focus_next(),
 
-            // Cycle series type
-            KeyCode::Left => {
-                if let DicomFocus::Series(i) = self.dicom_state.focus {
-                    if let Some(ref mut session) = self.dicom_state.session {
-                        let flat = session.flat_series();
-                        if let Some(r) = flat.get(i) {
-                            let s = session.series_mut(r);
-                            s.series_type = s.series_type.prev();
-                        }
-                    }
-                }
-            }
-            KeyCode::Right => {
-                if let DicomFocus::Series(i) = self.dicom_state.focus {
-                    if let Some(ref mut session) = self.dicom_state.session {
-                        let flat = session.flat_series();
-                        if let Some(r) = flat.get(i) {
-                            let s = session.series_mut(r);
-                            s.series_type = s.series_type.next();
-                        }
-                    }
-                }
-            }
+            // Cycle series type — relabel the focused UNIQUE series, propagating to
+            // every subject instance that shares its identity.
+            KeyCode::Left => self.relabel_focused_unique_series(false),
+            KeyCode::Right => self.relabel_focused_unique_series(true),
 
             // Interact
             KeyCode::Enter | KeyCode::Char(' ') => {
                 match self.dicom_state.focus {
-                    DicomFocus::Series(i) => {
-                        if let Some(ref mut session) = self.dicom_state.session {
-                            let flat = session.flat_series();
-                            if let Some(r) = flat.get(i) {
-                                let s = session.series_mut(r);
-                                s.series_type = s.series_type.next();
-                            }
-                        }
-                    }
+                    DicomFocus::Series(_) => self.relabel_focused_unique_series(true),
                     DicomFocus::ConvertButton => {
                         self.run_dicom_conversion();
                     }
@@ -2852,6 +2826,19 @@ impl App {
     }
 
     /// Launch the DICOM → BIDS conversion in a background thread.
+    /// Cycle the classification of the focused unique series and propagate the new
+    /// type to every subject instance sharing its identity.
+    fn relabel_focused_unique_series(&mut self, forward: bool) {
+        let DicomFocus::Series(i) = self.dicom_state.focus else { return };
+        let Some(session) = self.dicom_state.session.as_mut() else { return };
+        let groups = session.unique_series();
+        if let Some(g) = groups.get(i) {
+            let cur = session.series_ref(&g.refs[0]).series_type;
+            let new_type = if forward { cur.next() } else { cur.prev() };
+            session.set_type_for_refs(&g.refs, new_type);
+        }
+    }
+
     fn run_dicom_conversion(&mut self) {
         if self.dicom_state.session.is_none() {
             self.error_message = Some("No DICOM session loaded".to_string());

@@ -130,6 +130,7 @@ pub struct DicomSession {
 
 impl DicomSession {
     /// Total number of series across all subjects/studies/acquisitions.
+    #[allow(dead_code)] // accessor kept for API/tests; UI now uses unique_series_count
     pub fn total_series(&self) -> usize {
         self.subjects.iter().flat_map(|s| &s.studies)
             .flat_map(|st| &st.acquisitions)
@@ -138,6 +139,7 @@ impl DicomSession {
     }
 
     /// Flatten all series into a list with indices for navigation.
+    #[allow(dead_code)] // accessor kept for API/tests; UI now navigates unique_series
     pub fn flat_series(&self) -> Vec<FlatSeriesRef> {
         let mut result = Vec::new();
         for (si, sub) in self.subjects.iter().enumerate() {
@@ -158,9 +160,62 @@ impl DicomSession {
     }
 
     /// Get a reference to a series by flat index.
-    #[allow(dead_code)]
     pub fn series_ref(&self, r: &FlatSeriesRef) -> &DicomSeries {
         &self.subjects[r.sub].studies[r.study].acquisitions[r.acq].series[r.series]
+    }
+
+    /// Group series across subjects/studies into UNIQUE series for classification.
+    /// The same series (same acquisition + description + reconstruction) appears once
+    /// per subject, but its type is a property of the series, not the subject — so it
+    /// should be classified once and applied to every instance. Returns groups in
+    /// first-seen (display) order; `refs[0]` is the representative.
+    pub fn unique_series(&self) -> Vec<UniqueSeries> {
+        // Identity = acquisition + description + the deterministic reconstruction type
+        // (magnitude/phase/real/imag/T1w). Using the auto-classified type — rather than
+        // the raw ImageType signature, which strips the M/P markers — keeps magnitude
+        // and phase distinct, and it's immutable so a relabel never merges two groups.
+        type Key = (String, String, String);
+        let mut order: Vec<Key> = Vec::new();
+        let mut groups: HashMap<Key, UniqueSeries> = HashMap::new();
+        for (si, sub) in self.subjects.iter().enumerate() {
+            for (sti, study) in sub.studies.iter().enumerate() {
+                for (ai, acq) in study.acquisitions.iter().enumerate() {
+                    for (sei, series) in acq.series.iter().enumerate() {
+                        let key: Key = (
+                            acq.name.clone(),
+                            series.description.clone(),
+                            auto_label_series(&series.image_type, &series.description).label().to_string(),
+                        );
+                        let r = FlatSeriesRef { sub: si, study: sti, acq: ai, series: sei };
+                        match groups.get_mut(&key) {
+                            Some(g) => g.refs.push(r),
+                            None => {
+                                order.push(key.clone());
+                                groups.insert(key, UniqueSeries {
+                                    acq_name: acq.name.clone(),
+                                    run_number: acq.run_number,
+                                    refs: vec![r],
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        order.into_iter().filter_map(|k| groups.remove(&k)).collect()
+    }
+
+    /// Number of unique series — navigation bound for the classification list.
+    pub fn unique_series_count(&self) -> usize {
+        self.unique_series().len()
+    }
+
+    /// Apply a classification type to every instance in `refs` (propagate a unique
+    /// series' relabel to all subjects that have it).
+    pub fn set_type_for_refs(&mut self, refs: &[FlatSeriesRef], t: SeriesType) {
+        for r in refs {
+            self.series_mut(r).series_type = t;
+        }
     }
 }
 
@@ -171,6 +226,14 @@ pub struct FlatSeriesRef {
     pub study: usize,
     pub acq: usize,
     pub series: usize,
+}
+
+/// A unique series shared across subjects: one classification applies to all `refs`.
+#[derive(Debug, Clone)]
+pub struct UniqueSeries {
+    pub acq_name: String,
+    pub run_number: u32,
+    pub refs: Vec<FlatSeriesRef>,
 }
 
 // ─── Utility functions ───
@@ -958,6 +1021,80 @@ mod tests {
             manufacturer: String::new(),
             coil_type: CoilType::Unknown,
         }
+    }
+
+    // ─── unique series dedup across subjects ───
+
+    fn uniq_series(desc: &str, image_type: &[&str]) -> DicomSeries {
+        let it: Vec<String> = image_type.iter().map(|s| s.to_string()).collect();
+        let st = auto_label_series(&it, desc);
+        DicomSeries {
+            series_uid: format!("{desc}-{}", st.label()),
+            description: desc.to_string(),
+            protocol_name: desc.to_string(),
+            series_number: 1,
+            image_type: it,
+            echo_time: None,
+            magnetic_field_strength: None,
+            num_files: 10,
+            series_type: st,
+            files: Vec::new(),
+            manufacturer: String::new(),
+            coil_type: CoilType::Unknown,
+        }
+    }
+
+    fn uniq_subject(name: &str) -> DicomSubject {
+        DicomSubject {
+            patient_id: name.to_string(),
+            studies: vec![DicomStudy {
+                study_date: "20240101".to_string(),
+                acquisitions: vec![
+                    DicomAcquisition {
+                        name: "greqsm".to_string(),
+                        run_number: 1,
+                        series: vec![
+                            uniq_series("gre_qsm", &["ORIGINAL", "PRIMARY", "M", "ND"]),
+                            uniq_series("gre_qsm", &["ORIGINAL", "PRIMARY", "P", "ND"]),
+                        ],
+                    },
+                    DicomAcquisition {
+                        name: "t1mprage".to_string(),
+                        run_number: 1,
+                        series: vec![uniq_series("t1_mprage", &["ORIGINAL", "PRIMARY", "M", "NORM"])],
+                    },
+                ],
+            }],
+        }
+    }
+
+    #[test]
+    fn test_unique_series_dedups_across_subjects() {
+        let session = DicomSession { subjects: vec![uniq_subject("s1"), uniq_subject("s2")] };
+        let groups = session.unique_series();
+        assert_eq!(groups.len(), 3, "gre Magnitude, gre Phase, T1w — one row each, not per-subject");
+        for g in &groups {
+            assert_eq!(g.refs.len(), 2, "each unique series spans both subjects");
+        }
+        let mut labels: Vec<&str> = groups.iter()
+            .map(|g| session.series_ref(&g.refs[0]).series_type.label())
+            .collect();
+        labels.sort();
+        assert_eq!(labels, vec!["Magnitude", "Phase", "T1w"]);
+    }
+
+    #[test]
+    fn test_set_type_for_refs_propagates_to_all_subjects() {
+        let mut session = DicomSession { subjects: vec![uniq_subject("s1"), uniq_subject("s2")] };
+        let refs = session.unique_series().into_iter()
+            .find(|g| session.series_ref(&g.refs[0]).series_type == SeriesType::Phase)
+            .expect("phase group").refs;
+        session.set_type_for_refs(&refs, SeriesType::Real);
+        for r in &refs {
+            assert_eq!(session.series_ref(r).series_type, SeriesType::Real, "relabel hits every subject");
+        }
+        // Re-grouping is stable: the (relabeled) series stays one group, not merged with Magnitude.
+        assert_eq!(session.unique_series().len(), 3);
     }
 
     // ─── SeriesType::label() ───
