@@ -29,14 +29,23 @@ pub fn execute(args: DicomConvertArgs) -> crate::Result<()> {
             [te] => format!(" TE={:.1}ms", te),
             tes => format!(" {}×TEs=[{:.1}…{:.1}]ms", tes.len(), tes[0], tes[tes.len() - 1]),
         };
-        let subjects = if g.refs.len() > 1 {
-            format!(" ×{} subjects", g.refs.len())
+        let n_subjects = g.subject_count();
+        let subjects = if n_subjects > 1 {
+            format!(" ×{} subjects", n_subjects)
         } else {
             String::new()
         };
+        let coil = if s.coil_type == dicom::CoilType::Uncombined {
+            format!(" (uncombined, {} coils)", s.coil_groups.len())
+        } else {
+            String::new()
+        };
+        let recon = dicom::recon_desc(&s.image_type)
+            .map(|d| format!(" ({})", d))
+            .unwrap_or_default();
         println!(
-            "  acq-{:<22} {:<26} [{}]{}{}",
-            g.acq_name, s.description, s.series_type.label(), echo, subjects
+            "  acq-{:<22} {:<26} [{}]{}{}{}{}",
+            g.acq_name, s.description, s.series_type.label(), echo, coil, recon, subjects
         );
     }
 

@@ -114,6 +114,8 @@ struct BidsNameParts<'a> {
     acq: &'a str,
     run: u32,
     rec: Option<&'a str>,
+    desc: Option<&'a str>,
+    coil: Option<u32>,
     echo: Option<u32>,
     part: Option<&'a str>,
     suffix: &'a str,
@@ -121,7 +123,7 @@ struct BidsNameParts<'a> {
 }
 
 /// Build the BIDS filename for a converted file.
-/// Order: sub-X[_ses-Y]_acq-Z[_rec-R][_run-N][_echo-N][_part-P]_SUFFIX
+/// Order: sub-X[_ses-Y]_acq-Z[_rec-R][_run-N][_desc-D][_coil-NN][_echo-N][_part-P]_SUFFIX
 fn build_bids_filename(p: &BidsNameParts) -> String {
     let mut name = format!("sub-{}", p.sub);
     if let Some(ses) = p.ses {
@@ -133,6 +135,12 @@ fn build_bids_filename(p: &BidsNameParts) -> String {
     }
     if p.run > 1 {
         name.push_str(&format!("_run-{}", p.run));
+    }
+    if let Some(d) = p.desc {
+        name.push_str(&format!("_desc-{}", d));
+    }
+    if let Some(c) = p.coil {
+        name.push_str(&format!("_coil-{:02}", c));
     }
     if let Some(e) = p.echo {
         name.push_str(&format!("_echo-{}", e));
@@ -312,6 +320,9 @@ fn convert_series(
     let suffix = bids_suffix(series.series_type);
     let part = bids_part(series.series_type);
     let is_ge = is_ge_manufacturer(&series.manufacturer);
+    // Scanner-derived recons (e.g. filtered) get a `desc-` label so they don't
+    // collide with the plain reconstruction of the same series.
+    let desc = super::recon_desc(&series.image_type);
 
     // Build output subdirectory
     let mut sub_dir = output_dir.join(format!("sub-{}", sub_label));
@@ -325,16 +336,60 @@ fn convert_series(
         return SeriesConvertResult { log_lines, errors };
     }
 
-    // Create temp directory for dcm2niix
+    // Uncombined acquisitions split into one group per coil element so dcm2niix
+    // runs cleanly per coil and the outputs get distinct `coil-NN` labels.
+    // Combined / single-coil series are a single group with no coil label.
     let temp_dir = output_dir.join(".tmp_dcm2niix");
-    let _ = fs::remove_dir_all(&temp_dir);
-    if let Err(e) = fs::create_dir_all(&temp_dir) {
+    let groups: Vec<(Option<u32>, &[PathBuf])> = if series.coil_groups.is_empty() {
+        vec![(None, series.files.as_slice())]
+    } else {
+        series.coil_groups.iter().map(|g| (g.coil_num, g.files.as_slice())).collect()
+    };
+    let multi_coil = groups.len() > 1;
+
+    for (coil_num, files) in groups {
+        let coil = if multi_coil { coil_num } else { None };
+        convert_coil_group(
+            dcm2niix, files, series, suffix, part, is_ge,
+            sub_label, ses_label, acq_name, run_number, rec, desc, coil,
+            &anat_dir, &temp_dir, &mut log_lines, &mut errors,
+        );
+    }
+
+    SeriesConvertResult { log_lines, errors }
+}
+
+/// Convert one coil group's DICOM files (or a whole combined series) via dcm2niix
+/// and rename the outputs to BIDS. `coil` adds a `coil-NN` entity when set.
+#[allow(clippy::too_many_arguments)]
+fn convert_coil_group(
+    dcm2niix: &Path,
+    files: &[PathBuf],
+    series: &super::DicomSeries,
+    suffix: &str,
+    part: Option<&str>,
+    is_ge: bool,
+    sub_label: &str,
+    ses_label: Option<&str>,
+    acq_name: &str,
+    run_number: u32,
+    rec: Option<&str>,
+    desc: Option<&str>,
+    coil: Option<u32>,
+    anat_dir: &Path,
+    temp_dir: &Path,
+    log_lines: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    // Create temp directory for dcm2niix
+    let _ = fs::remove_dir_all(temp_dir);
+    if let Err(e) = fs::create_dir_all(temp_dir) {
         errors.push(format!("Failed to create temp directory: {}", e));
-        return SeriesConvertResult { log_lines, errors };
+        return;
     }
 
     // Copy DICOM files to temp directory
-    for (i, src) in series.files.iter().enumerate() {
+    for (i, src) in files.iter().enumerate() {
         let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("dcm");
         let dst = temp_dir.join(format!("{:06}.{}", i, ext));
         if let Err(e) = fs::copy(src, &dst) {
@@ -342,9 +397,10 @@ fn convert_series(
         }
     }
 
+    let coil_label = coil.map(|c| format!(" coil-{:02}", c)).unwrap_or_default();
     log_lines.push(format!(
-        "Converting: {} ({} files)",
-        series.description, series.num_files,
+        "Converting: {}{} ({} files)",
+        series.description, coil_label, files.len(),
     ));
 
     if is_ge {
@@ -358,7 +414,7 @@ fn convert_series(
         .args(["-f", temp_base])
         .args(["-z", "y"])
         .args(["-m", "o"])
-        .arg(&temp_dir)
+        .arg(temp_dir)
         .output();
 
     match dcm2niix_result {
@@ -383,13 +439,13 @@ fn convert_series(
         }
         Err(e) => {
             errors.push(format!("Failed to run dcm2niix: {}. Is it installed?", e));
-            let _ = fs::remove_dir_all(&temp_dir);
-            return SeriesConvertResult { log_lines, errors };
+            let _ = fs::remove_dir_all(temp_dir);
+            return;
         }
     }
 
     // Check for 4D NIfTI files produced by dcm2niix
-    let nii_files: Vec<PathBuf> = fs::read_dir(&temp_dir)
+    let nii_files: Vec<PathBuf> = fs::read_dir(temp_dir)
         .into_iter()
         .flatten()
         .flatten()
@@ -418,7 +474,7 @@ fn convert_series(
                 .args(["-f", temp_base])
                 .args(["-z", "y"])
                 .args(["-m", "n"]) // don't merge
-                .arg(&temp_dir)
+                .arg(temp_dir)
                 .output();
 
             if let Ok(output) = rerun {
@@ -433,7 +489,7 @@ fn convert_series(
     }
 
     // Collect all dcm2niix output files
-    let final_outputs: Vec<PathBuf> = fs::read_dir(&temp_dir)
+    let final_outputs: Vec<PathBuf> = fs::read_dir(temp_dir)
         .into_iter()
         .flatten()
         .flatten()
@@ -466,7 +522,7 @@ fn convert_series(
 
         let bids_name = build_bids_filename(&BidsNameParts {
             sub: sub_label, ses: ses_label, acq: acq_name, run: run_number,
-            rec, echo, part: file_part, suffix, extension,
+            rec, desc, coil, echo, part: file_part, suffix, extension,
         });
 
         let dest = anat_dir.join(&bids_name);
@@ -511,9 +567,7 @@ fn convert_series(
     }
 
     // Clean up temp directory
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    SeriesConvertResult { log_lines, errors }
+    let _ = fs::remove_dir_all(temp_dir);
 }
 
 #[cfg(test)]
@@ -634,7 +688,7 @@ mod tests {
     #[test]
     fn test_build_bids_filename_single_echo() {
         let name = build_bids_filename(&BidsNameParts {
-            sub: "01", ses: None, acq: "gre", run: 1, rec: None,
+            sub: "01", ses: None, acq: "gre", run: 1, rec: None, desc: None, coil: None,
             echo: None, part: Some("mag"), suffix: "T2starw", extension: ".nii.gz",
         });
         assert_eq!(name, "sub-01_acq-gre_part-mag_T2starw.nii.gz");
@@ -643,7 +697,7 @@ mod tests {
     #[test]
     fn test_build_bids_filename_multi_echo() {
         let name = build_bids_filename(&BidsNameParts {
-            sub: "01", ses: Some("20240314"), acq: "gre", run: 1, rec: None,
+            sub: "01", ses: Some("20240314"), acq: "gre", run: 1, rec: None, desc: None, coil: None,
             echo: Some(3), part: Some("phase"), suffix: "MEGRE", extension: ".json",
         });
         assert_eq!(name, "sub-01_ses-20240314_acq-gre_echo-3_part-phase_MEGRE.json");
@@ -652,7 +706,7 @@ mod tests {
     #[test]
     fn test_build_bids_filename_with_run() {
         let name = build_bids_filename(&BidsNameParts {
-            sub: "p025pre", ses: Some("20240314"), acq: "wip925B1mmPAT3eco6", run: 2, rec: None,
+            sub: "p025pre", ses: Some("20240314"), acq: "wip925B1mmPAT3eco6", run: 2, rec: None, desc: None, coil: None,
             echo: Some(1), part: Some("mag"), suffix: "MEGRE", extension: ".nii.gz",
         });
         assert_eq!(name, "sub-p025pre_ses-20240314_acq-wip925B1mmPAT3eco6_run-2_echo-1_part-mag_MEGRE.nii.gz");
@@ -661,10 +715,28 @@ mod tests {
     #[test]
     fn test_build_bids_filename_with_rec() {
         let name = build_bids_filename(&BidsNameParts {
-            sub: "01", ses: None, acq: "gre", run: 1, rec: Some("uncombined"),
+            sub: "01", ses: None, acq: "gre", run: 1, rec: Some("uncombined"), desc: None, coil: None,
             echo: Some(1), part: Some("mag"), suffix: "MEGRE", extension: ".nii.gz",
         });
         assert_eq!(name, "sub-01_acq-gre_rec-uncombined_echo-1_part-mag_MEGRE.nii.gz");
+    }
+
+    #[test]
+    fn test_build_bids_filename_with_coil() {
+        let name = build_bids_filename(&BidsNameParts {
+            sub: "01", ses: None, acq: "gre", run: 1, rec: Some("uncombined"), desc: None, coil: Some(7),
+            echo: Some(2), part: Some("phase"), suffix: "MEGRE", extension: ".nii.gz",
+        });
+        assert_eq!(name, "sub-01_acq-gre_rec-uncombined_coil-07_echo-2_part-phase_MEGRE.nii.gz");
+    }
+
+    #[test]
+    fn test_build_bids_filename_with_desc() {
+        let name = build_bids_filename(&BidsNameParts {
+            sub: "01", ses: None, acq: "gre", run: 1, rec: None, desc: Some("filtered"), coil: None,
+            echo: Some(1), part: Some("mag"), suffix: "MEGRE", extension: ".nii.gz",
+        });
+        assert_eq!(name, "sub-01_acq-gre_desc-filtered_echo-1_part-mag_MEGRE.nii.gz");
     }
 
     #[test]
@@ -808,7 +880,7 @@ mod tests {
     #[test]
     fn test_build_bids_filename_t1w_no_part() {
         let name = build_bids_filename(&BidsNameParts {
-            sub: "01", ses: None, acq: "mprage", run: 1, rec: None,
+            sub: "01", ses: None, acq: "mprage", run: 1, rec: None, desc: None, coil: None,
             echo: None, part: None, suffix: "T1w", extension: ".nii.gz",
         });
         assert_eq!(name, "sub-01_acq-mprage_T1w.nii.gz");
@@ -817,7 +889,7 @@ mod tests {
     #[test]
     fn test_build_bids_filename_t1w_no_part_with_session() {
         let name = build_bids_filename(&BidsNameParts {
-            sub: "02", ses: Some("20240101"), acq: "mprage", run: 1, rec: None,
+            sub: "02", ses: Some("20240101"), acq: "mprage", run: 1, rec: None, desc: None, coil: None,
             echo: None, part: None, suffix: "T1w", extension: ".nii.gz",
         });
         assert_eq!(name, "sub-02_ses-20240101_acq-mprage_T1w.nii.gz");

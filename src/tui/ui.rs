@@ -924,13 +924,22 @@ fn draw_dicom_series_section(
         }
 
         let series = session.series_ref(&g.refs[0]);
-        let n_subjects = g.refs.len();
+        let n_subjects = g.subject_count();
         let series_focused = !in_io && ds.focus == super::app::DicomFocus::Series(flat_idx);
         let type_label = series.series_type.label();
         let echo_info = match series.echo_times.as_slice() {
             [] => String::new(),
             [te] => format!(" TE={:.1}ms", te),
             tes => format!(" {}×TEs=[{:.1}…{:.1}]ms", tes.len(), tes[0], tes[tes.len() - 1]),
+        };
+        let echo_info = if series.coil_type == crate::dicom::CoilType::Uncombined {
+            format!("{} [uncombined ×{}]", echo_info, series.coil_groups.len())
+        } else {
+            echo_info
+        };
+        let echo_info = match crate::dicom::recon_desc(&series.image_type) {
+            Some(d) => format!("{} [{}]", echo_info, d),
+            None => echo_info,
         };
         let files_label = if n_subjects > 1 {
             format!("  ({} files × {} subjects)", series.num_files, n_subjects)

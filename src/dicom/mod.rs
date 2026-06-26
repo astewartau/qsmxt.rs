@@ -92,6 +92,20 @@ pub struct DicomSeries {
     pub files: Vec<PathBuf>,
     pub manufacturer: String,
     pub coil_type: CoilType,
+    /// Per-coil file grouping for uncombined acquisitions (each coil element →
+    /// its files). Empty for combined/single-coil series — the converter then
+    /// treats `files` as a single group. Only populated when `coil_type` is
+    /// `Uncombined`, so dcm2niix runs once per coil and outputs get `coil-NN`.
+    pub coil_groups: Vec<CoilGroup>,
+}
+
+/// One coil element's files within an uncombined acquisition. `coil_num` is the
+/// element number parsed from the Siemens coil-string tag (0051,100F), e.g.
+/// `H15` → 15 → `coil-15`; `None` when no number could be extracted.
+#[derive(Debug, Clone)]
+pub struct CoilGroup {
+    pub coil_num: Option<u32>,
+    pub files: Vec<PathBuf>,
 }
 
 /// Whether coil data is combined or uncombined.
@@ -100,6 +114,42 @@ pub enum CoilType {
     Combined,
     Uncombined,
     Unknown,
+}
+
+impl CoilType {
+    /// Discriminator string for series-identity keys (keeps combined and
+    /// uncombined versions of the same acquisition as distinct unique series).
+    fn label(&self) -> &'static str {
+        match self {
+            CoilType::Combined => "combined",
+            CoilType::Uncombined => "uncombined",
+            CoilType::Unknown => "unknown",
+        }
+    }
+}
+
+/// BIDS `desc-` token for a scanner-derived / post-processed reconstruction, so it
+/// doesn't collide with the plain reconstruction of the same series (identical
+/// sub/ses/acq/echo/part otherwise). `None` for ordinary images. Currently detects
+/// Siemens filtered output via the `FIL` ImageType marker (e.g. the SWI-filtered
+/// magnitude `M\ND\NORM\FM\FIL` alongside the plain `M\ND`).
+pub fn recon_desc(image_type: &[String]) -> Option<&'static str> {
+    if image_type.iter().any(|t| t.eq_ignore_ascii_case("FIL")) {
+        Some("filtered")
+    } else {
+        None
+    }
+}
+
+/// Parse the coil-element number from a Siemens coil string, e.g. `H15` → 15.
+/// Returns the first run of digits, or `None` if there are none.
+fn extract_coil_num(coil_str: &str) -> Option<u32> {
+    let digits: String = coil_str
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
 }
 
 /// An acquisition groups series that share a protocol name within a run.
@@ -173,10 +223,14 @@ impl DicomSession {
     /// first-seen (display) order; `refs[0]` is the representative.
     pub fn unique_series(&self) -> Vec<UniqueSeries> {
         // Identity = acquisition + description + the deterministic reconstruction type
-        // (magnitude/phase/real/imag/T1w). Using the auto-classified type — rather than
-        // the raw ImageType signature, which strips the M/P markers — keeps magnitude
-        // and phase distinct, and it's immutable so a relabel never merges two groups.
-        type Key = (String, String, String);
+        // (magnitude/phase/real/imag/T1w) + coil type. Using the auto-classified type —
+        // rather than the raw ImageType signature, which strips the M/P markers — keeps
+        // magnitude and phase distinct, and it's immutable so a relabel never merges two
+        // groups. Coil type keeps combined and uncombined versions of the same
+        // acquisition as separate rows (they convert differently: rec-/coil- labels).
+        // The recon descriptor (e.g. filtered) separates a scanner-derived
+        // reconstruction from the plain one so they don't collapse / collide.
+        type Key = (String, String, String, &'static str, &'static str);
         let mut order: Vec<Key> = Vec::new();
         let mut groups: HashMap<Key, UniqueSeries> = HashMap::new();
         for (si, sub) in self.subjects.iter().enumerate() {
@@ -187,6 +241,8 @@ impl DicomSession {
                             acq.name.clone(),
                             series.description.clone(),
                             auto_label_series(&series.image_type, &series.description).label().to_string(),
+                            series.coil_type.label(),
+                            recon_desc(&series.image_type).unwrap_or(""),
                         );
                         let r = FlatSeriesRef { sub: si, study: sti, acq: ai, series: sei };
                         match groups.get_mut(&key) {
@@ -236,6 +292,18 @@ pub struct UniqueSeries {
     pub acq_name: String,
     pub run_number: u32,
     pub refs: Vec<FlatSeriesRef>,
+}
+
+impl UniqueSeries {
+    /// Number of distinct subjects this classification spans. May be fewer than
+    /// `refs.len()` when one subject has several matching series instances (e.g.
+    /// plain + scanner-derived reconstructions of the same combined acquisition).
+    pub fn subject_count(&self) -> usize {
+        let mut subs: Vec<usize> = self.refs.iter().map(|r| r.sub).collect();
+        subs.sort_unstable();
+        subs.dedup();
+        subs.len()
+    }
 }
 
 // ─── Utility functions ───
@@ -593,6 +661,24 @@ fn split_uid_into_series(
         echo_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         echo_times.dedup();
 
+        // For uncombined acquisitions, group files by coil element so the
+        // converter can run dcm2niix per coil and emit `coil-NN`. Combined /
+        // single-coil series stay empty (converted as one group).
+        let coil_groups: Vec<CoilGroup> = if coil_type == CoilType::Uncombined {
+            let mut groups: Vec<CoilGroup> = Vec::new();
+            for f in files {
+                let num = extract_coil_num(&f.coil_string);
+                match groups.iter_mut().find(|g| g.coil_num == num) {
+                    Some(g) => g.files.push(f.path.clone()),
+                    None => groups.push(CoilGroup { coil_num: num, files: vec![f.path.clone()] }),
+                }
+            }
+            groups.sort_by_key(|g| g.coil_num);
+            groups
+        } else {
+            Vec::new()
+        };
+
         out.push(DicomSeries {
             series_uid,
             description: normalized_desc,
@@ -607,6 +693,7 @@ fn split_uid_into_series(
             files: files.iter().map(|f| f.path.clone()).collect(),
             manufacturer: first.manufacturer.clone(),
             coil_type,
+            coil_groups,
         });
     }
     out
@@ -1029,6 +1116,7 @@ mod tests {
             files: Vec::new(),
             manufacturer: String::new(),
             coil_type: CoilType::Unknown,
+            coil_groups: Vec::new(),
         }
     }
 
@@ -1051,6 +1139,7 @@ mod tests {
             files: Vec::new(),
             manufacturer: String::new(),
             coil_type: CoilType::Unknown,
+            coil_groups: Vec::new(),
         }
     }
 
@@ -1105,6 +1194,81 @@ mod tests {
         }
         // Re-grouping is stable: the (relabeled) series stays one group, not merged with Magnitude.
         assert_eq!(session.unique_series().len(), 3);
+    }
+
+    #[test]
+    fn test_extract_coil_num() {
+        assert_eq!(extract_coil_num("H15"), Some(15));
+        assert_eq!(extract_coil_num("H1"), Some(1));
+        assert_eq!(extract_coil_num("HE1,2"), Some(1));
+        assert_eq!(extract_coil_num("HEA;HEP"), None);
+        assert_eq!(extract_coil_num(""), None);
+    }
+
+    #[test]
+    fn test_recon_desc() {
+        let it = |m: &[&str]| m.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(recon_desc(&it(&["ORIGINAL", "PRIMARY", "M", "ND"])), None);
+        assert_eq!(recon_desc(&it(&["ORIGINAL", "PRIMARY", "M", "ND", "NORM", "FM", "FIL"])), Some("filtered"));
+    }
+
+    #[test]
+    fn test_recon_desc_separates_plain_and_filtered() {
+        // Same combined magnitude, but one is the scanner-filtered recon → distinct rows.
+        let plain = uniq_series("swi", &["ORIGINAL", "PRIMARY", "M", "ND"]);
+        let filtered = uniq_series("swi", &["ORIGINAL", "PRIMARY", "M", "ND", "NORM", "FM", "FIL"]);
+        let session = DicomSession {
+            subjects: vec![DicomSubject {
+                patient_id: "s1".into(),
+                studies: vec![DicomStudy {
+                    study_date: "20240101".into(),
+                    acquisitions: vec![DicomAcquisition {
+                        name: "swi".into(),
+                        run_number: 1,
+                        series: vec![plain, filtered],
+                    }],
+                }],
+            }],
+        };
+        assert_eq!(session.unique_series().len(), 2, "plain and filtered recons are separate rows");
+    }
+
+    #[test]
+    fn test_subject_count_distinct_subjects() {
+        // Two refs in the same subject (e.g. plain + derived recon) count as one subject.
+        let g = UniqueSeries {
+            acq_name: "a".into(),
+            run_number: 1,
+            refs: vec![
+                FlatSeriesRef { sub: 0, study: 0, acq: 0, series: 0 },
+                FlatSeriesRef { sub: 0, study: 0, acq: 0, series: 1 },
+            ],
+        };
+        assert_eq!(g.subject_count(), 1);
+        assert_eq!(g.refs.len(), 2);
+    }
+
+    #[test]
+    fn test_coil_type_separates_combined_and_uncombined() {
+        // Same acquisition/description/type, but combined vs uncombined → distinct rows.
+        let mut combined = uniq_series("gre_qsm", &["ORIGINAL", "PRIMARY", "M", "ND"]);
+        combined.coil_type = CoilType::Combined;
+        let mut uncombined = uniq_series("gre_qsm", &["ORIGINAL", "PRIMARY", "M", "ND"]);
+        uncombined.coil_type = CoilType::Uncombined;
+        let session = DicomSession {
+            subjects: vec![DicomSubject {
+                patient_id: "s1".into(),
+                studies: vec![DicomStudy {
+                    study_date: "20240101".into(),
+                    acquisitions: vec![DicomAcquisition {
+                        name: "greqsm".into(),
+                        run_number: 1,
+                        series: vec![combined, uncombined],
+                    }],
+                }],
+            }],
+        };
+        assert_eq!(session.unique_series().len(), 2, "combined and uncombined are separate rows");
     }
 
     // ─── SeriesType::label() ───
