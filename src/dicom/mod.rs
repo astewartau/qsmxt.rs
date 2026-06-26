@@ -87,6 +87,8 @@ pub struct DicomSeries {
     pub magnetic_field_strength: Option<f64>,
     pub num_files: usize,
     pub series_type: SeriesType,
+    /// Distinct echo times (ms), sorted — for showing echo count + range on multi-echo series.
+    pub echo_times: Vec<f64>,
     pub files: Vec<PathBuf>,
     pub manufacturer: String,
     pub coil_type: CoilType,
@@ -586,6 +588,11 @@ fn split_uid_into_series(
             uid_times.insert(series_uid.clone(), median);
         }
 
+        // Distinct echo times (ms), sorted — for the multi-echo count + range display.
+        let mut echo_times: Vec<f64> = files.iter().filter_map(|f| f.echo_time).collect();
+        echo_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        echo_times.dedup();
+
         out.push(DicomSeries {
             series_uid,
             description: normalized_desc,
@@ -596,6 +603,7 @@ fn split_uid_into_series(
             magnetic_field_strength: first.magnetic_field_strength,
             num_files: files.len(),
             series_type: *series_type,
+            echo_times,
             files: files.iter().map(|f| f.path.clone()).collect(),
             manufacturer: first.manufacturer.clone(),
             coil_type,
@@ -1014,6 +1022,7 @@ mod tests {
             series_number,
             image_type: Vec::new(),
             echo_time: None,
+            echo_times: Vec::new(),
             magnetic_field_strength: None,
             num_files: 1,
             series_type,
@@ -1035,6 +1044,7 @@ mod tests {
             series_number: 1,
             image_type: it,
             echo_time: None,
+            echo_times: Vec::new(),
             magnetic_field_strength: None,
             num_files: 10,
             series_type: st,

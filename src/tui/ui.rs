@@ -927,9 +927,11 @@ fn draw_dicom_series_section(
         let n_subjects = g.refs.len();
         let series_focused = !in_io && ds.focus == super::app::DicomFocus::Series(flat_idx);
         let type_label = series.series_type.label();
-        let echo_info = series.echo_time
-            .map(|et| format!(" TE={:.1}ms", et))
-            .unwrap_or_default();
+        let echo_info = match series.echo_times.as_slice() {
+            [] => String::new(),
+            [te] => format!(" TE={:.1}ms", te),
+            tes => format!(" {}×TEs=[{:.1}…{:.1}]ms", tes.len(), tes[0], tes[tes.len() - 1]),
+        };
         let files_label = if n_subjects > 1 {
             format!("  ({} files × {} subjects)", series.num_files, n_subjects)
         } else {
