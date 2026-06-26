@@ -1,5 +1,6 @@
 pub mod common;
 pub mod bgremove;
+pub mod dicom;
 pub mod homogeneity;
 pub mod init;
 pub mod invert;

@@ -41,6 +41,9 @@ pub enum QsmxtError {
 
     #[error("Update error: {0}")]
     Update(String),
+
+    #[error("DICOM conversion error: {0}")]
+    Dicom(String),
 }
 
 pub type Result<T> = std::result::Result<T, QsmxtError>;

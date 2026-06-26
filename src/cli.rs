@@ -27,6 +27,9 @@ pub enum Command {
     Init(InitArgs),
     /// Validate BIDS dataset structure for QSM processing
     Validate(ValidateArgs),
+    /// Convert a DICOM directory to BIDS using automatic series classification
+    #[command(name = "dicom-convert")]
+    DicomConvert(DicomConvertArgs),
     /// Generate SLURM job scripts for HPC execution
     Slurm(SlurmArgs),
     /// Masking operations (NIfTI in/out)
@@ -73,6 +76,19 @@ pub struct UpdateArgs {
     /// Update without prompting for confirmation
     #[arg(short, long)]
     pub yes: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct DicomConvertArgs {
+    /// Input DICOM directory (searched recursively)
+    pub dicom_dir: PathBuf,
+
+    /// Output BIDS directory
+    pub output_dir: PathBuf,
+
+    /// Print the auto-detected series classification and exit without converting
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 // ─── Shared algorithm parameter groups (prefixed, used by RunArgs) ───

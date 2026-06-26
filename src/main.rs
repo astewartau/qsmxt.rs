@@ -31,6 +31,7 @@ fn main() {
         Command::Run(args) => commands::run::execute(args),
         Command::Init(args) => commands::init::execute(args),
         Command::Validate(args) => commands::validate::execute(args),
+        Command::DicomConvert(args) => commands::dicom::execute(args),
         Command::Slurm(args) => commands::slurm::execute(args),
         Command::Mask { command } => commands::mask::execute(command),
         Command::Unwrap { command } => commands::unwrap::execute(command),
